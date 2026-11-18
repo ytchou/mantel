@@ -36,7 +36,10 @@ public final class BlockSettings {
 
     public func isEnabled(_ id: BlockID) -> Bool {
         _ = EnablementSignal.shared.revision
-        return defaults.object(forKey: Self.key(id)) as? Bool ?? true
+        // `bool(forKey:)`, not a cast: a launch argument such as
+        // `-block.shelf.enabled NO` arrives as the string "NO".
+        guard defaults.object(forKey: Self.key(id)) != nil else { return true }
+        return defaults.bool(forKey: Self.key(id))
     }
 
     /// Stores the value and applies it to the runtime.

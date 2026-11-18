@@ -7,11 +7,17 @@ import SwiftUI
 public struct SettingsRootView: View {
     private let runtime: NotchRuntime
     private let settings: BlockSettings
-    @State private var selection: SettingsPane? = .general
+    @State private var selection: SettingsPane?
 
     public init(runtime: NotchRuntime, settings: BlockSettings) {
+        self.init(runtime: runtime, settings: settings, selection: .general)
+    }
+
+    /// Opens on a chosen pane. Internal, for checking a pane without clicking.
+    init(runtime: NotchRuntime, settings: BlockSettings, selection: SettingsPane) {
         self.runtime = runtime
         self.settings = settings
+        _selection = State(initialValue: selection)
     }
 
     public var body: some View {
@@ -100,7 +106,8 @@ private struct BlocksPane: View {
                                 }
                             }
                         } icon: {
-                            Image(systemName: entry.info.symbol)
+                            // Fixed width, so titles line up whatever the symbol's shape.
+                            Image(systemName: entry.info.symbol).frame(width: 22)
                         }
                     }
                 }

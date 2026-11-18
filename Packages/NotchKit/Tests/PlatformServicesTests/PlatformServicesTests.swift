@@ -140,3 +140,16 @@ private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
     let triggerOnly = BlockEntry(id: "b", title: "B", info: BlockInfo(trigger: "Dragging"))
     #expect(triggerOnly.detail == "Dragging")
 }
+
+@MainActor
+@Test func aLaunchArgumentStringTurnsABlockOff() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    // Launch arguments reach UserDefaults as strings, not booleans.
+    defaults.set("NO", forKey: "block.shelf.enabled")
+    defaults.set("YES", forKey: "block.rename.enabled")
+    let settings = BlockSettings(defaults: defaults)
+    #expect(settings.isEnabled("shelf") == false)
+    #expect(settings.isEnabled("rename") == true)
+    #expect(settings.isEnabled("unset") == true)
+}
