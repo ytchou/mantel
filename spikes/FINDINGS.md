@@ -75,7 +75,7 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 | Floating pill when there is no notch | Measured with `--force-pill`: pill sits under the menu bar and expands the same way. No real notchless display was available. |
 | Expanded panel covers menu bar items | Measured. At 420 pt wide it hides menus and status items next to the notch. The shell needs a width limit or must accept this. |
 | Clicks pass through the transparent area | Measured by hit test, not by a real click (`probe/probe.swift hit`). A point inside the panel frame but outside the shape resolves to the app below. A point 70 pt under the notch resolves to the app below while idle, to the panel while expanded, and to the app below again after collapse. |
-| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But in two tries macOS did not switch to the probe's full-screen Space (the probe window reported it was not on the active Space), so the panel was never seen over a full-screen app. Needs a look by eye. |
+| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But in two tries macOS did not switch to the probe's full-screen Space (the probe window reported it was not on the active Space), so the panel was never seen over a full-screen app. Two more tries (launched as an app bundle, and after the machine was idle) gave the same result: macOS does not let a background session bring its window forward while the user is in another app. Needs a look by eye. |
 | Hover feel and animation smoothness | Not checked. |
 
 ### B. Drag in and out (`drag/`)
@@ -110,10 +110,13 @@ All unchecked rows are covered by the manual script in `drag/NOTES.md`
 
 Limits of these measurements:
 
-- Test captures came from the `screencapture` command, not the keyboard
-  shortcut. With the shortcut, macOS shows a floating thumbnail and writes the
-  file only after it goes away (about 5 s), so the rename will feel later than
-  19 ms suggests. Not checked.
+- The first test captures came from `screencapture` with a file path, which
+  skips the floating thumbnail. A further capture used `screencapture -u`,
+  which goes through the system thumbnail and default naming like the keyboard
+  shortcut does. Measured: the file appeared about 6 s after the capture was
+  taken and was detected 20 ms after it appeared. So the rename can start no
+  sooner than about 6 s after the user presses the keys, unless the thumbnail
+  is clicked away or turned off. The key press itself was not used.
 - The watcher ran from a terminal that already has Desktop access. The signed
   app will get its own folder permission prompt. Not checked.
 
@@ -153,4 +156,3 @@ Limits of these measurements:
 2. Run the drag script in `drag/NOTES.md`.
 3. Run `swift run NotchSpike --quit-after 60` in `notch-window/`; hover it,
    click beside it, open a full-screen app, switch Spaces.
-4. Take a screenshot with Cmd-Shift-4 while `swift run NameSpike watch` runs.
