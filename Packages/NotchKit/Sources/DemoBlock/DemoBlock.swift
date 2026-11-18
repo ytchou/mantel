@@ -2,8 +2,11 @@ import NotchCore
 import Observation
 import SwiftUI
 
-/// The smallest block that uses the whole contract: hovering the notch shows
-/// the time, a click shows or hides the seconds, and a drop is named back.
+/// The smallest block that uses the whole contract: hovering the notch opens
+/// a panel, a click is counted, and a drop is named back.
+///
+/// It is for trying the shell and as a template. The app registers it only
+/// when launched with `-demoBlock YES`.
 ///
 /// Copy this file to start a new block. A block does four things:
 /// 1. subscribes to events in `activate`,
@@ -13,14 +16,14 @@ import SwiftUI
 @MainActor
 public final class DemoBlock: NotchBlock {
     public let id: BlockID = "demo"
-    public let title = "Clock"
+    public let title = "Demo"
 
     /// What the view shows. The view observes it, so a change needs no new
     /// `present` call.
     @MainActor
     @Observable
     final class Model {
-        var showsSeconds = true
+        var clicks = 0
         var lastDrop: String?
     }
 
@@ -43,7 +46,7 @@ public final class DemoBlock: NotchBlock {
     public func handle(_ input: NotchInput) {
         switch input {
         case .click:
-            model.showsSeconds.toggle()
+            model.clicks += 1
         case let .drop(items):
             model.lastDrop = Self.describe(items)
         }
@@ -59,7 +62,7 @@ public final class DemoBlock: NotchBlock {
         // Ambient: any block with something more important to show wins.
         context?.present(Presentation(
             priority: .ambient,
-            expanded: NotchContent(size: CGSize(width: 280, height: 84)) { ClockView(model: model) },
+            expanded: NotchContent(size: CGSize(width: 280, height: 84)) { DemoView(model: model) },
             opensAt: .expanded,
             accepts: [.file, .link, .text]
         ))
@@ -76,25 +79,19 @@ public final class DemoBlock: NotchBlock {
     }
 }
 
-private struct ClockView: View {
+private struct DemoView: View {
     let model: DemoBlock.Model
 
     var body: some View {
         VStack(spacing: 4) {
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                Text(timeline.date, format: model.showsSeconds
-                    ? .dateTime.hour().minute().second()
-                    : .dateTime.hour().minute())
-                    .font(.system(size: 30, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-            }
-            if let lastDrop = model.lastDrop {
-                Text("Dropped: \(lastDrop)")
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .opacity(0.7)
-            }
+            Text("Clicks: \(model.clicks)")
+                .font(.system(size: 22, weight: .medium, design: .rounded))
+                .monospacedDigit()
+            Text(model.lastDrop.map { "Dropped: \($0)" } ?? "Drop something here")
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .opacity(0.7)
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -4,7 +4,7 @@ import Testing
 @testable import DemoBlock
 
 @MainActor
-@Test func hoverShowsTheClockAndLeavingRemovesIt() {
+@Test func hoverOpensThePanelAndLeavingRemovesIt() {
     let runtime = NotchRuntime()
     runtime.register(DemoBlock())
     #expect(runtime.state.owner == nil)
@@ -26,14 +26,14 @@ import Testing
 }
 
 @MainActor
-@Test func aClickTogglesTheSecondsAndADropIsNamed() {
+@Test func aClickIsCountedAndADropIsNamed() {
     let runtime = NotchRuntime()
     let block = DemoBlock()
     runtime.register(block)
     runtime.pointerHoverChanged(isInside: true)
 
     runtime.send(.click)
-    #expect(block.model.showsSeconds == false)
+    #expect(block.model.clicks == 1)
 
     runtime.send(.drop([.file(URL(filePath: "/tmp/a.png")), .text("hello")]))
     #expect(block.model.lastDrop == "a.png + 1 more")
@@ -46,5 +46,5 @@ import Testing
     runtime.register(block)
 
     runtime.send(.click)
-    #expect(block.model.showsSeconds == true)
+    #expect(block.model.clicks == 0)
 }

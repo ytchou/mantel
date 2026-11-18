@@ -24,7 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shell: NotchShellController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        runtime.register(DemoBlock())
+        // No block is on by default yet. `-demoBlock YES` adds the demo block,
+        // to try hover, click and drop on the shell.
+        if UserDefaults.standard.bool(forKey: "demoBlock") {
+            runtime.register(DemoBlock())
+        }
         // `-forcePill YES` on the command line tries the pill on a notched Mac.
         let shell = NotchShellController(runtime: runtime,
                                          forcePill: UserDefaults.standard.bool(forKey: "forcePill"))

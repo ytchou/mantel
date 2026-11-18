@@ -28,7 +28,7 @@ Use these, not bare `xcodebuild` or `swift test`.
 | `Packages/NotchKit/Sources/NotchCore` | Block contract, event bus, arbiter | Import AppKit UI, any other module |
 | `Packages/NotchKit/Sources/NotchShell` | Notch panel, idle/peek/expanded drawing, input forwarding | Know about any specific block |
 | `Packages/NotchKit/Sources/EventSources` | System event sources that publish to the bus | Draw UI, call a block directly |
-| `Packages/NotchKit/Sources/DemoBlock` | Demo block (hover shows the time); the template for new blocks | Import `NotchShell`, any other block |
+| `Packages/NotchKit/Sources/DemoBlock` | Demo block (hover, click and drop tester, on with `-demoBlock YES`); the template for new blocks | Import `NotchShell`, any other block |
 | `Packages/NotchKit/Sources/ShelfBlock` | Shelf block (drop, hold, drag out) | Import `NotchShell`, `RenameBlock` |
 | `Packages/NotchKit/Sources/RenameBlock` | Screenshot rename block | Import `NotchShell`, `ShelfBlock` |
 | `spikes/` | Throwaway experiments | Be imported by the app or the package |
