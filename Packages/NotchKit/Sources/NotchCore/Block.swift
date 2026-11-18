@@ -35,6 +35,33 @@ public struct BlockAction: Identifiable {
     }
 }
 
+/// What a block says about itself. Shown on the Blocks page in settings.
+///
+/// Plain data on purpose: a block that is installed later can state the same
+/// facts in a manifest, before any of its code is loaded.
+public struct BlockInfo: Sendable, Equatable {
+    /// One sentence on what the block does.
+    public var summary: String
+    /// SF Symbol name for the block's icon.
+    public var symbol: String
+    /// What makes the block act, such as "Taking a screenshot".
+    public var trigger: String
+    /// What the block needs from the system, in the user's words. Empty when it needs nothing.
+    public var permissions: [String]
+
+    public init(
+        summary: String = "",
+        symbol: String = "square.grid.2x2",
+        trigger: String = "",
+        permissions: [String] = []
+    ) {
+        self.summary = summary
+        self.symbol = symbol
+        self.trigger = trigger
+        self.permissions = permissions
+    }
+}
+
 /// What the runtime gives a block. It is the block's only way to reach the notch.
 @MainActor
 public protocol BlockContext: AnyObject {
@@ -60,6 +87,8 @@ public protocol NotchBlock: AnyObject {
     var id: BlockID { get }
     /// Name shown in settings.
     var title: String { get }
+    /// Description, icon, trigger and permissions, for the Blocks page.
+    var info: BlockInfo { get }
 
     /// The block was turned on. Subscribe to events here and keep `context`.
     func activate(_ context: any BlockContext)
@@ -79,6 +108,7 @@ public protocol NotchBlock: AnyObject {
 }
 
 public extension NotchBlock {
+    var info: BlockInfo { BlockInfo() }
     func deactivate() {}
     func handle(_ input: NotchInput) {}
     var actions: [BlockAction] { [] }

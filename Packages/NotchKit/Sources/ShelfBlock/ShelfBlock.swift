@@ -18,6 +18,11 @@ import SwiftUI
 public final class ShelfBlock: NotchBlock {
     public let id: BlockID = "shelf"
     public let title = "Shelf"
+    public let info = BlockInfo(
+        summary: "Holds files, links and text you drop on the notch until you drag them out again.",
+        symbol: "tray.full",
+        trigger: "Dragging something toward the notch"
+    )
 
     /// View state the block drives. The views observe it.
     @MainActor

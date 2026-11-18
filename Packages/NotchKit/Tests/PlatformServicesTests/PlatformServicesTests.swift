@@ -125,3 +125,18 @@ private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
     #expect(defaults.bool(forKey: "onboarding.completed"))
     #expect(OnboardingController(defaults: defaults).isCompleted)
 }
+
+@MainActor
+@Test func blockWithoutInfoGetsTheDefaultAndAnEmptyDetailLine() {
+    let block = FakeBlock("plain")
+    #expect(block.info == BlockInfo())
+    let entry = BlockEntry(id: block.id, title: block.title, info: block.info)
+    #expect(entry.detail.isEmpty)
+}
+
+@Test func detailLineJoinsTriggerAndPermissions() {
+    let both = BlockEntry(id: "a", title: "A", info: BlockInfo(trigger: "Taking a screenshot", permissions: ["Folder access", "Apple Intelligence"]))
+    #expect(both.detail == "Taking a screenshot · Needs: Folder access, Apple Intelligence")
+    let triggerOnly = BlockEntry(id: "b", title: "B", info: BlockInfo(trigger: "Dragging"))
+    #expect(triggerOnly.detail == "Dragging")
+}

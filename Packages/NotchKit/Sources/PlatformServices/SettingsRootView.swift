@@ -15,14 +15,15 @@ public struct SettingsRootView: View {
     }
 
     public var body: some View {
-        let entries = runtime.blocks.map { BlockEntry(id: $0.id, title: $0.title) }
+        let entries = runtime.blocks.map { BlockEntry(id: $0.id, title: $0.title, info: $0.info) }
         NavigationSplitView {
             List(selection: $selection) {
                 Label("General", systemImage: "gearshape").tag(SettingsPane.general)
+                Label("Blocks", systemImage: "square.grid.2x2").tag(SettingsPane.blocks)
                 if !entries.isEmpty {
-                    Section("Blocks") {
+                    Section("Block Settings") {
                         ForEach(entries) { entry in
-                            Label(entry.title, systemImage: "square.grid.2x2").tag(SettingsPane.block(entry.id))
+                            Label(entry.title, systemImage: entry.info.symbol).tag(SettingsPane.block(entry.id))
                         }
                     }
                 }
@@ -30,6 +31,8 @@ public struct SettingsRootView: View {
             .navigationSplitViewColumnWidth(170)
         } detail: {
             switch selection {
+            case .blocks:
+                BlocksPane(entries: entries, runtime: runtime, settings: settings)
             case let .block(id):
                 if let block = runtime.blocks.first(where: { $0.id == id }) {
                     BlockPane(block: block, runtime: runtime, settings: settings)
@@ -44,12 +47,70 @@ public struct SettingsRootView: View {
 
 enum SettingsPane: Hashable {
     case general
+    case blocks
     case block(BlockID)
 }
 
-private struct BlockEntry: Identifiable {
+struct BlockEntry: Identifiable {
     let id: BlockID
     let title: String
+    let info: BlockInfo
+
+    /// The trigger and the permissions on one line, such as
+    /// "Taking a screenshot · Needs: Access to the screenshot folder".
+    var detail: String {
+        var parts: [String] = []
+        if !info.trigger.isEmpty { parts.append(info.trigger) }
+        if !info.permissions.isEmpty { parts.append("Needs: " + info.permissions.joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+// MARK: - Blocks page
+
+/// Every registered block with what it does, what starts it, what it needs,
+/// and its on/off switch.
+private struct BlocksPane: View {
+    let entries: [BlockEntry]
+    let runtime: NotchRuntime
+    let settings: BlockSettings
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(entries) { entry in
+                    Toggle(isOn: Binding(
+                        get: { settings.isEnabled(entry.id) },
+                        set: { settings.setEnabled(entry.id, $0, in: runtime) }
+                    )) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.title)
+                                if !entry.info.summary.isEmpty {
+                                    Text(entry.info.summary)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                if !entry.detail.isEmpty {
+                                    Text(entry.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: entry.info.symbol)
+                        }
+                    }
+                }
+            } footer: {
+                Text("A block that is off receives no events and shows nothing in the notch.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Blocks")
+    }
 }
 
 // MARK: - Block pane

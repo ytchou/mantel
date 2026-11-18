@@ -37,6 +37,12 @@ final class RenameModel {
 public final class RenameBlock: NotchBlock {
     public let id: BlockID = "rename"
     public let title = "Screenshot Names"
+    public let info = BlockInfo(
+        summary: "Gives each new screenshot a name that says what is in it.",
+        symbol: "camera.viewfinder",
+        trigger: "Taking a screenshot",
+        permissions: ["Access to the screenshot folder", "Apple Intelligence (optional)"]
+    )
 
     static let peekSize = CGSize(width: 340, height: 36)
     static let expandedSize = CGSize(width: 520, height: 260)
