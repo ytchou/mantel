@@ -112,3 +112,19 @@ private func recent(_ n: Int) -> RecentRename {
     let store = RecentsStore(url: folder.appending(path: "none.json"))
     #expect(store.load().isEmpty)
 }
+
+@Test func undoRefusesAFileThisAppDidNotRename() throws {
+    let folder = try makeTempFolder()
+    let source = try makeScreenshot(in: folder)
+    let renamer = Renamer()
+    let target = try renamer.rename(source, to: "payment-failed.png")
+    // Another file takes the renamed path.
+    try FileManager.default.removeItem(at: target)
+    try makeFile("payment-failed.png", in: folder, contents: "newer")
+
+    #expect(throws: RenameError.fileChanged) {
+        try renamer.undo(target, originalName: source.lastPathComponent)
+    }
+    #expect(exists(target))
+    #expect(!exists(source))
+}

@@ -126,6 +126,7 @@ let exampleLink = URL(string: "https://example.com/page")!
         .appending(path: "TopNotch/Drops/\(UUID().uuidString)", directoryHint: .isDirectory)
     let promised = try makeFile(named: "photo.png", in: dropFolder)
     let store = ShelfStore(directory: directory)
+    store.dropRoot = dropFolder.deletingLastPathComponent()
 
     let stack = try #require(store.add([.file(promised)]))
     let item = try #require(stack.items.first)
@@ -161,6 +162,7 @@ let exampleLink = URL(string: "https://example.com/page")!
         .appending(path: "TopNotch/Drops/\(UUID().uuidString)", directoryHint: .isDirectory)
     let promised = try makeFile(named: "clip.mov", in: dropFolder)
     let store = ShelfStore(directory: directory)
+    store.dropRoot = dropFolder.deletingLastPathComponent()
     let stack = try #require(store.add([.file(promised)]))
     let stored = try #require(stack.items.first.flatMap { store.fileURL(of: $0) })
 
@@ -169,4 +171,18 @@ let exampleLink = URL(string: "https://example.com/page")!
 
     _ = ShelfStore(directory: directory)
     #expect(!exists(stored))
+}
+
+@MainActor
+@Test func aUsersFolderNamedLikeTheDropFolderIsNotMoved() throws {
+    let directory = try makeTemporaryDirectory()
+    let lookalike = try makeTemporaryDirectory("ShelfUser")
+        .appending(path: "TopNotch/Drops/mine", directoryHint: .isDirectory)
+    let file = try makeFile(named: "keep.png", in: lookalike)
+    let store = ShelfStore(directory: directory)
+
+    let stack = try #require(store.add([.file(file)]))
+    store.remove(.stack(stack.id), deleteOwnedFiles: true)
+
+    #expect(exists(file))
 }

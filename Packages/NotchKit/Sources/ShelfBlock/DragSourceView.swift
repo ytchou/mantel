@@ -5,7 +5,7 @@ import SwiftUI
 /// view: the notch rebuilds its views when the presentation changes, which
 /// happens as the drag starts, and the source must outlive that.
 @MainActor
-final class DragOutSource: NSObject, @preconcurrency NSDraggingSource {
+final class DragOutSource: NSObject, NSDraggingSource {
     /// What the drag in progress carries.
     var target: ShelfTarget?
     private let onEnd: @MainActor (ShelfTarget, Bool) -> Void

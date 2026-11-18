@@ -64,7 +64,7 @@ struct RenamePipeline: Sendable {
             log.info("text read: \(lines.count) lines in \(Self.ms(clock.now - readStart)) ms")
         } catch {
             lines = []
-            log.error("text reading failed after \(Self.ms(clock.now - readStart)) ms: \(String(describing: error), privacy: .public)")
+            log.error("text reading failed after \(Self.ms(clock.now - readStart)) ms: \(String(describing: error), privacy: .private)")
         }
         guard !Task.isCancelled else { return .dropped }
 
@@ -87,7 +87,7 @@ struct RenamePipeline: Sendable {
             } catch is TimeLimitExceeded {
                 log.info("model timed out after \(Self.ms(clock.now - modelStart)) ms; using fallback")
             } catch {
-                log.error("model failed after \(Self.ms(clock.now - modelStart)) ms: \(String(describing: error), privacy: .public); using fallback")
+                log.error("model failed after \(Self.ms(clock.now - modelStart)) ms: \(String(describing: error), privacy: .private); using fallback")
             }
         } else {
             log.info("fallback naming: model \(String(describing: status), privacy: .public), lines \(lines.count)")

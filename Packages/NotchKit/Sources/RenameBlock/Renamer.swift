@@ -5,6 +5,8 @@ enum RenameError: Error, Equatable {
     case fileMissing
     /// Undo cannot move the file back: another file has its original name.
     case originalNameTaken(String)
+    /// The file at the renamed path is not the one this app renamed.
+    case fileChanged
     /// The file system refused the move or the attribute.
     case failed(String)
 
@@ -13,6 +15,7 @@ enum RenameError: Error, Equatable {
         switch self {
         case .fileMissing: "The file is gone"
         case let .originalNameTaken(name): "\u{201C}\(name)\u{201D} already exists"
+        case .fileChanged: "The file has changed"
         case .failed: "Could not rename the screenshot"
         }
     }
@@ -65,6 +68,12 @@ struct Renamer: Sendable {
         let fileManager = FileManager.default
         let renamed = renamed.standardizedFileURL
         guard fileManager.fileExists(atPath: renamed.path) else { throw RenameError.fileMissing }
+        // Only a file this app renamed, and only back to a plain name in the
+        // same folder: another file may have taken the path since.
+        guard Self.originalName(of: renamed) == originalName,
+              !originalName.contains("/"), originalName != "..", originalName != "." else {
+            throw RenameError.fileChanged
+        }
         let target = renamed.deletingLastPathComponent().appending(path: originalName, directoryHint: .notDirectory)
         if target.path != renamed.path {
             guard !fileManager.fileExists(atPath: target.path) else { throw RenameError.originalNameTaken(originalName) }

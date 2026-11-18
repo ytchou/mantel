@@ -20,9 +20,22 @@ final class ShelfStore {
     @ObservationIgnored let directory: URL
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "shelf")
 
-    /// Path fragment of files the shell wrote from a promise. That folder is
-    /// emptied at the next launch, so such files are moved into storage.
-    static let dropFolderMarker = "/TopNotch/Drops/"
+    /// Where the shell writes files from a promise. That folder is emptied at
+    /// the next launch, so such files are moved into storage. Same path as
+    /// the shell's drop folder; the shelf must not import the shell.
+    static let defaultDropRoot = FileManager.default.temporaryDirectory
+        .appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+
+    /// Tests point this at their own folder.
+    @ObservationIgnored var dropRoot = ShelfStore.defaultDropRoot
+
+    /// True only for a file inside `dropRoot`. A prefix test on resolved
+    /// paths, so a user folder that merely has a similar name is never moved.
+    func isInDropFolder(_ url: URL) -> Bool {
+        let root = dropRoot.resolvingSymlinksInPath().path(percentEncoded: false)
+        let path = url.resolvingSymlinksInPath().path(percentEncoded: false)
+        return path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
 
     static var defaultDirectory: URL {
         URL.applicationSupportDirectory.appending(path: "TopNotch/Shelf", directoryHint: .isDirectory)
@@ -149,7 +162,7 @@ final class ShelfStore {
         case let .text(text):
             return text.isEmpty ? nil : ShelfItem(content: .text(text))
         case let .file(url):
-            if url.path(percentEncoded: false).contains(Self.dropFolderMarker) {
+            if isInDropFolder(url) {
                 guard let moved = moveIntoStorage(url) else { return nil }
                 return ShelfItem(content: .file(path: moved.path(percentEncoded: false), bookmark: nil, isOwned: true))
             }
