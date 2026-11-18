@@ -76,6 +76,8 @@ final class ManualClock: Clock, Sendable {
 
     var now: Instant { state.withLock { $0.now } }
     var minimumResolution: Duration { .zero }
+    /// Tasks asleep on this clock right now.
+    var sleeperCount: Int { state.withLock { $0.sleepers.count } }
 
     func sleep(until deadline: Instant, tolerance: Duration?) async throws {
         let id = state.withLock { s in

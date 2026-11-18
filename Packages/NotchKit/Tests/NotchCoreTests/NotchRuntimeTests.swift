@@ -122,8 +122,13 @@ struct NotchRuntimeTests {
         runtime.register(a)
         a.context?.present(peekPresentation(duration: .seconds(5)))
 
+        // The runtime's timer must be asleep on the clock before time moves.
+        await waitUntil { clock.sleeperCount == 1 }
+        #expect(clock.sleeperCount == 1)
+
+        // One second short of the deadline: the timer is still asleep.
         clock.advance(by: .seconds(4))
-        try? await Task.sleep(for: .milliseconds(20))
+        #expect(clock.sleeperCount == 1)
         #expect(runtime.state.owner == "a")
 
         clock.advance(by: .seconds(1))

@@ -12,14 +12,20 @@ public final class NotchShellController {
     private var screenObserver: (any NSObjectProtocol)?
     private var hover = HoverTracker()
 
-    public init(runtime: NotchRuntime) {
+    private let forcePill: Bool
+
+    /// `forcePill` draws the floating pill even on a screen with a notch.
+    public init(runtime: NotchRuntime, forcePill: Bool = false) {
         self.runtime = runtime
+        self.forcePill = forcePill
     }
 
     /// Create the panel on the built-in (notched) screen, or the main screen as a
     /// floating pill, and start tracking.
     public func start() {
-        guard panel == nil, let geometry = NotchGeometry.current() else { return }
+        guard panel == nil, let geometry = NotchGeometry.current(forcePill: forcePill) else { return }
+        // Files from earlier drops are kept only until the next launch.
+        try? FileManager.default.removeItem(at: DropTargetView.dropRoot)
         let layout = ShellLayout(geometry: geometry)
         let panel = NotchPanel(frame: geometry.panelFrame)
 
@@ -90,7 +96,7 @@ public final class NotchShellController {
     }
 
     private func screenChanged() {
-        guard let panel, let layout, let geometry = NotchGeometry.current() else { return }
+        guard let panel, let layout, let geometry = NotchGeometry.current(forcePill: forcePill) else { return }
         layout.geometry = geometry
         panel.setFrame(geometry.panelFrame, display: true)
     }

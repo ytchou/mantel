@@ -19,6 +19,9 @@ public enum DropKind: Sendable, Hashable, CaseIterable {
 /// Promised files and raw image data are written to disk by the shell before
 /// delivery, so a block never sees a promise. A folder is a `.file` whose URL
 /// is a directory.
+///
+/// A file the shell wrote lives in a temporary folder that is emptied at the
+/// next launch. A block that keeps such a file must move or copy it.
 public enum DroppedItem: Sendable, Hashable {
     case file(URL)
     case link(URL)

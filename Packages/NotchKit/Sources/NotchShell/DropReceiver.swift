@@ -16,7 +16,8 @@ final class DropTargetView: NSView {
     private var dragKinds: Set<DropKind> = []
 
     private static let readClasses: [AnyClass] = [NSFilePromiseReceiver.self, NSURL.self, NSString.self]
-    private static let dropRoot = FileManager.default.temporaryDirectory
+    /// Promised files are written here. Emptied when the shell starts.
+    static let dropRoot = FileManager.default.temporaryDirectory
         .appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
 
     private let promiseQueue: OperationQueue = {

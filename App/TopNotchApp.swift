@@ -25,7 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         runtime.register(DemoBlock())
-        let shell = NotchShellController(runtime: runtime)
+        // `-forcePill YES` on the command line tries the pill on a notched Mac.
+        let shell = NotchShellController(runtime: runtime,
+                                         forcePill: UserDefaults.standard.bool(forKey: "forcePill"))
         shell.start()
         self.shell = shell
     }

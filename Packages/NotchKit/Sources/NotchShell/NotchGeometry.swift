@@ -125,9 +125,10 @@ extension NotchGeometry {
     }
 
     /// Geometry for the built-in (notched) screen, else the main screen as a pill.
-    /// `nil` when there is no screen at all.
-    static func current() -> NotchGeometry? {
-        for screen in NSScreen.screens {
+    /// `nil` when there is no screen at all. `forcePill` ignores the notch, to
+    /// try the pill on a notched Mac.
+    static func current(forcePill: Bool = false) -> NotchGeometry? {
+        for screen in NSScreen.screens where !forcePill {
             if let notch = notchRect(of: screen) {
                 return NotchGeometry(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, notch: notch)
             }
