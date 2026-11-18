@@ -1,0 +1,12 @@
+// Signing settings shared by every configuration.
+// The signature must stay the same between builds: macOS ties granted
+// permissions (folder access, Accessibility) to it and resets them if it changes.
+// Manual signing with no provisioning profile; revisit when a capability needs a profile.
+PRODUCT_BUNDLE_IDENTIFIER = dev.topnotch.TopNotch
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Apple Development
+PROVISIONING_PROFILE_SPECIFIER =
+DEVELOPMENT_TEAM =
+
+// Each developer sets DEVELOPMENT_TEAM in Config/Local.xcconfig (not committed).
+#include? "Local.xcconfig"

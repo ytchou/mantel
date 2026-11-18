@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Build output
+/build/
+.build/
+DerivedData/
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+
+# SwiftPM
+.swiftpm/
+Package.resolved
+
+# Local signing settings (team id) - never commit
+Config/Local.xcconfig
+
+# Worktrees and secrets
+.worktrees/
+.env
+.env.*
