@@ -8,6 +8,8 @@ import SwiftUI
 @Observable
 final class ShellLayout {
     var geometry: NotchGeometry
+    /// True while the pointer is over the shape. Set by the controller.
+    var isHovering = false
     init(geometry: NotchGeometry) { self.geometry = geometry }
 }
 
@@ -31,6 +33,9 @@ struct NotchShapeView: View {
     let layout: ShellLayout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// How far the idle shape grows downward while the pointer is on it.
+    private static let idleHoverGrowth: CGFloat = 8
+
     private struct ContentKey: Hashable {
         let id: UUID
         let level: NotchLevel
@@ -39,7 +44,11 @@ struct NotchShapeView: View {
     var body: some View {
         let geometry = layout.geometry
         let state = runtime.state
-        let rect = geometry.localRect(geometry.shapeRect(for: state))
+        let base = geometry.localRect(geometry.shapeRect(for: state))
+        // With nothing to show, the notch still grows a little under the
+        // pointer, so the user can see the app is running.
+        let growth = state.level == nil && layout.isHovering ? Self.idleHoverGrowth : 0
+        let rect = CGRect(x: base.minX, y: base.minY, width: base.width, height: base.height + growth)
         let radii = geometry.radii(level: state.level)
         let shape = NotchOutline(neckWidth: geometry.neck?.width, neckHeight: geometry.headerHeight,
                                  topRadius: radii.top, bottomRadius: radii.bottom)

@@ -96,6 +96,7 @@ public final class NotchShellController {
         }
 
         if hover.update(pointer: pointer, shape: shape, neck: neck) {
+            layout.isHovering = hover.isInside
             runtime.pointerHoverChanged(isInside: hover.isInside)
         }
     }
