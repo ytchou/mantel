@@ -153,3 +153,43 @@ private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
     #expect(settings.isEnabled("rename") == true)
     #expect(settings.isEnabled("unset") == true)
 }
+
+@MainActor
+private final class ActionBlock: NotchBlock {
+    let id: BlockID
+    let title: String
+    var ran = 0
+    init(_ id: BlockID, title: String) { self.id = id; self.title = title }
+    func activate(_ context: any BlockContext) {}
+    var actions: [BlockAction] {
+        [BlockAction(id: "go", title: "Go") { [weak self] in self?.ran += 1 },
+         BlockAction(id: "stop", title: "Stop", isEnabled: false) {}]
+    }
+}
+
+@MainActor
+@Test func notchMenuListsEnabledBlocksActionsThenSettingsAndQuit() {
+    let runtime = NotchRuntime()
+    let on = ActionBlock("on", title: "On Block")
+    runtime.register(on)
+    runtime.register(ActionBlock("off", title: "Off Block"), enabled: false)
+    runtime.register(FakeBlock("plain"))
+    var opened = 0
+    let notchMenu = NotchMenu(runtime: runtime) { opened += 1 }
+
+    let menu = notchMenu.make()
+    let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+    #expect(titles == ["On Block", "Go", "Stop", "Settings\u{2026}", "Quit TopNotch"])
+    #expect(menu.item(withTitle: "Go")?.isEnabled == true)
+    #expect(menu.item(withTitle: "Stop")?.isEnabled == false)
+
+    // Sent straight to the item's target: a test process has no running NSApp to route it.
+    func click(_ title: String) {
+        guard let item = menu.item(withTitle: title), let action = item.action else { return }
+        _ = item.target?.perform(action, with: item)
+    }
+    click("Go")
+    #expect(on.ran == 1)
+    click("Settings\u{2026}")
+    #expect(opened == 1)
+}

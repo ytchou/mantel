@@ -15,6 +15,14 @@ final class ShellLayout {
 /// without this the first click would only try to activate the window.
 final class NotchHostingView: NSHostingView<NotchShapeView> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Builds the menu for a right-click on the notch. Nil shows no menu.
+    var menuProvider: (@MainActor () -> NSMenu?)?
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu = menuProvider?() else { return super.rightMouseDown(with: event) }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
 }
 
 /// Draws `runtime.state`: the black shape, and the block's content below the notch.

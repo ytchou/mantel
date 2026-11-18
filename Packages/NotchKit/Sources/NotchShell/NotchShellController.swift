@@ -14,6 +14,9 @@ public final class NotchShellController {
 
     private let forcePill: Bool
 
+    /// Builds the menu shown on a right-click on the notch. Set before `start()`.
+    public var contextMenu: (@MainActor () -> NSMenu?)?
+
     /// `forcePill` draws the floating pill even on a screen with a notch.
     public init(runtime: NotchRuntime, forcePill: Bool = false) {
         self.runtime = runtime
@@ -37,6 +40,7 @@ public final class NotchShellController {
         let host = NotchHostingView(rootView: NotchShapeView(runtime: runtime, layout: layout))
         // SwiftUI must not resize the window from the content's size.
         host.sizingOptions = []
+        host.menuProvider = { [weak self] in self?.contextMenu?() }
         host.frame = dropTarget.bounds
         host.autoresizingMask = [.width, .height]
         dropTarget.addSubview(host)

@@ -16,10 +16,7 @@ struct TopNotchApp: App {
 
     var body: some Scene {
         MenuBarExtra("TopNotch", systemImage: "rectangle.topthird.inset.filled") {
-            MenuBarContent(runtime: delegate.runtime)
-        }
-        Settings {
-            SettingsRootView(runtime: delegate.runtime, settings: delegate.settings)
+            MenuBarContent(runtime: delegate.runtime) { delegate.settingsWindow.show() }
         }
     }
 }
@@ -28,6 +25,8 @@ struct TopNotchApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = NotchRuntime()
     let settings = BlockSettings()
+    private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings)
+    private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
     private let onboarding = OnboardingController()
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
@@ -44,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // `-forcePill YES` tries the floating pill on a Mac with a notch.
         let shell = NotchShellController(runtime: runtime, forcePill: defaults.bool(forKey: "forcePill"))
+        // Right-click on the notch: the menu bar item can be hidden behind the notch.
+        shell.contextMenu = { [weak self] in self?.notchMenu.make() }
         shell.start()
         self.shell = shell
 

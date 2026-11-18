@@ -145,7 +145,7 @@ public struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome to TopNotch").font(.title2.bold())
-                Text("TopNotch works from the notch and the menu bar. Two things need your OK first. You can come back to them in Settings > General.")
+                Text("TopNotch works from the notch and the menu bar. Two things need your OK first. You can come back to them in Settings > General. To open Settings, right-click the notch.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
