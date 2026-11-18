@@ -15,7 +15,7 @@ at the machine or a setting that is off.
 | # | Decision | Chosen | Confidence |
 |---|---|---|---|
 | 1 | Own panel or DynamicNotchKit | Own panel | High |
-| 2 | How to detect a drag | Global mouse monitor plus drag-pasteboard change count | Medium until a person runs the drag script |
+| 2 | How to detect a drag | Global mouse monitor plus drag-pasteboard change count | High: 5 of 5 real drags detected, no false starts |
 | 3 | Naming pipeline on macOS 26 | Folder watcher, then Vision text, then on-device text model, with a no-model fallback | High that it works; the model is slow (1 to 10 s) |
 
 ### 1. Own panel, not DynamicNotchKit
@@ -46,9 +46,8 @@ A drag session starts when both signals are seen after a mouse-down: a
 `leftMouseDragged` event from a global monitor, and a change of
 `NSPasteboard(name: .drag).changeCount`. It ends on mouse-up.
 
-Setup is measured; the behaviour during a real drag is not. If the manual
-script shows the global monitor is silent while another app runs its drag loop,
-the fallback is the 50 ms mouse-button poll already in the spike.
+Measured with real drags from Finder and Chrome with Accessibility not
+granted. The 50 ms mouse-button poll stays as a second source of mouse-up.
 
 ### 3. Naming pipeline
 
@@ -75,7 +74,7 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 | Floating pill when there is no notch | Measured with `--force-pill`: pill sits under the menu bar and expands the same way. No real notchless display was available. |
 | Expanded panel covers menu bar items | Measured. At 420 pt wide it hides menus and status items next to the notch. The shell needs a width limit or must accept this. |
 | Clicks pass through the transparent area | Measured by hit test, not by a real click (`probe/probe.swift hit`). A point inside the panel frame but outside the shape resolves to the app below. A point 70 pt under the notch resolves to the app below while idle, to the panel while expanded, and to the app below again after collapse. |
-| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But in two tries macOS did not switch to the probe's full-screen Space (the probe window reported it was not on the active Space), so the panel was never seen over a full-screen app. Two more tries (launched as an app bundle, and after the machine was idle) gave the same result: macOS does not let a background session bring its window forward while the user is in another app. Needs a look by eye. |
+| Over a full-screen app, and when switching Spaces | Checked by hand: the panel stays over the notch and expands on hover in a full-screen app and after switching Spaces. The automated probe could not show this (macOS would not bring its window forward). |
 | Hover feel and animation smoothness | Not checked. |
 
 ### B. Drag in and out (`drag/`)
@@ -86,13 +85,17 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 | Panel registers for files, links, text and promised files | Measured (registered types listed at launch). |
 | Global monitor sees another app's mouse-down, drag and mouse-up | Measured, with Accessibility not granted (a real click in another app was logged). |
 | Drag pasteboard changes when another app starts a drag, and its types can be read | Measured with `probe/probe.swift drag file`: change count went 726 to 727 and the file types were read. |
-| A real drag starts a session (both signals together) | Not checked. The probe cannot hold a mouse button, so its drag ends at once and the two signals never overlap. |
-| Dropping a file, folder, text, link | Not checked. |
-| Promised files from Safari or Photos | Not checked. |
-| Dragging an item out to Finder | Not checked. |
+| A real drag starts a session (both signals together) | Measured by hand: 5 of 5 real drags started a session, 73 to 168 ms after mouse-down. About 30 plain clicks and text selections in between started none. |
+| Dropping a file, folder, text, link | Measured by hand: all four accepted, each as the right kind. Files and folders from Finder; link and text from Chrome. |
+| Promised files | Measured by hand: an image dragged out of a web page in Chrome arrived as a promised file and was written in 286 ms. Safari and Photos were not tried. |
+| Dragging an item out to Finder | Measured by hand: a file dragged from the panel to the Desktop was copied there, with the app not frontmost. |
 
-All unchecked rows are covered by the manual script in `drag/NOTES.md`
-(about five minutes).
+Shelf behaviour asked for during the hand test, for phase 3:
+
+- An item leaves the shelf after a successful drop elsewhere. The spike keeps
+  it on purpose; the real block must not.
+- Items are shown as real thumbnails and file icons with the name, not as
+  coloured boxes.
 
 ### C. Screenshot naming (`screenshot-naming/`)
 
@@ -149,10 +152,10 @@ Limits of these measurements:
 - **The contract needs a width or region limit for expanded content**, because
   the expanded panel covers menu bar items.
 
-## Still to check by hand
+## Still to check
 
-1. Run `swift run NameSpike selftest` in `screenshot-naming/` on an idle Mac
-   and record the steady-state model timings.
-2. Run the drag script in `drag/NOTES.md`.
-3. Run `swift run NotchSpike --quit-after 60` in `notch-window/`; hover it,
-   click beside it, open a full-screen app, switch Spaces.
+Nothing blocks phase 2. Two lower-value items remain:
+
+1. Steady-state model timings on an idle Mac, and whether `prewarm()` helps.
+2. Promised files from Safari and Photos, and the folder permission prompt
+   for the signed app.
