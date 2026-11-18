@@ -198,10 +198,19 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             return
         }
-        let hosting = NSHostingController(rootView: OnboardingView { [weak self] in self?.window?.close() })
-        hosting.sizingOptions = .preferredContentSize
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable]
+        // Measure once, then give the window a fixed size. Letting the hosting
+        // view drive the window size through constraints crashed at launch
+        // (AppKit exception in the window's update-constraints pass).
+        let hosting = NSHostingView(rootView: OnboardingView { [weak self] in self?.window?.close() })
+        let size = hosting.fittingSize
+        hosting.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hosting
         window.title = "Welcome to TopNotch"
         window.isReleasedWhenClosed = false
         window.delegate = self
