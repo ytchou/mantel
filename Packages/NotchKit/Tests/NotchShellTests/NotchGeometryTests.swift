@@ -98,11 +98,14 @@ func panelContainsTheLargestShapeWithMargin(geometry: NotchGeometry) {
     var tracker = HoverTracker()
     let big = CGRect(x: 0, y: 0, width: 100, height: 100)
     let small = CGRect(x: 25, y: 50, width: 50, height: 50)
-    #expect(tracker.update(pointer: CGPoint(x: 10, y: 10), shape: big))
+    let entered = tracker.update(pointer: CGPoint(x: 10, y: 10), shape: big)
+    #expect(entered)
     #expect(tracker.isInside)
     // The shape shrank under the pointer; the entry rect keeps it inside.
-    #expect(!tracker.update(pointer: CGPoint(x: 10, y: 10), shape: small))
+    let changedOnShrink = tracker.update(pointer: CGPoint(x: 10, y: 10), shape: small)
+    #expect(!changedOnShrink)
     #expect(tracker.isInside)
-    #expect(tracker.update(pointer: CGPoint(x: 200, y: 200), shape: small))
+    let left = tracker.update(pointer: CGPoint(x: 200, y: 200), shape: small)
+    #expect(left)
     #expect(!tracker.isInside)
 }

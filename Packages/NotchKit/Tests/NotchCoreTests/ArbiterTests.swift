@@ -28,7 +28,8 @@ struct ArbiterTests {
 
         #expect(!accepted)
         #expect(arbiter.state.presentation?.id == shown.id)
-        #expect(!arbiter.present(Presentation(), for: "b", at: .zero))
+        let acceptedEmpty = arbiter.present(Presentation(), for: "b", at: .zero)
+    #expect(!acceptedEmpty)
         #expect(arbiter.state.owner == "a")
     }
 

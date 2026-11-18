@@ -97,8 +97,8 @@ final class DropTargetView: NSView {
             return
         }
         // The reader is called once per promised file, after the source wrote it.
-        // Assumes `fileTypes` lists one entry per file; a source that calls back
-        // fewer times would hold the drop open.
+        // Assumes `fileTypes` lists one entry per file; when a source calls back
+        // fewer times, `PendingDrop` gives up waiting after its time limit.
         drop.expect(max(receiver.fileTypes.count, 1))
         receiver.receivePromisedFiles(atDestination: directory, options: [:], operationQueue: promiseQueue) { @Sendable url, error in
             Task { @MainActor in
@@ -135,8 +135,20 @@ private final class PendingDrop {
         enumerating = false
         let any = !items.isEmpty || waiting > 0
         deliverIfDone()
+        if !delivered {
+            // A source may never write a promised file. Deliver what arrived.
+            // Strong capture: nothing else is certain to keep the drop alive.
+            Task {
+                try? await Task.sleep(for: Self.promiseTimeLimit)
+                self.waiting = 0
+                self.deliverIfDone()
+            }
+        }
         return any
     }
+
+    /// Longest wait for promised files. A web image took 0.3 s in the spike.
+    private static let promiseTimeLimit: Duration = .seconds(15)
 
     private func deliverIfDone() {
         guard !enumerating, waiting <= 0, !delivered else { return }
