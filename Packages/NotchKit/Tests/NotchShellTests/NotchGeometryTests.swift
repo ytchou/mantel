@@ -109,3 +109,15 @@ func panelContainsTheLargestShapeWithMargin(geometry: NotchGeometry) {
     #expect(left)
     #expect(!tracker.isInside)
 }
+
+@Test func besideTheNotchInTheMenuBarDoesNotHit() {
+    let shape = CGRect(x: 0, y: 0, width: 300, height: 100)
+    let neck = CGRect(x: 100, y: 70, width: 100, height: 30)
+    // Level with the notch: only the notch's own width hits.
+    #expect(NotchGeometry.hits(shape, CGPoint(x: 150, y: 90), neck: neck))
+    #expect(!NotchGeometry.hits(shape, CGPoint(x: 20, y: 90), neck: neck))
+    // Below the notch: the full width hits.
+    #expect(NotchGeometry.hits(shape, CGPoint(x: 20, y: 40), neck: neck))
+    // No neck (a pill): the whole rect hits.
+    #expect(NotchGeometry.hits(shape, CGPoint(x: 20, y: 90)))
+}
