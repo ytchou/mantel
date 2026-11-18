@@ -47,7 +47,9 @@ if args[1] == "fullscreen" {
     w.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
     log("before full screen: \(owner) windows on screen = \(notchSpikeWindows(owner))")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { w.toggleFullScreen(nil) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { app.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil) }
     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+        log("frontmost=\(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?") windowOnActiveSpace=\(w.isOnActiveSpace)")
         log("in full screen=\(w.styleMask.contains(.fullScreen)): \(owner) windows on screen = \(notchSpikeWindows(owner))")
         if args.count > 3 {
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -96,5 +98,20 @@ if args[1] == "fullscreen" {
     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
         log("timeout: drag session did not end by itself"); CGWarpMouseCursorPosition(saved); exit(1)
     }
+} else if args[1] == "hit", args.count >= 4, let x = Double(args[2]), let y = Double(args[3]) {
+    // Which window would receive a mouse event at this point (Cocoa coordinates, bottom-left origin)?
+    let n = NSWindow.windowNumber(at: NSPoint(x: x, y: y), belowWindowWithWindowNumber: 0)
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    let owner = list.first { ($0[kCGWindowNumber as String] as? Int) == n }?[kCGWindowOwnerName as String] as? String ?? "?"
+    if args.count > 4 {  // optional: move the cursor there first, wait, and restore it afterwards
+        let saved = CGEvent(source: nil)?.location ?? .zero
+        CGWarpMouseCursorPosition(CGPoint(x: x, y: Double(NSScreen.main!.frame.height) - y))
+        Thread.sleep(forTimeInterval: 0.8)
+        let n2 = NSWindow.windowNumber(at: NSPoint(x: x, y: y), belowWindowWithWindowNumber: 0)
+        let o2 = list.first { ($0[kCGWindowNumber as String] as? Int) == n2 }?[kCGWindowOwnerName as String] as? String ?? "?"
+        log("hit (\(x), \(y)) cursor away: \(owner); cursor there: \(o2)")
+        CGWarpMouseCursorPosition(saved)
+    } else { log("hit (\(x), \(y)): \(owner)") }
+    exit(0)
 } else { print("bad arguments"); exit(2) }
 app.run()

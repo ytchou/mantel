@@ -74,8 +74,8 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 | Hover expands | Measured, with the cursor moved by code: idle to peek at once, expanded after 0.25 s. |
 | Floating pill when there is no notch | Measured with `--force-pill`: pill sits under the menu bar and expands the same way. No real notchless display was available. |
 | Expanded panel covers menu bar items | Measured. At 420 pt wide it hides menus and status items next to the notch. The shell needs a width limit or must accept this. |
-| Clicks pass through the transparent area | Not checked. |
-| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But the terminal took focus back, and the capture shows the desktop Space, not the full-screen one. Needs a look by eye. |
+| Clicks pass through the transparent area | Measured by hit test, not by a real click (`probe/probe.swift hit`). A point inside the panel frame but outside the shape resolves to the app below. A point 70 pt under the notch resolves to the app below while idle, to the panel while expanded, and to the app below again after collapse. |
+| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But in two tries macOS did not switch to the probe's full-screen Space (the probe window reported it was not on the active Space), so the panel was never seen over a full-screen app. Needs a look by eye. |
 | Hover feel and animation smoothness | Not checked. |
 
 ### B. Drag in and out (`drag/`)
