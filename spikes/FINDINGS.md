@@ -75,7 +75,7 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 | Floating pill when there is no notch | Measured with `--force-pill`: pill sits under the menu bar and expands the same way. No real notchless display was available. |
 | Expanded panel covers menu bar items | Measured. At 420 pt wide it hides menus and status items next to the notch. The shell needs a width limit or must accept this. |
 | Clicks pass through the transparent area | Not checked. |
-| Over a full-screen app, and when switching Spaces | Not checked. |
+| Over a full-screen app, and when switching Spaces | Not conclusive. `probe/probe.swift fullscreen` put its own window into full screen and the panel stayed in the on-screen window list before, during and after. But the terminal took focus back, and the capture shows the desktop Space, not the full-screen one. Needs a look by eye. |
 | Hover feel and animation smoothness | Not checked. |
 
 ### B. Drag in and out (`drag/`)
@@ -84,7 +84,9 @@ the fallback is the 50 ms mouse-button poll already in the spike.
 |---|---|
 | Monitors install with Accessibility not granted | Measured. `AXIsProcessTrusted` false, global and local monitors installed. |
 | Panel registers for files, links, text and promised files | Measured (registered types listed at launch). |
-| A real drag starts a session; no pasteboard privacy prompt | Not checked. |
+| Global monitor sees another app's mouse-down, drag and mouse-up | Measured, with Accessibility not granted (a real click in another app was logged). |
+| Drag pasteboard changes when another app starts a drag, and its types can be read | Measured with `probe/probe.swift drag file`: change count went 726 to 727 and the file types were read. |
+| A real drag starts a session (both signals together) | Not checked. The probe cannot hold a mouse button, so its drag ends at once and the two signals never overlap. |
 | Dropping a file, folder, text, link | Not checked. |
 | Promised files from Safari or Photos | Not checked. |
 | Dragging an item out to Finder | Not checked. |
@@ -112,6 +114,16 @@ Limits of these measurements:
   19 ms suggests. Not checked.
 - The watcher ran from a terminal that already has Desktop access. The signed
   app will get its own folder permission prompt. Not checked.
+
+## Why some rows are not checked
+
+- **No synthetic input.** The session that ran these spikes has no permission
+  to post mouse or key events, so it could not click, hold a drag, or press the
+  screenshot shortcut. `probe/probe.swift` goes as far as is possible without
+  that permission: it starts a real drag session from its own window, but with
+  no button held the session ends without a drop (operation 0).
+- **Apple Intelligence is off.** Turning it on is a system setting with its own
+  consent screen, so it was left to the owner of the machine.
 
 ## What this changes in the plan
 
