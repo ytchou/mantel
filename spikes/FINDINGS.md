@@ -16,7 +16,7 @@ at the machine or a setting that is off.
 |---|---|---|---|
 | 1 | Own panel or DynamicNotchKit | Own panel | High |
 | 2 | How to detect a drag | Global mouse monitor plus drag-pasteboard change count | Medium until a person runs the drag script |
-| 3 | Naming pipeline on macOS 26 | Folder watcher, then Vision text, then on-device text model, with a no-model fallback | Medium: the model step could not be run |
+| 3 | Naming pipeline on macOS 26 | Folder watcher, then Vision text, then on-device text model, with a no-model fallback | High that it works; the model is slow (1 to 10 s) |
 
 ### 1. Own panel, not DynamicNotchKit
 
@@ -101,7 +101,9 @@ All unchecked rows are covered by the manual script in `drag/NOTES.md`
 | Detect a new screenshot within 1 s | Measured: 19 ms and 43 ms after the file's creation date, with the folder watcher. The attribute was present within 1 ms. |
 | `NSMetadataQuery` detection | Measured: did not fire within 8 s for either capture. |
 | Vision text recognition | Measured: 0.9 s for a full 3024x1964 screen, 0.3 to 0.7 s for small test images. Traditional Chinese and English both read correctly. |
-| On-device model naming and its latency | Not checked. Apple Intelligence is turned off on this Mac (`appleIntelligenceNotEnabled`). The model lists `zh-TW` and `en` as supported. |
+| On-device model naming | Measured after Apple Intelligence was turned on. Names describe the content: `acme-cloud-billing-payment-failed-error-402-invoice`, `taipei-metro-train-schedule-ticket-price-no-food-in-car`. Chinese screenshots get English names. |
+| Model latency | Measured: 0.8 s to 10 s per name in settled runs, and up to 44 s in the first minutes after the model download while the Mac was under load (load average 9). Almost all of it is the wait for the first token; creating a session takes 3 ms. Not yet known: the steady-state figure on an idle Mac, and whether `prewarm()` helps. |
+| Requested name length is respected | Measured: no. "Short" (2 to 4 words) and "standard" (4 to 6) returned 8 to 10 words. The array count guide holds, but the model puts several words in one element. The name must be cut to length in code. |
 | Image input to the model | Measured from the SDK interface: not available. Prompts accept text and structured content only. |
 | Name with no model | Measured: good on a simple dialog (`safari-payment-failed-amount-due-date`), poor on a busy full-screen capture (`google-chrome-口`), and Chinese text is split badly (`台北-捷-運-時刻-表-首`). |
 | Rename keeps dates; original name stored; undo | Measured: creation and modification dates identical before and after; attribute read back; undo restores the name. |
@@ -122,8 +124,8 @@ Limits of these measurements:
   screenshot shortcut. `probe/probe.swift` goes as far as is possible without
   that permission: it starts a real drag session from its own window, but with
   no button held the session ends without a drop (operation 0).
-- **Apple Intelligence is off.** Turning it on is a system setting with its own
-  consent screen, so it was left to the owner of the machine.
+- **Apple Intelligence was off at first.** The owner turned it on during the
+  run, so the model rows above are measured.
 
 ## What this changes in the plan
 
@@ -132,17 +134,22 @@ Limits of these measurements:
   as the normal path and the fallback as "keep a tidy dated name" rather than
   a content name. Chinese fallback needs proper word splitting
   (`NLTokenizer`) if it is kept.
-- **The model step is the open risk.** It must be measured before the rename
-  block is designed in detail. Turning on Apple Intelligence and running
-  `NameSpike selftest` takes a few minutes.
+- **Model naming takes seconds, not milliseconds.** The rename block cannot
+  rename before the user sees the file. It should show "naming" in the notch,
+  rename when the model answers, and give up to the fallback after a time
+  limit (about 10 s). Undo matters more because the rename arrives late.
+- **Name length must be enforced in code**, and the block needs a setting for
+  the language of names, because Chinese content is named in English.
+- **The model needs Apple Intelligence turned on**, plus a download of the
+  model that took about seven minutes here. Onboarding must explain this and
+  the block must work, with the fallback, while the model is not ready.
 - **The contract needs a width or region limit for expanded content**, because
   the expanded panel covers menu bar items.
 
 ## Still to check by hand
 
-1. Turn on Apple Intelligence (System Settings), then run
-   `swift run NameSpike selftest` in `screenshot-naming/` and record the model
-   timings and names.
+1. Run `swift run NameSpike selftest` in `screenshot-naming/` on an idle Mac
+   and record the steady-state model timings.
 2. Run the drag script in `drag/NOTES.md`.
 3. Run `swift run NotchSpike --quit-after 60` in `notch-window/`; hover it,
    click beside it, open a full-screen app, switch Spaces.
