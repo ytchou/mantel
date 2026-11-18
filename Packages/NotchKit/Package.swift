@@ -9,7 +9,7 @@ let package = Package(
     products: [
         .library(
             name: "NotchKit",
-            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock"]
+            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "PlatformServices"]
         )
     ],
     targets: [
@@ -19,11 +19,13 @@ let package = Package(
         .target(name: "DemoBlock", dependencies: ["NotchCore"]),
         .target(name: "ShelfBlock", dependencies: ["NotchCore"]),
         .target(name: "RenameBlock", dependencies: ["NotchCore"]),
+        .target(name: "PlatformServices", dependencies: ["NotchCore"]),
         .testTarget(name: "NotchCoreTests", dependencies: ["NotchCore"]),
         .testTarget(name: "NotchShellTests", dependencies: ["NotchShell"]),
         .testTarget(name: "EventSourcesTests", dependencies: ["EventSources"]),
         .testTarget(name: "DemoBlockTests", dependencies: ["DemoBlock"]),
         .testTarget(name: "ShelfBlockTests", dependencies: ["ShelfBlock"]),
         .testTarget(name: "RenameBlockTests", dependencies: ["RenameBlock"]),
+        .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
     ]
 )
