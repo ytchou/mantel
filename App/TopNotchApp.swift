@@ -1,7 +1,11 @@
 import AppKit
 import DemoBlock
+import EventSources
 import NotchCore
 import NotchShell
+import PlatformServices
+import RenameBlock
+import ShelfBlock
 import SwiftUI
 
 /// Thin app target. It only starts the process and wires the modules together;
@@ -11,28 +15,46 @@ struct TopNotchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        // A background app needs one scene; the settings window is built in phase 3.
+        MenuBarExtra("TopNotch", systemImage: "rectangle.topthird.inset.filled") {
+            MenuBarContent(runtime: delegate.runtime)
+        }
         Settings {
-            EmptyView()
+            SettingsRootView(runtime: delegate.runtime, settings: delegate.settings)
         }
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let runtime = NotchRuntime()
+    let runtime = NotchRuntime()
+    let settings = BlockSettings()
+    private let onboarding = OnboardingController()
     private var shell: NotchShellController?
+    private var dragMonitor: DragMonitor?
+    private var screenshotWatcher: ScreenshotWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // No block is on by default yet. `-demoBlock YES` adds the demo block,
-        // to try hover, click and drop on the shell.
-        if UserDefaults.standard.bool(forKey: "demoBlock") {
-            runtime.register(DemoBlock())
+        let defaults = UserDefaults.standard
+        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
+        // `-demoBlock YES` adds the demo block, to try hover, click and drop.
+        if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
+        for block in blocks {
+            runtime.register(block, enabled: settings.isEnabled(block.id))
         }
-        // `-forcePill YES` on the command line tries the pill on a notched Mac.
-        let shell = NotchShellController(runtime: runtime,
-                                         forcePill: UserDefaults.standard.bool(forKey: "forcePill"))
+
+        // `-forcePill YES` tries the floating pill on a Mac with a notch.
+        let shell = NotchShellController(runtime: runtime, forcePill: defaults.bool(forKey: "forcePill"))
         shell.start()
         self.shell = shell
+
+        let dragMonitor = DragMonitor(runtime: runtime)
+        dragMonitor.start()
+        self.dragMonitor = dragMonitor
+
+        let screenshotWatcher = ScreenshotWatcher(runtime: runtime)
+        screenshotWatcher.start()
+        self.screenshotWatcher = screenshotWatcher
+
+        onboarding.showIfNeeded()
     }
 }
