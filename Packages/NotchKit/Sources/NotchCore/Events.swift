@@ -71,3 +71,40 @@ public struct ScreenshotCaptured: NotchEvent {
         self.createdAt = createdAt
     }
 }
+
+/// The volume or mute state of the default output device changed, by the
+/// volume keys, the menu bar or another app.
+public struct OutputVolumeChanged: NotchEvent {
+    /// 0 to 1.
+    public let volume: Double
+    public let isMuted: Bool
+    public init(volume: Double, isMuted: Bool) {
+        self.volume = volume
+        self.isMuted = isMuted
+    }
+}
+
+/// A music player started, paused or stopped, or changed track.
+public struct NowPlayingChanged: NotchEvent {
+    public enum State: Sendable, Equatable {
+        case playing
+        case paused
+        /// Stopped, or the player quit.
+        case stopped
+    }
+
+    /// The player's name, such as "Spotify".
+    public let player: String
+    public let state: State
+    public let title: String
+    public let artist: String
+    public let album: String
+
+    public init(player: String, state: State, title: String = "", artist: String = "", album: String = "") {
+        self.player = player
+        self.state = state
+        self.title = title
+        self.artist = artist
+        self.album = album
+    }
+}

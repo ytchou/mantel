@@ -31,6 +31,7 @@ Use these, not bare `xcodebuild` or `swift test`.
 | `Packages/NotchKit/Sources/DemoBlock` | Demo block (hover, click and drop tester, on with `-demoBlock YES`); the template for new blocks | Import `NotchShell`, any other block |
 | `Packages/NotchKit/Sources/ShelfBlock` | Shelf block (drop, hold, drag out) | Import `NotchShell`, `RenameBlock` |
 | `Packages/NotchKit/Sources/RenameBlock` | Screenshot rename block | Import `NotchShell`, `ShelfBlock` |
+| `Packages/NotchKit/Sources/NowPlayingBlock` | Now-playing block (Spotify track on a volume change) | Import `NotchShell`, any other block |
 | `Packages/NotchKit/Sources/PlatformServices` | Menu bar item, settings window, onboarding, launch at login | Import `NotchShell`, any block |
 | `spikes/` | Throwaway experiments | Be imported by the app or the package |
 

@@ -9,7 +9,7 @@ let package = Package(
     products: [
         .library(
             name: "NotchKit",
-            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "PlatformServices"]
+            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "NowPlayingBlock", "PlatformServices"]
         )
     ],
     targets: [
@@ -19,6 +19,7 @@ let package = Package(
         .target(name: "DemoBlock", dependencies: ["NotchCore"]),
         .target(name: "ShelfBlock", dependencies: ["NotchCore"]),
         .target(name: "RenameBlock", dependencies: ["NotchCore"]),
+        .target(name: "NowPlayingBlock", dependencies: ["NotchCore"]),
         .target(name: "PlatformServices", dependencies: ["NotchCore"]),
         .testTarget(name: "NotchCoreTests", dependencies: ["NotchCore"]),
         .testTarget(name: "NotchShellTests", dependencies: ["NotchShell"]),
@@ -26,8 +27,9 @@ let package = Package(
         .testTarget(name: "DemoBlockTests", dependencies: ["DemoBlock"]),
         .testTarget(name: "ShelfBlockTests", dependencies: ["ShelfBlock"]),
         .testTarget(name: "RenameBlockTests", dependencies: ["RenameBlock"]),
+        .testTarget(name: "NowPlayingBlockTests", dependencies: ["NowPlayingBlock"]),
         .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
-        // Both blocks in one runtime: what happens when they want the notch at once.
-        .testTarget(name: "BothBlocksTests", dependencies: ["NotchCore", "ShelfBlock", "RenameBlock"]),
+        // All blocks in one runtime: what happens when they want the notch at once.
+        .testTarget(name: "BothBlocksTests", dependencies: ["NotchCore", "ShelfBlock", "RenameBlock", "NowPlayingBlock"]),
     ]
 )
