@@ -55,6 +55,18 @@ private func volumeChanges(_ f: Fixture) {
 }
 
 @MainActor
+@Test func aNewTrackDuringADragIsNotShownLater() throws {
+    let f = try Fixture()
+    f.runtime.publish(DragSessionStarted(kinds: [.file]))
+    spotifyPlays(f)
+    #expect(f.runtime.state.owner == "shelf")
+    #expect(f.runtime.state.level == .expanded)
+
+    f.runtime.publish(DragSessionEnded())
+    #expect(f.runtime.state.owner == nil)
+}
+
+@MainActor
 @Test func aVolumeChangeDuringARenameResultShowsAndTheResultReturns() async throws {
     let f = try Fixture()
     spotifyPlays(f)

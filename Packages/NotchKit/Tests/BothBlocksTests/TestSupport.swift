@@ -71,7 +71,7 @@ struct Fixture {
     let clock: ManualClock
     let shelf: ShelfBlock
     let rename: RenameBlock
-    let nowPlaying = NowPlayingBlock()
+    let nowPlaying: NowPlayingBlock
     let gate: Gate
     let folder: URL
 
@@ -91,6 +91,7 @@ struct Fixture {
             recentsURL: folder.appending(path: "state/recents.json")
         )
         runtime.register(shelf)
+        nowPlaying = NowPlayingBlock(defaults: UserDefaults(suiteName: suite)!)
         runtime.register(rename)
         runtime.register(nowPlaying)
     }

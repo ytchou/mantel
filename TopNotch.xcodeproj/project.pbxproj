@@ -70,6 +70,7 @@
 				A10000000000000000000009 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
 				A1000000000000000000000A /* Resources */,
+				A1000000000000000000000C /* Build now-playing helper */,
 			);
 			buildRules = (
 			);
@@ -133,6 +134,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A1000000000000000000000C /* Build now-playing helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Helpers/NowPlayingHelper.m",
+			);
+			name = "Build now-playing helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/TopNotchNowPlaying.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n# Helpers/NowPlayingHelper.m: loaded into /usr/bin/perl by SystemNowPlayingWatcher.\narch_flags=\"\"\nfor arch in $ARCHS; do arch_flags=\"$arch_flags -arch $arch\"; done\nmkdir -p \"$(dirname \"$SCRIPT_OUTPUT_FILE_0\")\"\nxcrun clang -dynamiclib -fobjc-arc -O2 $arch_flags -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -framework Foundation -o \"$SCRIPT_OUTPUT_FILE_0\" \"$SCRIPT_INPUT_FILE_0\"\ncodesign --force --timestamp=none --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$SCRIPT_OUTPUT_FILE_0\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A10000000000000000000009 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -190,6 +214,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -210,6 +235,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";

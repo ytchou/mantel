@@ -93,18 +93,22 @@ public struct NowPlayingChanged: NotchEvent {
         case stopped
     }
 
-    /// The player's name, such as "Spotify".
+    /// The player's app name, such as "Spotify" or "Google Chrome". Sources
+    /// that report the same app use the same name.
     public let player: String
     public let state: State
     public let title: String
     public let artist: String
     public let album: String
+    /// Image data (JPEG or PNG), when the source has it.
+    public let artwork: Data?
 
-    public init(player: String, state: State, title: String = "", artist: String = "", album: String = "") {
+    public init(player: String, state: State, title: String = "", artist: String = "", album: String = "", artwork: Data? = nil) {
         self.player = player
         self.state = state
         self.title = title
         self.artist = artist
         self.album = album
+        self.artwork = artwork
     }
 }

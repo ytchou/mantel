@@ -33,7 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dragMonitor: DragMonitor?
     private var screenshotWatcher: ScreenshotWatcher?
     private var volumeWatcher: OutputVolumeWatcher?
-    private var spotifyWatcher: SpotifyWatcher?
+    private var playerWatchers: [PlayerNotificationWatcher] = []
+    private var systemNowPlayingWatcher: SystemNowPlayingWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
@@ -63,9 +64,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         volumeWatcher.start()
         self.volumeWatcher = volumeWatcher
 
-        let spotifyWatcher = SpotifyWatcher(runtime: runtime)
-        spotifyWatcher.start()
-        self.spotifyWatcher = spotifyWatcher
+        playerWatchers = [.spotify, .music].map { PlayerNotificationWatcher(runtime: runtime, player: $0) }
+        playerWatchers.forEach { $0.start() }
+
+        // Built into Contents/Frameworks by the "Build now-playing helper" phase.
+        let helper = Bundle.main.privateFrameworksURL?.appending(path: "TopNotchNowPlaying.dylib")
+        let systemNowPlayingWatcher = SystemNowPlayingWatcher(runtime: runtime, helperURL: helper)
+        systemNowPlayingWatcher.start()
+        self.systemNowPlayingWatcher = systemNowPlayingWatcher
 
         onboarding.showIfNeeded()
     }
