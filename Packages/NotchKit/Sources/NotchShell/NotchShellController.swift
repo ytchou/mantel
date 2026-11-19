@@ -165,15 +165,27 @@ public final class NotchShellController {
         guard monitors.isEmpty else { return }
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.poll() }
+            MainActor.assumeIsolated { self?.pointerMoved() }
         }) {
             monitors.append(global)
         }
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.poll() }
+            MainActor.assumeIsolated { self?.pointerMoved() }
             return event
         }) {
             monitors.append(local)
+        }
+    }
+
+    /// A mouse move or drag somewhere. Mouse events arrive up to 120 times
+    /// a second, so this does as little as it can: nothing while the fast
+    /// timer is already watching, and otherwise one rect test, with a full
+    /// check only once the pointer is near the shape.
+    private func pointerMoved() {
+        guard pollInterval != Self.fastInterval, let panel, let layout, panel.isVisible else { return }
+        let shape = layout.geometry.shapeRect(for: runtime.state)
+        if shape.insetBy(dx: -Self.nearMargin, dy: -Self.nearMargin).contains(NSEvent.mouseLocation) {
+            poll()
         }
     }
 
