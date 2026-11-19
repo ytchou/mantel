@@ -48,7 +48,7 @@ public final class ShelfBlock: NotchBlock {
     }
 
     static let acceptedKinds: Set<DropKind> = [.file, .link, .text]
-    static let expandedSize = CGSize(width: 500, height: 168)
+    static let expandedSize = CGSize(width: 500, height: 180)
     /// The count beside the notch. Only the width matters. Kept narrow: the
     /// app menus can end about 45 pt from the notch, and the wing must not reach them.
     static let wingSize = CGSize(width: 42, height: 32)

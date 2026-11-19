@@ -27,7 +27,8 @@ public enum PresentationPriority: Int, Sendable, Comparable, CaseIterable {
 /// shown; that is accepted because it is short-lived. The content area starts
 /// below the notch's own height.
 public enum NotchLimits {
-    public static let maxPeekSize = CGSize(width: 360, height: 44)
+    /// Room for a 15 pt title with an 11 pt line under it, and a 36 pt image.
+    public static let maxPeekSize = CGSize(width: 380, height: 56)
     public static let maxExpandedSize = CGSize(width: 520, height: 280)
     /// Widest a wing may be. Its height is always the notch's height.
     public static let maxWingWidth: CGFloat = 80

@@ -90,10 +90,17 @@ struct NotchGeometry: Equatable {
     func radii(level: NotchLevel?) -> (top: CGFloat, bottom: CGFloat) {
         let bottom: CGFloat = switch level {
         case nil: isNotch ? 8 : 16
-        case .peek: 14
-        case .expanded: 24
+        case .peek: 18
+        case .expanded: 32
         }
         return (isNotch ? 0 : bottom, bottom)
+    }
+
+    /// Radius of the concave curves that join a shown shape to the top edge
+    /// of the screen, outside its top corners. Only on a notched screen, and
+    /// only while something is shown: the hardware notch has none.
+    func earRadius(level: NotchLevel?) -> CGFloat {
+        isNotch && level != nil ? 8 : 0
     }
 
     // MARK: Panel

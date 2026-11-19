@@ -1,69 +1,81 @@
+import NotchCore
 import SwiftUI
 
 // White on black: the shell supplies the black shape and the dark colour
 // scheme. Buttons are plain SwiftUI buttons; the panel never takes focus.
 
-/// The strip under the notch: thumbnail, state, Undo, "+N".
+/// The peek: thumbnail, the new name with its state under it, Undo, "+N".
 struct RenamePeekView: View {
     let model: RenameModel
     let undo: @MainActor () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: NotchStyle.spacing) {
             thumbnail
-            content
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(NotchStyle.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(subtitle)
+                    .font(NotchStyle.secondary)
+                    .opacity(NotchStyle.secondaryOpacity)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 4)
+            if case .renamed = model.phase {
+                Button("Undo") { undo() }
+                    .buttonStyle(.notchCapsule(tint: .accentColor))
+            }
             if model.waiting > 0 {
                 Text("+\(model.waiting)")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(NotchStyle.body)
                     .monospacedDigit()
-                    .opacity(0.7)
+                    .opacity(NotchStyle.secondaryOpacity)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, NotchStyle.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
     }
 
+    private var title: String {
+        switch model.phase {
+        case .idle, .naming: "Naming\u{2026}"
+        case let .renamed(item): item.newName
+        case .failed: "Not renamed"
+        }
+    }
+
+    private var subtitle: String {
+        switch model.phase {
+        case .idle, .naming: "Reading the screenshot"
+        case let .renamed(item): item.usedFallback ? "Renamed with a dated name" : "Renamed from what it shows"
+        case let .failed(message): message
+        }
+    }
+
     @ViewBuilder private var thumbnail: some View {
+        let side = NotchStyle.leadingImageSize
+        let corner = RoundedRectangle(cornerRadius: NotchStyle.leadingImageRadius, style: .continuous)
         if let thumbnail = model.thumbnail {
             Image(decorative: thumbnail.image, scale: 2)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 30, height: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .frame(width: side, height: side)
+                .clipShape(corner)
         } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(.white.opacity(0.15))
-                .frame(width: 30, height: 24)
-                .overlay(Image(systemName: "camera.viewfinder").font(.system(size: 11)).opacity(0.7))
+            corner
+                .fill(.white.opacity(0.12))
+                .frame(width: side, height: side)
+                .overlay(Image(systemName: isFailed ? "exclamationmark.triangle" : "camera.viewfinder")
+                    .font(.system(size: 15)).opacity(0.8))
         }
     }
 
-    @ViewBuilder private var content: some View {
-        switch model.phase {
-        case .idle, .naming:
-            Text("Naming\u{2026}")
-                .font(.system(size: 12, weight: .medium))
-                .opacity(0.8)
-            Spacer(minLength: 0)
-        case let .renamed(item):
-            Text(item.newName)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 4)
-            Button("Undo") { undo() }
-                .modifier(NotchButton())
-        case let .failed(message):
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 11))
-                .opacity(0.8)
-            Text(message)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-        }
+    private var isFailed: Bool {
+        if case .failed = model.phase { true } else { false }
     }
 }
 
@@ -92,31 +104,31 @@ struct RenameRecentsView: View {
     let revert: @MainActor (RecentRename) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: NotchStyle.spacing) {
+            HStack(alignment: .firstTextBaseline) {
                 Text("Recent renames")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(NotchStyle.title)
                 Spacer()
                 if model.phase == .naming {
                     Text(model.waiting > 0 ? "Naming\u{2026} +\(model.waiting)" : "Naming\u{2026}")
-                        .font(.system(size: 11))
-                        .opacity(0.7)
+                        .font(NotchStyle.secondary)
+                        .opacity(NotchStyle.secondaryOpacity)
                 }
             }
             if let message = model.listMessage {
                 Text(message)
-                    .font(.system(size: 11))
+                    .font(NotchStyle.secondary)
                     .foregroundStyle(.orange)
                     .lineLimit(1)
             }
             if model.recents.isEmpty {
                 Text("New screenshots are named here.")
-                    .font(.system(size: 12))
-                    .opacity(0.6)
+                    .font(NotchStyle.body)
+                    .opacity(NotchStyle.secondaryOpacity)
                 Spacer(minLength: 0)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: NotchStyle.spacing) {
                         ForEach(model.recents) { item in
                             RecentRenameRow(item: item, revert: revert)
                         }
@@ -124,7 +136,9 @@ struct RenameRecentsView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, NotchStyle.padding)
+        .padding(.top, 6)
+        .padding(.bottom, NotchStyle.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -137,35 +151,23 @@ private struct RecentRenameRow: View {
     var body: some View {
         let canRevert = !item.reverted && FileManager.default.fileExists(atPath: item.renamedURL.path)
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.newName)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(NotchStyle.body)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(item.originalName)
-                    .font(.system(size: 10))
+                    .font(NotchStyle.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .opacity(0.6)
+                    .opacity(NotchStyle.secondaryOpacity)
             }
             Spacer(minLength: 8)
             Button(item.reverted ? "Reverted" : "Revert") { revert(item) }
-                .modifier(NotchButton())
+                .buttonStyle(.notchCapsule)
                 .disabled(!canRevert)
                 .opacity(canRevert ? 1 : 0.4)
         }
-    }
-}
-
-/// A small capsule button that reads well on black.
-private struct NotchButton: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(.white.opacity(0.18)))
     }
 }
 
