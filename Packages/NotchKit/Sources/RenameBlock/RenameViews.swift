@@ -67,6 +67,25 @@ struct RenamePeekView: View {
     }
 }
 
+/// Beside the notch while a screenshot is being named.
+struct RenameWingView: View {
+    let model: RenameModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "camera.viewfinder")
+            if model.waiting > 0 {
+                Text("+\(model.waiting)").monospacedDigit()
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Naming screenshot")
+    }
+}
+
 /// The panel on hover: recent renames, newest first.
 struct RenameRecentsView: View {
     let model: RenameModel

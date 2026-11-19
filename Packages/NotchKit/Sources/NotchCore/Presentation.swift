@@ -28,6 +28,8 @@ public enum PresentationPriority: Int, Sendable, Comparable, CaseIterable {
 public enum NotchLimits {
     public static let maxPeekSize = CGSize(width: 360, height: 44)
     public static let maxExpandedSize = CGSize(width: 520, height: 280)
+    /// Widest a wing may be. Its height is always the notch's height.
+    public static let maxWingWidth: CGFloat = 80
 
     public static func clamp(_ size: CGSize, for level: NotchLevel) -> CGSize {
         let limit = level == .peek ? maxPeekSize : maxExpandedSize
@@ -63,6 +65,11 @@ public struct Presentation: Identifiable {
     public var priority: PresentationPriority
     /// Shown at `.peek`. At least one of `peek` and `expanded` must be set.
     public var peek: NotchContent?
+    /// A small view beside the notch, inside the menu bar. When set, it is
+    /// shown at the peek level instead of `peek`, so the notch takes no room
+    /// below the menu bar. Only its width is used, up to
+    /// `NotchLimits.maxWingWidth`. Keep it to an icon and a few characters.
+    public var wing: NotchContent?
     /// Shown at `.expanded`.
     public var expanded: NotchContent?
     /// The level the presentation starts at and returns to when the pointer
@@ -78,6 +85,7 @@ public struct Presentation: Identifiable {
     public init(
         priority: PresentationPriority = .standard,
         peek: NotchContent? = nil,
+        wing: NotchContent? = nil,
         expanded: NotchContent? = nil,
         opensAt: NotchLevel = .peek,
         duration: Duration? = nil,
@@ -85,6 +93,7 @@ public struct Presentation: Identifiable {
     ) {
         self.priority = priority
         self.peek = peek
+        self.wing = wing
         self.expanded = expanded
         self.opensAt = opensAt
         self.duration = duration

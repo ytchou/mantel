@@ -12,7 +12,7 @@ import SwiftUI
 /// - its own drag-out is in progress: the shelf expanded, taking no drops, so
 ///   it stays open while the pointer is outside the notch;
 /// - a late drop may still come: see `lateDropGrace`;
-/// - it holds items: a peek with the count, expanding on hover;
+/// - it holds items: the count beside the notch, expanding on hover;
 /// - otherwise nothing.
 @MainActor
 public final class ShelfBlock: NotchBlock {
@@ -46,7 +46,9 @@ public final class ShelfBlock: NotchBlock {
 
     static let acceptedKinds: Set<DropKind> = [.file, .link, .text]
     static let expandedSize = CGSize(width: 500, height: 168)
-    static let peekSize = CGSize(width: 120, height: 32)
+    /// The count beside the notch. Only the width matters. Kept narrow: the
+    /// app menus can end about 45 pt from the notch, and the wing must not reach them.
+    static let wingSize = CGSize(width: 42, height: 32)
 
     let store: ShelfStore
     let settings: ShelfSettings
@@ -265,7 +267,7 @@ public final class ShelfBlock: NotchBlock {
         let expanded = NotchContent(size: Self.expandedSize) {
             ShelfView(store: store, ui: ui, actions: actions)
         }
-        let peek = NotchContent(size: Self.peekSize) {
+        let wing = NotchContent(size: Self.wingSize) {
             ShelfPeekView(store: store, ui: ui)
         }
         switch mode {
@@ -276,11 +278,11 @@ public final class ShelfBlock: NotchBlock {
         case .dragOut:
             return Presentation(priority: .interactive, expanded: expanded, opensAt: .expanded)
         case .receiving:
-            return Presentation(priority: .interactive, peek: peek, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
+            return Presentation(priority: .interactive, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
         case .ambient:
             // Takes drops too, so a promise that outlives the grace period is
             // still kept while the shelf owns the notch.
-            return Presentation(priority: .ambient, peek: peek, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
+            return Presentation(priority: .ambient, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
         }
     }
 }

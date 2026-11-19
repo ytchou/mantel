@@ -67,7 +67,7 @@ private func waitUntil(_ condition: () -> Bool) async {
     #expect(runtime.state.owner == "shelf")
     #expect(runtime.state.level == .peek)
     #expect(runtime.state.presentation?.priority == .ambient)
-    #expect(runtime.state.presentation?.peek != nil)
+    #expect(runtime.state.presentation?.wing != nil)
     #expect(runtime.state.presentation?.expanded != nil)
     #expect(runtime.state.presentation?.duration == nil)
     #expect(block.store.itemCount == 3)

@@ -72,6 +72,17 @@ struct NotchGeometry: Equatable {
                       width: width, height: height)
     }
 
+    /// The shape with a wing: the anchor, widened to its leading side by the
+    /// wing's width and no taller. The wing sits inside the menu bar, on the
+    /// side of the app menus; the other side holds the status items, which
+    /// start right at the notch. A pill is wide enough already and keeps its rect.
+    func wingShapeRect(wingWidth: CGFloat) -> CGRect {
+        guard isNotch else { return anchorRect }
+        let width = min(max(wingWidth, 0), NotchLimits.maxWingWidth)
+        return CGRect(x: anchorRect.minX - width, y: anchorRect.minY,
+                      width: anchorRect.width + width, height: anchorRect.height)
+    }
+
     /// (top, bottom) corner radii. Notch mode keeps the top square so the shape is
     /// flush with the screen edge; pill mode rounds all four corners.
     func radii(level: NotchLevel?) -> (top: CGFloat, bottom: CGFloat) {
@@ -128,11 +139,25 @@ extension NotchGeometry {
     /// Content shown for a state, if any.
     static func content(for state: NotchState) -> NotchContent? {
         guard case let .showing(_, level, presentation) = state else { return nil }
-        return level == .peek ? presentation.peek : presentation.expanded
+        if level == .peek { return presentation.wing == nil ? presentation.peek : nil }
+        return presentation.expanded
+    }
+
+    /// The wing shown for a state, if any: at the peek level, a wing wins over the peek strip.
+    static func wing(for state: NotchState) -> NotchContent? {
+        guard case let .showing(_, .peek, presentation) = state else { return nil }
+        return presentation.wing
     }
 
     func shapeRect(for state: NotchState) -> CGRect {
-        shapeRect(level: state.level, contentSize: Self.content(for: state)?.size ?? .zero)
+        if let wing = Self.wing(for: state) { return wingShapeRect(wingWidth: wing.size.width) }
+        return shapeRect(level: state.level, contentSize: Self.content(for: state)?.size ?? .zero)
+    }
+
+    /// The neck to hit-test a state's shape with. A wing shape is a plain
+    /// rect level with the notch, so all of it takes the pointer.
+    func neck(for state: NotchState) -> CGRect? {
+        Self.wing(for: state) == nil ? neck : nil
     }
 
     /// Geometry for the built-in (notched) screen, else the main screen as a pill.

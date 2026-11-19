@@ -42,7 +42,7 @@ struct Arbiter {
     /// has no content and was ignored.
     @discardableResult
     mutating func present(_ presentation: Presentation, for block: BlockID, at now: Instant) -> Bool {
-        guard presentation.peek != nil || presentation.expanded != nil else { return false }
+        guard presentation.peek != nil || presentation.wing != nil || presentation.expanded != nil else { return false }
         pause(at: now)
         entries.removeAll { $0.block == block }
         entries.append(Entry(block: block, presentation: presentation, order: nextOrder, remaining: presentation.duration))
@@ -80,7 +80,7 @@ struct Arbiter {
     private func level(of presentation: Presentation) -> NotchLevel {
         let hasExpanded = presentation.expanded != nil
         if hasExpanded && (presentation.opensAt == .expanded || isPointerInside) { return .expanded }
-        return presentation.peek != nil ? .peek : .expanded
+        return presentation.peek != nil || presentation.wing != nil ? .peek : .expanded
     }
 
     /// Stop the owner's countdown, keeping the time it has left.

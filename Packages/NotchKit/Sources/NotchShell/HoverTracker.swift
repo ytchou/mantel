@@ -9,14 +9,18 @@ import CoreGraphics
 struct HoverTracker {
     private(set) var isInside = false
     private var entryRect = CGRect.null
+    /// The neck that went with `entryRect`. A wing shape has none, and the
+    /// expanded shape that replaces it does; each is tested with its own.
+    private var entryNeck: CGRect?
 
     /// Returns true when `isInside` changed.
     mutating func update(pointer: CGPoint, shape: CGRect, neck: CGRect? = nil) -> Bool {
         let inside = NotchGeometry.hits(shape, pointer, neck: neck)
-            || (isInside && NotchGeometry.hits(entryRect, pointer, neck: neck))
+            || (isInside && NotchGeometry.hits(entryRect, pointer, neck: entryNeck))
         guard inside != isInside else { return false }
         isInside = inside
         entryRect = inside ? shape : .null
+        entryNeck = inside ? neck : nil
         return true
     }
 }

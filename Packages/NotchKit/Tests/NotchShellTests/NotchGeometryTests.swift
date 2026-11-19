@@ -121,3 +121,29 @@ func panelContainsTheLargestShapeWithMargin(geometry: NotchGeometry) {
     // No neck (a pill): the whole rect hits.
     #expect(NotchGeometry.hits(shape, CGPoint(x: 20, y: 90)))
 }
+
+@Test func wingShapeWidensTheNotchToItsLeadingSideOnly() {
+    let rect = notched.wingShapeRect(wingWidth: 50)
+    #expect(rect.maxX == notch.maxX)
+    #expect(rect.minX == notch.minX - 50)
+    #expect(rect.minY == notch.minY)
+    #expect(rect.height == notch.height)
+    // Clamped to the widest wing.
+    #expect(notched.wingShapeRect(wingWidth: 900).width == notch.width + NotchLimits.maxWingWidth)
+}
+
+@Test func hoverKeepsAWingEntryWhileTheExpandedShapeHasANeck() {
+    var tracker = HoverTracker()
+    let neck = CGRect(x: 100, y: 70, width: 100, height: 30)
+    let wingShape = CGRect(x: 50, y: 70, width: 150, height: 30)
+    let expanded = CGRect(x: 0, y: 0, width: 300, height: 100)
+    let inWing = CGPoint(x: 60, y: 85)
+    // The wing shape has no neck: the pointer on the wing is inside.
+    let entered = tracker.update(pointer: inWing, shape: wingShape, neck: nil)
+    #expect(entered)
+    // Hover expanded the shape, which is necked. The pointer has not moved
+    // and must stay inside, or the shape would flicker.
+    let changed = tracker.update(pointer: inWing, shape: expanded, neck: neck)
+    #expect(!changed)
+    #expect(tracker.isInside)
+}

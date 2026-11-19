@@ -49,8 +49,9 @@ struct NotchShapeView: View {
         // pointer, so the user can see the app is running.
         let growth = state.level == nil && layout.isHovering ? Self.idleHoverGrowth : 0
         let rect = CGRect(x: base.minX, y: base.minY, width: base.width, height: base.height + growth)
-        let radii = geometry.radii(level: state.level)
-        let shape = NotchOutline(neckWidth: geometry.neck?.width, neckHeight: geometry.headerHeight,
+        let radii = geometry.radii(level: NotchGeometry.wing(for: state) == nil ? state.level : nil)
+        let wing = NotchGeometry.wing(for: state)
+        let shape = NotchOutline(neckWidth: geometry.neck(for: state)?.width, neckHeight: geometry.headerHeight,
                                  topRadius: radii.top, bottomRadius: radii.bottom)
 
         shape
@@ -65,6 +66,16 @@ struct NotchShapeView: View {
                         .id(ContentKey(id: presentation.id, level: level))
                         .transition(.opacity)
                         .clipShape(shape)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let wing, let presentation = state.presentation {
+                    // Beside the notch on a notched screen; inside the pill otherwise.
+                    wing.makeView()
+                        .frame(width: geometry.isNotch ? rect.width - geometry.anchorRect.width : rect.width,
+                               height: geometry.headerHeight)
+                        .id(ContentKey(id: presentation.id, level: .peek))
+                        .transition(.opacity)
                 }
             }
             .frame(width: rect.width, height: rect.height)

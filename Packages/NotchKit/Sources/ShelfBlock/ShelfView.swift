@@ -278,13 +278,13 @@ struct TilePreview: View {
     }
 }
 
-/// The peek: a tray and the item count.
+/// Beside the notch: a tray and the item count.
 struct ShelfPeekView: View {
     let store: ShelfStore
     let ui: ShelfBlock.UIState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             Image(systemName: store.isEmpty ? "tray.and.arrow.down" : "tray.full.fill")
             if !store.isEmpty {
                 Text("\(store.itemCount)")
@@ -295,7 +295,7 @@ struct ShelfPeekView: View {
                     .controlSize(.mini)
             }
         }
-        .font(.system(size: 13, weight: .semibold))
+        .font(.system(size: 12, weight: .semibold))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Shelf, \(store.itemCount) items")
