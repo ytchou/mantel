@@ -281,3 +281,25 @@ private func makeDefaults() -> UserDefaults {
     #expect(block.store.isEmpty)
     #expect(runtime.state.owner == nil)
 }
+
+@MainActor
+@Test func atRestTheShelfTakesNoRoomUnlessTheCountIsTurnedOn() throws {
+    let runtime = NotchRuntime()
+    let block = ShelfBlock(directory: try makeTemporaryDirectory(), defaults: makeDefaults())
+    runtime.register(block)
+    dragAndDrop([.text("hello")], on: runtime)
+
+    // Holding an item: it owns the notch at the peek level, with a wing of no width.
+    #expect(runtime.state.owner == "shelf")
+    #expect(runtime.state.level == .peek)
+    #expect(runtime.state.presentation?.wing?.size.width == 0)
+    #expect(runtime.state.presentation?.peek == nil)
+
+    block.settings.showCount = true
+    #expect(runtime.state.presentation?.wing?.size.width == ShelfBlock.wingSize.width)
+
+    // Hovering opens the shelf either way.
+    block.settings.showCount = false
+    runtime.pointerHoverChanged(isInside: true)
+    #expect(runtime.state.level == .expanded)
+}

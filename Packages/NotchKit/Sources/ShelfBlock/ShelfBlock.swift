@@ -87,6 +87,7 @@ public final class ShelfBlock: NotchBlock {
         store = ShelfStore(directory: directory)
         settings = ShelfSettings(defaults: defaults)
         self.lateDropGrace = lateDropGrace
+        settings.onChange = { [weak self] in self?.presentAgain() }
     }
 
     // MARK: NotchBlock
@@ -255,6 +256,12 @@ public final class ShelfBlock: NotchBlock {
         }
     }
 
+    /// Rebuild the presentation for the current mode, after a setting changed.
+    private func presentAgain() {
+        guard let context, let presentation = presentation(for: mode) else { return }
+        context.present(presentation)
+    }
+
     private func presentation(for mode: Mode) -> Presentation? {
         let store = self.store
         let ui = self.ui
@@ -267,9 +274,11 @@ public final class ShelfBlock: NotchBlock {
         let expanded = NotchContent(size: Self.expandedSize) {
             ShelfView(store: store, ui: ui, actions: actions)
         }
-        let wing = NotchContent(size: Self.wingSize) {
-            ShelfPeekView(store: store, ui: ui)
-        }
+        // With the count off, a wing of no width: the shape stays the notch
+        // itself and takes no room, and hovering it still opens the shelf.
+        let wing = settings.showCount
+            ? NotchContent(size: Self.wingSize) { ShelfPeekView(store: store, ui: ui) }
+            : NotchContent(size: .zero) { EmptyView() }
         switch mode {
         case .none:
             return nil
