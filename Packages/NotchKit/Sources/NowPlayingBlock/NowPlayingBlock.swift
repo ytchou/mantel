@@ -21,7 +21,7 @@ public final class NowPlayingBlock: NotchBlock {
         trigger: "Changing the volume, or a new track starting"
     )
 
-    static let peekSize = CGSize(width: 340, height: 36)
+    static let peekSize = CGSize(width: 380, height: 52)
     static let duration: Duration = .seconds(3)
 
     struct Track: Equatable {
@@ -141,33 +141,33 @@ struct NowPlayingPeekView: View {
     let model: NowPlayingBlock.Model
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: NotchStyle.spacing) {
             artwork
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(model.track?.title ?? "")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(NotchStyle.title)
                 Text(subtitle)
-                    .font(.system(size: 10))
-                    .opacity(0.7)
+                    .font(NotchStyle.secondary)
+                    .opacity(NotchStyle.secondaryOpacity)
             }
             .lineLimit(1)
             .truncationMode(.tail)
             Spacer(minLength: 4)
             if let volume = model.volume {
                 Image(systemName: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .opacity(0.8)
-                    .frame(width: 16)
+                    .frame(width: 18)
                 Capsule()
                     .fill(.white.opacity(0.2))
-                    .frame(width: 60, height: 4)
+                    .frame(width: 64, height: 5)
                     .overlay(alignment: .leading) {
-                        Capsule().fill(.white).frame(width: 60 * (model.isMuted ? 0 : volume), height: 4)
+                        Capsule().fill(.white).frame(width: 64 * (model.isMuted ? 0 : volume), height: 5)
                     }
                     .accessibilityLabel(model.isMuted ? "Muted" : "Volume \(Int((volume * 100).rounded())) percent")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, NotchStyle.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
     }
@@ -179,17 +179,19 @@ struct NowPlayingPeekView: View {
     }
 
     @ViewBuilder private var artwork: some View {
+        let side = NotchStyle.leadingImageSize
+        let corner = RoundedRectangle(cornerRadius: NotchStyle.leadingImageRadius, style: .continuous)
         if let data = model.track?.artwork, let image = NSImage(data: data) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 24, height: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .frame(width: side, height: side)
+                .clipShape(corner)
         } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(.white.opacity(0.15))
-                .frame(width: 24, height: 24)
-                .overlay(Image(systemName: "music.note").font(.system(size: 11)).opacity(0.8))
+            corner
+                .fill(.white.opacity(0.12))
+                .frame(width: side, height: side)
+                .overlay(Image(systemName: "music.note").font(.system(size: 15)).opacity(0.8))
         }
     }
 }
