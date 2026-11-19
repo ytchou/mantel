@@ -44,7 +44,7 @@ public final class RenameBlock: NotchBlock {
         permissions: ["Access to the screenshot folder", "Apple Intelligence (optional)"]
     )
 
-    static let peekSize = CGSize(width: 340, height: 36)
+    static let peekSize = CGSize(width: 360, height: 52)
     /// Narrow, so it stays clear of the app menus. See `ShelfBlock.wingSize`.
     static let wingSize = CGSize(width: 42, height: 32)
     static let expandedSize = CGSize(width: 520, height: 260)

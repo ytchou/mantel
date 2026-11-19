@@ -23,9 +23,12 @@ final class NotchPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false // the shape draws its own shadow
-        level = .statusBar
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isFloatingPanel = true
+        // After `isFloatingPanel`, which resets the level to `.floating`.
+        // One above the status items (they are at `.statusBar`), so a shape
+        // that grows over the menu bar covers its items.
+        level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
         worksWhenModal = true

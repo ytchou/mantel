@@ -27,7 +27,9 @@ final class NotchHostingView: NSHostingView<NotchShapeView> {
     }
 }
 
-/// Draws `runtime.state`: the black shape, and the block's content below the notch.
+/// Draws `runtime.state`: the black shape, and the block's content below the
+/// notch. When a block shows something, the whole notch grows into one
+/// rounded rectangle from the top edge of the screen.
 struct NotchShapeView: View {
     let runtime: NotchRuntime
     let layout: ShellLayout
@@ -35,6 +37,8 @@ struct NotchShapeView: View {
 
     /// How far the idle shape grows downward while the pointer is on it.
     private static let idleHoverGrowth: CGFloat = 8
+    /// Width beside the camera the header icon needs.
+    private static let headerIconRoom: CGFloat = 40
 
     private struct ContentKey: Hashable {
         let id: UUID
@@ -51,11 +55,14 @@ struct NotchShapeView: View {
         let rect = CGRect(x: base.minX, y: base.minY, width: base.width, height: base.height + growth)
         let radii = geometry.radii(level: NotchGeometry.wing(for: state) == nil ? state.level : nil)
         let wing = NotchGeometry.wing(for: state)
-        let shape = NotchOutline(neckWidth: geometry.neck(for: state)?.width, neckHeight: geometry.headerHeight,
-                                 topRadius: radii.top, bottomRadius: radii.bottom)
+        let shape = UnevenRoundedRectangle(topLeadingRadius: radii.top, bottomLeadingRadius: radii.bottom,
+                                           bottomTrailingRadius: radii.bottom, topTrailingRadius: radii.top,
+                                           style: .continuous)
+        let ear = geometry.earRadius(level: wing == nil ? state.level : nil)
 
         shape
             .fill(Color.black)
+            .background(NotchEars(radius: ear).fill(Color.black))
             .overlay(alignment: .top) {
                 if let content = NotchGeometry.content(for: state),
                    let presentation = state.presentation, let level = state.level {
@@ -66,6 +73,21 @@ struct NotchShapeView: View {
                         .id(ContentKey(id: presentation.id, level: level))
                         .transition(.opacity)
                         .clipShape(shape)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                // Expanded: the owner's icon in the header row, beside the
+                // camera, where there is room for it.
+                if state.level == .expanded, wing == nil, geometry.isNotch,
+                   (rect.width - geometry.anchorRect.width) / 2 >= Self.headerIconRoom,
+                   let symbol = runtime.blocks.first(where: { $0.id == state.owner })?.info.symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .opacity(0.8)
+                        .frame(height: geometry.headerHeight)
+                        .padding(.leading, NotchStyle.padding)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -95,31 +117,33 @@ struct NotchShapeView: View {
     }
 }
 
-/// The black shape. On a notched screen it is only as wide as the notch while
-/// level with it, and widens below the menu bar, so it never covers menu bar
-/// items. Without a neck (a pill, or a shape no wider than the notch) it is a
-/// rounded rectangle.
-struct NotchOutline: Shape {
-    var neckWidth: CGFloat?
-    var neckHeight: CGFloat
-    var topRadius: CGFloat
-    var bottomRadius: CGFloat
+/// Two concave curves outside the shape's top corners, from the screen edge
+/// down into the shape's sides, so the shape grows out of the bezel instead
+/// of standing on it. Drawn behind the shape; they take no clicks.
+struct NotchEars: Shape {
+    var radius: CGFloat
 
-    /// Radius of the body's top corners, where it widens under the menu bar.
-    private static let shoulderRadius: CGFloat = 10
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
 
     func path(in rect: CGRect) -> Path {
-        guard let neckWidth, neckWidth < rect.width - 1, neckHeight < rect.height else {
-            return UnevenRoundedRectangle(topLeadingRadius: topRadius, bottomLeadingRadius: bottomRadius,
-                                          bottomTrailingRadius: bottomRadius, topTrailingRadius: topRadius,
-                                          style: .continuous).path(in: rect)
-        }
-        var path = Path(CGRect(x: rect.midX - neckWidth / 2, y: rect.minY, width: neckWidth, height: neckHeight + 1))
-        let body = CGRect(x: rect.minX, y: rect.minY + neckHeight, width: rect.width, height: rect.height - neckHeight)
-        let shoulder = min(Self.shoulderRadius, body.height / 2)
-        path.addPath(UnevenRoundedRectangle(topLeadingRadius: shoulder, bottomLeadingRadius: min(bottomRadius, body.height / 2),
-                                            bottomTrailingRadius: min(bottomRadius, body.height / 2), topTrailingRadius: shoulder,
-                                            style: .continuous).path(in: body))
+        var path = Path()
+        guard radius > 0 else { return path }
+        let r = min(radius, rect.height / 2)
+        // Left: from the screen edge beside the corner, curving into the side.
+        path.move(to: CGPoint(x: rect.minX - r, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        path.addQuadCurve(to: CGPoint(x: rect.minX - r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        path.closeSubpath()
+        // Right, mirrored.
+        path.move(to: CGPoint(x: rect.maxX + r, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + r))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX + r, y: rect.minY), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
         return path
     }
 }
