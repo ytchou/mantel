@@ -117,15 +117,16 @@ private func makeController(_ screens: FakeScreens) -> NotchShellController {
 }
 
 @MainActor
-@Test func pollingIsFastOnlyOnOrNearThePanel() {
-    let panel = CGRect(x: 400, y: 600, width: 580, height: 380)
+@Test func pollingIsFastOnlyOnOrNearTheShape() {
+    let shape = CGRect(x: 664, y: 950, width: 184, height: 32)
     let fast = NotchShellController.fastInterval
     let slow = NotchShellController.slowInterval
-    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 700, y: 900), panelFrame: panel, isInside: false) == fast)
-    // Just outside the panel, within the margin.
-    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 300, y: 500), panelFrame: panel, isInside: false) == fast)
-    // Far away.
-    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), panelFrame: panel, isInside: false) == slow)
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 700, y: 960), shape: shape, isInside: false) == fast)
+    // Just outside the shape, within the margin.
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 620, y: 900), shape: shape, isInside: false) == fast)
+    // Elsewhere, including under the large panel the shape lives in.
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 700, y: 760), shape: shape, isInside: false) == slow)
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), shape: shape, isInside: false) == slow)
     // Held inside by hysteresis, wherever the pointer is.
-    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), panelFrame: panel, isInside: true) == fast)
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), shape: shape, isInside: true) == fast)
 }

@@ -126,16 +126,18 @@ public final class NotchShellController {
 
     static let fastInterval: TimeInterval = 1.0 / 60.0
     static let slowInterval: TimeInterval = 1.0 / 10.0
-    /// How close to the panel the pointer must be for fast polling.
-    static let nearMargin: CGFloat = 120
+    /// How close to the shape the pointer must be for fast polling.
+    static let nearMargin: CGFloat = 80
 
-    /// How often to look at the pointer. Fast while it is on the shape or
-    /// near the panel, so hover and drops feel immediate; slow while it is
-    /// elsewhere, so an idle app wakes the CPU 10 times a second, not 60.
+    /// How often to look at the pointer. Fast while it is on or near the
+    /// shape on screen now, so hover and drops feel immediate; slow while it
+    /// is elsewhere, so an idle app wakes the CPU 10 times a second, not 60.
+    /// Measured from the shape, not the whole panel: the panel covers the
+    /// top centre of the screen, where the pointer spends much of its time.
     /// The worst case is one slow interval of delay before fast polling
-    /// starts, with the pointer still `nearMargin` away from the panel.
-    static func pollInterval(pointer: CGPoint, panelFrame: CGRect, isInside: Bool) -> TimeInterval {
-        let near = panelFrame.insetBy(dx: -nearMargin, dy: -nearMargin)
+    /// starts, with the pointer still up to `nearMargin` away from the shape.
+    static func pollInterval(pointer: CGPoint, shape: CGRect, isInside: Bool) -> TimeInterval {
+        let near = shape.insetBy(dx: -nearMargin, dy: -nearMargin)
         return isInside || near.contains(pointer) ? fastInterval : slowInterval
     }
 
@@ -177,6 +179,8 @@ public final class NotchShellController {
             layout.isHovering = hover.isInside
             runtime.pointerHoverChanged(isInside: hover.isInside)
         }
-        setPollInterval(Self.pollInterval(pointer: pointer, panelFrame: panel.frame, isInside: hover.isInside))
+        // The shape may have changed with the hover; use the one on screen now.
+        let shown = layout.geometry.shapeRect(for: runtime.state)
+        setPollInterval(Self.pollInterval(pointer: pointer, shape: shown, isInside: hover.isInside))
     }
 }
