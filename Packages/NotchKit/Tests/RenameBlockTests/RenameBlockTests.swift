@@ -50,7 +50,20 @@ private func capture(_ url: URL, on runtime: NotchRuntime) {
     #expect(runtime.state.presentation?.duration == nil)
     #expect(runtime.state.presentation?.priority == .standard)
     #expect(block.model.phase == .naming)
+    // A full peek that says which screenshot, not a mark beside the notch.
+    #expect(runtime.state.presentation?.wing == nil)
+    #expect(runtime.state.presentation?.peek != nil)
+    #expect(block.model.currentName == "Screenshot 1.png")
     await waitUntil { block.current == nil }
+}
+
+@Test func namesReadAsWordsInTheNotchAndKeepTheirFileNames() {
+    #expect(RenameDisplay.words("shelf-rename-panel-ears.png") == "Shelf Rename Panel Ears")
+    #expect(RenameDisplay.words("2026-11-19-login_page.png") == "2026 11 19 Login Page")
+    // One word, or a name macOS gave: shown as it is, without the extension.
+    #expect(RenameDisplay.words("invoice.pdf") == "invoice")
+    #expect(RenameDisplay.words("Screenshot 2026-11-19 at 6.45.56 PM.png") == "Screenshot 2026-11-19 at 6.45.56 PM")
+    #expect(RenameDisplay.original("Screenshot 2026-11-19 at 6.45.56 PM.png") == "Screenshot 2026-11-19 at 6.45.56 PM")
 }
 
 @MainActor
