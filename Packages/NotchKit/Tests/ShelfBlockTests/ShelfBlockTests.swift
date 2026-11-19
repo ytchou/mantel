@@ -101,6 +101,9 @@ private func waitUntil(_ condition: () -> Bool) async {
     runtime.send(.drop([.text("late")]))
     #expect(block.store.itemCount == 1)
     #expect(!block.ui.isReceiving)
+    // The pointer is still on the shelf, so it keeps the notch; at rest it is ambient.
+    #expect(runtime.state.presentation?.priority == .interactive)
+    runtime.pointerHoverChanged(isInside: false)
     #expect(runtime.state.presentation?.priority == .ambient)
 }
 
