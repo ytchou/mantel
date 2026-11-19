@@ -57,10 +57,6 @@ struct RenamePipeline: Sendable {
         let clock = ContinuousClock()
         guard FileManager.default.fileExists(atPath: job.url.path) else { return .dropped }
 
-        // Warm the model up while the text is read: loading it is a large
-        // part of the time to a name.
-        if namer.status.isAvailable { namer.prewarm(language: options.language) }
-
         let readStart = clock.now
         let lines: [RecognizedLine]
         do {

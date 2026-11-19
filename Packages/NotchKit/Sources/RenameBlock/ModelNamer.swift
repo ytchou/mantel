@@ -1,6 +1,5 @@
 import Foundation
 import FoundationModels
-import Synchronization
 
 /// Whether the on-device model can name screenshots, and if not, why.
 enum ModelStatus: Sendable, Equatable {
@@ -46,14 +45,8 @@ struct NamingRequest: Sendable, Equatable {
 /// Suggests descriptive words for a screenshot.
 protocol ScreenshotNaming: Sendable {
     var status: ModelStatus { get }
-    /// Get ready to name a screenshot soon, while its text is still read.
-    func prewarm(language: NameLanguage)
     /// Words for the name, before cleaning. May be slow; honours cancellation.
     func suggestName(_ request: NamingRequest) async throws -> String
-}
-
-extension ScreenshotNaming {
-    func prewarm(language: NameLanguage) {}
 }
 
 extension NameLength {
@@ -73,23 +66,20 @@ struct ModelNamerError: Error {
 
 /// Names a screenshot with Apple's on-device model (FoundationModels).
 /// The API use follows the naming spike (`spikes/screenshot-naming/Sources/NameSpike/Namer.swift`).
+///
+/// Where the time goes (measured, `spikes/screenshot-naming/SPEED.md`):
+/// writing the name takes about 50 ms and reading the prompt about 0.5 s
+/// while the model is loaded. macOS unloads the model within some 10 s of
+/// its last use, and loading it again takes 3 to 19 s, in steps of about 3 s.
+/// Prompt length and response length did not change that reliably. Asking
+/// for the model ahead with `prewarm` made names slower (text reading
+/// stalled behind it), so the session is made when it is used.
 struct ModelNamer: ScreenshotNaming {
-    /// Characters of recognised text sent to the model. Fewer characters is
-    /// the largest saving in time to a name, and the biggest text is sent
-    /// first anyway. CJK text can cost a token or more per character.
+    /// Characters of recognised text sent to the model. The biggest text is
+    /// sent first anyway. CJK text can cost a token or more per character.
     static let textLimit = 1000
     /// Used once if the model reports that the context window was exceeded.
     static let retryTextLimit = 500
-
-    /// A session made and warmed up ahead, used by the next name. A session
-    /// keeps its conversation, so each one names one screenshot only.
-    private let warm = WarmSessions()
-
-    func prewarm(language: NameLanguage) {
-        let session = LanguageModelSession(instructions: Self.instructions(for: language))
-        session.prewarm()
-        warm.put(session, for: language)
-    }
 
     var status: ModelStatus {
         switch SystemLanguageModel.default.availability {
@@ -116,8 +106,8 @@ struct ModelNamer: ScreenshotNaming {
 
     private func generate(_ request: NamingRequest, limit: Int) async throws -> String {
         let text = Self.truncated(request.lines, limit: limit)
-        let session = warm.take(for: request.language)
-            ?? LanguageModelSession(instructions: Self.instructions(for: request.language))
+        // A session keeps its conversation, so each one names one screenshot.
+        let session = LanguageModelSession(instructions: Self.instructions(for: request.language))
         // A plain short answer, not a guided list of a fixed length: measured
         // on real screenshots, a fixed count made the model pad the name with
         // menu words and repeats ("polling polling polling"), and was no faster.
@@ -206,18 +196,5 @@ struct ModelNamer: ScreenshotNaming {
             used += cost
         }
         return out.joined(separator: "\n")
-    }
-}
-
-/// Warmed-up sessions, one per name language, each taken once.
-private final class WarmSessions: Sendable {
-    private let sessions = Mutex<[NameLanguage: LanguageModelSession]>([:])
-
-    func put(_ session: LanguageModelSession, for language: NameLanguage) {
-        sessions.withLock { $0[language] = session }
-    }
-
-    func take(for language: NameLanguage) -> LanguageModelSession? {
-        sessions.withLock { $0.removeValue(forKey: language) }
     }
 }
