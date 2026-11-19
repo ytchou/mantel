@@ -17,6 +17,11 @@ import SwiftUI
 public final class DemoBlock: NotchBlock {
     public let id: BlockID = "demo"
     public let title = "Demo"
+    public let info = BlockInfo(
+        summary: "Counts clicks and names what you drop. For trying the notch, and a template for new blocks.",
+        symbol: "hammer",
+        trigger: "Always shown"
+    )
 
     /// What the view shows. The view observes it, so a change needs no new
     /// `present` call.

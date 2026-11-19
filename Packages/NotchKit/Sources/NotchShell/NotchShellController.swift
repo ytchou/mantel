@@ -14,6 +14,9 @@ public final class NotchShellController {
 
     private let forcePill: Bool
 
+    /// Builds the menu shown on a right-click on the notch. Set before `start()`.
+    public var contextMenu: (@MainActor () -> NSMenu?)?
+
     /// `forcePill` draws the floating pill even on a screen with a notch.
     public init(runtime: NotchRuntime, forcePill: Bool = false) {
         self.runtime = runtime
@@ -37,6 +40,7 @@ public final class NotchShellController {
         let host = NotchHostingView(rootView: NotchShapeView(runtime: runtime, layout: layout))
         // SwiftUI must not resize the window from the content's size.
         host.sizingOptions = []
+        host.menuProvider = { [weak self] in self?.contextMenu?() }
         host.frame = dropTarget.bounds
         host.autoresizingMask = [.width, .height]
         dropTarget.addSubview(host)
@@ -85,12 +89,14 @@ public final class NotchShellController {
         // Only the shape takes mouse and drag events; the rest passes through.
         // NSEvent.mouseLocation keeps updating while a drag holds the button, so
         // this also lets the drop target receive drags over the shape.
-        let overShape = NotchGeometry.hits(shape, pointer)
+        let neck = layout.geometry.neck
+        let overShape = NotchGeometry.hits(shape, pointer, neck: neck)
         if panel.ignoresMouseEvents == overShape {
             panel.ignoresMouseEvents = !overShape
         }
 
-        if hover.update(pointer: pointer, shape: shape) {
+        if hover.update(pointer: pointer, shape: shape, neck: neck) {
+            layout.isHovering = hover.isInside
             runtime.pointerHoverChanged(isInside: hover.isInside)
         }
     }

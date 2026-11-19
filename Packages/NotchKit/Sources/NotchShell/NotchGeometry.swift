@@ -103,11 +103,22 @@ struct NotchGeometry: Equatable {
 
     /// Inclusive containment. The top edge gets one extra point so a pointer
     /// pinned at the very top of the screen still hits the notch.
-    static func hits(_ rect: CGRect, _ point: CGPoint) -> Bool {
-        !rect.isNull
-            && point.x >= rect.minX && point.x <= rect.maxX
-            && point.y >= rect.minY && point.y <= rect.maxY + 1
+    ///
+    /// `neck` is the hardware notch. Level with it, the shape is only as wide
+    /// as the notch, so points beside it (the menu bar) do not hit.
+    static func hits(_ rect: CGRect, _ point: CGPoint, neck: CGRect? = nil) -> Bool {
+        guard !rect.isNull,
+              point.x >= rect.minX, point.x <= rect.maxX,
+              point.y >= rect.minY, point.y <= rect.maxY + 1 else { return false }
+        if let neck, point.y >= neck.minY {
+            return point.x >= neck.minX && point.x <= neck.maxX
+        }
+        return true
     }
+
+    /// The hardware notch, when there is one. A pill has no neck: it already
+    /// sits below the menu bar.
+    var neck: CGRect? { isNotch ? anchorRect : nil }
 }
 
 // MARK: - Runtime state and screens

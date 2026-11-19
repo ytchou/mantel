@@ -11,9 +11,9 @@ struct HoverTracker {
     private var entryRect = CGRect.null
 
     /// Returns true when `isInside` changed.
-    mutating func update(pointer: CGPoint, shape: CGRect) -> Bool {
-        let inside = NotchGeometry.hits(shape, pointer)
-            || (isInside && NotchGeometry.hits(entryRect, pointer))
+    mutating func update(pointer: CGPoint, shape: CGRect, neck: CGRect? = nil) -> Bool {
+        let inside = NotchGeometry.hits(shape, pointer, neck: neck)
+            || (isInside && NotchGeometry.hits(entryRect, pointer, neck: neck))
         guard inside != isInside else { return false }
         isInside = inside
         entryRect = inside ? shape : .null
