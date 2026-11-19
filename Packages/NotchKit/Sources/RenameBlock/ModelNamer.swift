@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import Synchronization
 
 /// Whether the on-device model can name screenshots, and if not, why.
 enum ModelStatus: Sendable, Equatable {
@@ -30,8 +31,13 @@ enum ModelStatus: Sendable, Equatable {
 
 /// What the namer gets for one screenshot.
 struct NamingRequest: Sendable, Equatable {
+    /// Lines of the biggest text sent first.
+    static let prominentCount = 6
+
     /// Recognised lines, top to bottom.
     var lines: [String]
+    /// The biggest text on screen, most prominent first: titles and headings.
+    var prominent: [String] = []
     var appName: String?
     var length: NameLength
     var language: NameLanguage
@@ -40,32 +46,25 @@ struct NamingRequest: Sendable, Equatable {
 /// Suggests descriptive words for a screenshot.
 protocol ScreenshotNaming: Sendable {
     var status: ModelStatus { get }
+    /// Get ready to name a screenshot soon, while its text is still read.
+    func prewarm(language: NameLanguage)
     /// Words for the name, before cleaning. May be slow; honours cancellation.
     func suggestName(_ request: NamingRequest) async throws -> String
 }
 
-// Guided generation: one @Generable type per length, so the word count is a
-// schema constraint. The model still packs several words into one element
-// (`spikes/FINDINGS.md`, table C), so `NameCleaner` cuts the result again.
-
-protocol NameWords { var words: [String] { get } }
-
-@Generable
-struct ShortName: NameWords {
-    @Guide(description: "2 to 4 lowercase words that describe what the screenshot shows, most specific first. No dates, no file extension.", .count(2...4))
-    var words: [String]
+extension ScreenshotNaming {
+    func prewarm(language: NameLanguage) {}
 }
 
-@Generable
-struct StandardName: NameWords {
-    @Guide(description: "4 to 6 lowercase words that describe what the screenshot shows, most specific first. No dates, no file extension.", .count(4...6))
-    var words: [String]
-}
-
-@Generable
-struct LongName: NameWords {
-    @Guide(description: "6 to 9 lowercase words that describe what the screenshot shows, most specific first. No dates, no file extension.", .count(6...9))
-    var words: [String]
+extension NameLength {
+    /// Words the model is asked for, and the most kept.
+    var wordRange: ClosedRange<Int> {
+        switch self {
+        case .short: 2...4
+        case .standard: 3...6
+        case .long: 5...9
+        }
+    }
 }
 
 struct ModelNamerError: Error {
@@ -75,12 +74,22 @@ struct ModelNamerError: Error {
 /// Names a screenshot with Apple's on-device model (FoundationModels).
 /// The API use follows the naming spike (`spikes/screenshot-naming/Sources/NameSpike/Namer.swift`).
 struct ModelNamer: ScreenshotNaming {
-    /// Characters of recognised text sent to the model. The SDK does not expose
-    /// the context size (Apple documents 4096 tokens, not verified); CJK text can
-    /// cost a token or more per character, so the text is capped well below.
-    static let textLimit = 3000
+    /// Characters of recognised text sent to the model. Fewer characters is
+    /// the largest saving in time to a name, and the biggest text is sent
+    /// first anyway. CJK text can cost a token or more per character.
+    static let textLimit = 1000
     /// Used once if the model reports that the context window was exceeded.
-    static let retryTextLimit = 1000
+    static let retryTextLimit = 500
+
+    /// A session made and warmed up ahead, used by the next name. A session
+    /// keeps its conversation, so each one names one screenshot only.
+    private let warm = WarmSessions()
+
+    func prewarm(language: NameLanguage) {
+        let session = LanguageModelSession(instructions: Self.instructions(for: language))
+        session.prewarm()
+        warm.put(session, for: language)
+    }
 
     var status: ModelStatus {
         switch SystemLanguageModel.default.availability {
@@ -107,29 +116,40 @@ struct ModelNamer: ScreenshotNaming {
 
     private func generate(_ request: NamingRequest, limit: Int) async throws -> String {
         let text = Self.truncated(request.lines, limit: limit)
-        let words: [String]
-        switch request.length {
-        case .short: words = try await run(ShortName.self, text: text, request: request)
-        case .standard: words = try await run(StandardName.self, text: text, request: request)
-        case .long: words = try await run(LongName.self, text: text, request: request)
+        let session = warm.take(for: request.language)
+            ?? LanguageModelSession(instructions: Self.instructions(for: request.language))
+        // A plain short answer, not a guided list of a fixed length: measured
+        // on real screenshots, a fixed count made the model pad the name with
+        // menu words and repeats ("polling polling polling"), and was no faster.
+        let stream = session.streamResponse(
+            to: Self.prompt(text: text, prominent: request.prominent, appName: request.appName, length: request.length),
+            options: GenerationOptions(sampling: .greedy, maximumResponseTokens: Self.maxResponseTokens)
+        )
+        var last = ""
+        for try await snapshot in stream {
+            try Task.checkCancellation()
+            last = snapshot.content
         }
+        let words = Self.words(in: last, max: request.length.wordRange.upperBound)
+        guard !words.isEmpty else { throw ModelNamerError(reason: "no output") }
         return words.joined(separator: " ")
     }
 
-    private func run<T: Generable & NameWords>(_ type: T.Type, text: String, request: NamingRequest) async throws -> [String] {
-        let session = LanguageModelSession(instructions: Self.instructions(for: request.language))
-        let stream = session.streamResponse(
-            to: Self.prompt(text: text, appName: request.appName),
-            generating: T.self,
-            options: GenerationOptions(sampling: .greedy)
-        )
-        var last: GeneratedContent?
-        for try await snapshot in stream {
-            try Task.checkCancellation()
-            last = snapshot.rawContent
-        }
-        guard let content = last else { throw ModelNamerError(reason: "no output") }
-        return try T(content).words
+    /// Enough for nine words; the model stops well before.
+    static let maxResponseTokens = 32
+
+    /// The name in the model's answer: its first line, lowercased, without
+    /// quotes or repeated words, at most `max` words.
+    static func words(in answer: String, max: Int) -> [String] {
+        let firstLine = answer.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let trimmed = firstLine.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*.:- ").union(.whitespaces))
+        var seen = Set<String>()
+        return trimmed.lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .filter { seen.insert($0).inserted }
+            .prefix(max)
+            .map { $0 }
     }
 
     static func instructions(for language: NameLanguage) -> String {
@@ -139,24 +159,34 @@ struct ModelNamer: ScreenshotNaming {
         case .traditionalChinese: "Write the words in Traditional Chinese (繁體中文), even when the screenshot text is in another language."
         }
         return """
-        You name screenshot files. You get the text that OCR read from one screenshot. \
-        Reply with words that describe what the screenshot shows (the app, document, error or topic), \
-        not a copy of the text. Use lowercase. Never include dates, times, file extensions or the word "screenshot". \
+        You name screenshot files. You get the text read from one screenshot.
+        Name the subject: what the screenshot is about, such as a document, a page, an error, \
+        a conversation, a chart or a product. Do not name the app around it, and do not copy the text.
+        Put the subject first, then its context, most specific first.
+        Ignore menus, tab titles, toolbar and button labels, timestamps, and browser or app chrome.
+        Never include dates, times, file extensions or the word "screenshot".
+        Examples of good names: "payment failed stripe checkout", "onboarding step two figma", \
+        "invoice overdue acme", "flight confirmation sfo tokyo", "pull request review topnotch".
         \(languageRule)
         """
     }
 
-    static func prompt(text: String, appName: String?) -> String {
+    static func prompt(text: String, prominent: [String], appName: String?, length: NameLength = .standard) -> String {
         var prompt = ""
         if let appName, !appName.isEmpty {
             prompt += "The screenshot was taken while \(appName) was the frontmost app.\n"
         }
+        if !prominent.isEmpty {
+            prompt += "The biggest text on screen, biggest first (titles and headings):\n"
+            prompt += prominent.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        }
         prompt += """
-        OCR text from the screenshot (top to bottom, may be truncated):
+        All text, top to bottom (may be cut short):
         \"\"\"
         \(text)
         \"\"\"
-        Give a short descriptive name for the file.
+        Name the file in \(length.wordRange.lowerBound) to \(length.wordRange.upperBound) words. \
+        Reply with the name only, on one line, without punctuation.
         """
         return prompt
     }
@@ -176,5 +206,18 @@ struct ModelNamer: ScreenshotNaming {
             used += cost
         }
         return out.joined(separator: "\n")
+    }
+}
+
+/// Warmed-up sessions, one per name language, each taken once.
+private final class WarmSessions: Sendable {
+    private let sessions = Mutex<[NameLanguage: LanguageModelSession]>([:])
+
+    func put(_ session: LanguageModelSession, for language: NameLanguage) {
+        sessions.withLock { $0[language] = session }
+    }
+
+    func take(for language: NameLanguage) -> LanguageModelSession? {
+        sessions.withLock { $0.removeValue(forKey: language) }
     }
 }
