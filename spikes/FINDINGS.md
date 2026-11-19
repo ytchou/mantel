@@ -159,3 +159,102 @@ Nothing blocks phase 2. Two lower-value items remain:
 1. Steady-state model timings on an idle Mac, and whether `prewarm()` helps.
 2. Promised files from Safari and Photos, and the folder permission prompt
    for the signed app.
+
+---
+
+# Phase 5 spike findings: how an outside block gets into the app
+
+Run on 2026-11-19: macOS 26.5.1, Xcode 26.3 (Swift 6.2.4), M1 Pro, built-in
+display. Two spikes, each a standalone folder here. Full tables, exact error
+text and run commands are in each `NOTES.md`; this section is the summary and
+the recommendation for the plugin format (plan task pd-3).
+
+Status words as above: **Measured** = observed in a run. **Not measured** = the
+reason is given.
+
+Run twice. Each spike was run once when it was written. On 20 Nov
+`runtime-load/run.sh` was run again and every row of table A came out the same
+(the two Gatekeeper cases are off by default and were not repeated). For
+`separate-process`, the round trip was run again (0.069 ms median, 0.085 ms
+p95, on battery); the view, crash and hang rows were not, because the lid was
+closed and they need the display.
+
+## A. Load a block at runtime (`runtime-load/`)
+
+| Task | Status | Finding |
+|---|---|---|
+| pd-a1 A block built outside the app is loaded from a folder at launch | Measured | Yes. A hardened, signed host lists `*.topblock` bundles, reads each `Info.plist` before any block code runs, `dlopen`s the code and calls one C entry symbol. `dlopen` 0.4 to 0.5 ms warm; 215 to 429 ms the first time macOS sees a new binary. The real `NotchCore` built as a dynamic library, and the real, unchanged `DemoBlock` built against only its interface file, ran through the real `NotchRuntime` (hover, 2 clicks, a drop). |
+| pd-a2 Signing under the hardened runtime | Measured | With library validation on (today's setting), only a block signed by the app's own team loads. Unsigned: `Trying to load an unsigned library`. Ad-hoc or another team: `mapping process and mapped file (non-platform) have different Team IDs`. With the `com.apple.security.cs.disable-library-validation` entitlement, ad-hoc blocks load; unsigned ones never do. A quarantined (downloaded) block is refused by Gatekeeper with a dialog in both settings. |
+| pd-a2 A block built against one contract version, loaded in the next | Measured | Without library evolution: adding a protocol requirement or an enum case crashes (SIGSEGV), and reordering fields gives silently wrong values. With library evolution: all additions work, and a removed method is refused at load with `Symbol not found`. A block built by Swift 6.3.3 loaded in a 6.2.4 host only with library evolution. |
+| pd-a3 What a bad block could do | Measured | Everything the app can. A block signed by the app's own team ran code during `dlopen` before any check, read a file the host could read, replaced a host method, froze the host's main thread for 3 s, and killed the host with `fatalError`. |
+
+Not measured: a notarized block (no Developer ID certificate); another-team
+and quarantined blocks with library validation off (macOS had already removed
+the test bundles); permissions inherited by a block inside the real app bundle.
+
+What it would take to ship:
+
+1. `NotchCore` becomes one dynamic framework built with library evolution. The
+   app, the shell and every built-in block link that one copy.
+2. Every public enum is either `@frozen` or every block gets `@unknown
+   default`. Measured: today's `DemoBlock` does not compile in Swift 6 mode
+   against `NotchCore` built that way.
+3. The interface file is public API: nothing removed or renamed.
+4. A signing choice: own-team blocks only, or library validation off.
+
+## B. A block in its own process (`separate-process/`)
+
+All latency numbers come from events injected inside the spike's own
+processes, not the physical pointer. The hand check is in `NOTES.md`.
+
+| Task | Status | Finding |
+|---|---|---|
+| pd-b1 A block in its own process gets events from the app | Measured | Yes, over a Unix socket pair given to the block at start. Round trip 0.037 ms median, 0.069 ms p95 (n=2000). Start to first reply 73 ms median. |
+| pd-b2 Its view is shown inside the notch | Measured | Three ways tried; see the table below. Sending the view as data costs about 0.4 ms over in-process. |
+| pd-b3 A crashing block does not take the app down | Measured | `kill -9` noticed in 1.9 to 2.8 ms, `fatalError` in 0.9 to 1.6 ms; the host kept running and restarted the block in 71 to 172 ms. A hung block was detected in 251 ms by a 50 ms heartbeat, and the host stayed responsive. |
+
+Time from an input arriving to the frame with the change being sent to the
+screen, ms, median / p95, n=200 each:
+
+| How the view gets into the notch | Hover | Click | Drag-over | What it costs |
+|---|---|---|---|---|
+| In-process (baseline) | 1.55 / 2.32 | 1.39 / 2.18 | 1.29 / 2.08 | |
+| 1. Block sends its view as data, host draws it | 1.94 / 2.93 | 1.99 / 3.15 | 1.77 / 2.59 | A fixed set of elements (text, symbol, image, button, stacks). No arbitrary SwiftUI, custom animation, gestures or drag-out unless the host adds it. |
+| 2. Block owns a window placed over the notch | 1.67 / 2.55 | 1.32 / 2.26 | 1.25 / 2.02 | Any UI, but the host cannot clip it, animate it with the shape, or remove it when the block hangs. Measured: a hung block's window stays on screen in front of the notch. |
+| 3. Remote layer (private API) | 5.19 / 7.12 | 3.68 / 6.75 | 3.47 / 7.23 | Private API, and SwiftUI arrives only as still bitmaps. A live SwiftUI view did not show (two attempts). |
+
+The extra process: 6.5 MB footprint and about 0 % CPU idle for way 1.
+
+Not measured: the feel with the real pointer; a real file drag between
+processes; Spaces and full-screen behaviour of way 2; ExtensionKit (needs an
+Xcode-built app extension, which must be sandboxed); Gatekeeper on a
+downloaded block executable; a check of the block's signature by the host
+(macOS does not do it: a hardened host started an ad-hoc-signed block).
+
+Side finding: `isFloatingPanel = true` resets an `NSPanel`'s level to 3. The
+phase 1 `notch-window` spike sets the level first, so its "level 25" row above
+is doubtful. The app sets the level afterwards since PR #7.
+
+## pd-3: the plugin format. A recommendation; the owner decides
+
+| Choice | What you get | What it costs |
+|---|---|---|
+| **A. Load at runtime** (a bundle in the app's process) | Blocks keep the full contract and any SwiftUI. No extra process, no latency. | `NotchCore` rebuilt as a dynamic framework with library evolution, which touches the app, the shell and all four blocks. A block has all of the app's access. One crash or hang takes the app down, so plan task pi-6 ("a block that crashes or hangs is turned off, and the app keeps running") cannot be met. Blocks from other people need library validation turned off, and downloaded ones still hit Gatekeeper. |
+| **B. Separate process, view sent as data** | A crash or hang cannot touch the app (measured). The app decides everything that is drawn. No change to how the app or the built-in blocks are built. | A wire protocol to design and version. A block's UI is limited to the elements the host knows; the shelf (drag out, live thumbnails) does not fit without host work. Each running block adds about 6.5 MB. The block process still has the user's file access unless it is sandboxed (not measured), and the host must check its signature itself. |
+| **C. Both, by trust** (own-team blocks in-process, everyone else out of process) | Full UI for trusted blocks, isolation for the rest. | Both lists of costs, two formats to build, document and keep working. |
+
+**Recommended: B, as the only install format for now.**
+
+- It is the only choice that meets pi-6, and it leaves the working app alone.
+- The now-playing block already fits the element set (image, two lines of
+  text), so it can be the block that proves the format. That means changing
+  pi-7 from "move the shelf or the renamer out" to "move the now-playing
+  block out". The shelf and the renamer stay compiled in.
+- Take A later, and only when a block someone wants needs UI that cannot be
+  described as data. The measurements here say what A will cost then.
+
+What would make this recommendation wrong: if the blocks you expect people to
+write look like the shelf (custom views, dragging) and not like now-playing
+(a line of status and a button). Then B is too small and C is the honest
+answer. The hand check of real-pointer feel in `separate-process/NOTES.md`
+should also be done before building on B.
