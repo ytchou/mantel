@@ -3,6 +3,7 @@ import DemoBlock
 import EventSources
 import NotchCore
 import NotchShell
+import NowPlayingBlock
 import PlatformServices
 import RenameBlock
 import ShelfBlock
@@ -31,10 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
     private var screenshotWatcher: ScreenshotWatcher?
+    private var volumeWatcher: OutputVolumeWatcher?
+    private var playerWatchers: [PlayerNotificationWatcher] = []
+    private var systemNowPlayingWatcher: SystemNowPlayingWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
+        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock(), NowPlayingBlock()]
         // `-demoBlock YES` adds the demo block, to try hover, click and drop.
         if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
         for block in blocks {
@@ -55,6 +59,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screenshotWatcher = ScreenshotWatcher(runtime: runtime)
         screenshotWatcher.start()
         self.screenshotWatcher = screenshotWatcher
+
+        let volumeWatcher = OutputVolumeWatcher(runtime: runtime)
+        volumeWatcher.start()
+        self.volumeWatcher = volumeWatcher
+
+        playerWatchers = [.spotify, .music].map { PlayerNotificationWatcher(runtime: runtime, player: $0) }
+        playerWatchers.forEach { $0.start() }
+
+        // Built into Contents/Frameworks by the "Build now-playing helper" phase.
+        let helper = Bundle.main.privateFrameworksURL?.appending(path: "TopNotchNowPlaying.dylib")
+        let systemNowPlayingWatcher = SystemNowPlayingWatcher(runtime: runtime, helperURL: helper)
+        systemNowPlayingWatcher.start()
+        self.systemNowPlayingWatcher = systemNowPlayingWatcher
 
         onboarding.showIfNeeded()
     }

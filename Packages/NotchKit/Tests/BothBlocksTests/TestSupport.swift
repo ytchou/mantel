@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 @testable import NotchCore
+@testable import NowPlayingBlock
 @testable import RenameBlock
 @testable import ShelfBlock
 
@@ -63,13 +64,14 @@ struct GatedNamer: ScreenshotNaming {
     }
 }
 
-/// Both blocks registered in one runtime, as the app does: shelf first.
+/// All blocks registered in one runtime, as the app does: shelf first.
 @MainActor
 struct Fixture {
     let runtime: NotchRuntime
     let clock: ManualClock
     let shelf: ShelfBlock
     let rename: RenameBlock
+    let nowPlaying: NowPlayingBlock
     let gate: Gate
     let folder: URL
 
@@ -89,7 +91,9 @@ struct Fixture {
             recentsURL: folder.appending(path: "state/recents.json")
         )
         runtime.register(shelf)
+        nowPlaying = NowPlayingBlock(defaults: UserDefaults(suiteName: suite)!)
         runtime.register(rename)
+        runtime.register(nowPlaying)
     }
 
     func capture(_ url: URL) {
