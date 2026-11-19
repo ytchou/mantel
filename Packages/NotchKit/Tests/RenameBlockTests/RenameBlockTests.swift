@@ -50,7 +50,20 @@ private func capture(_ url: URL, on runtime: NotchRuntime) {
     #expect(runtime.state.presentation?.duration == nil)
     #expect(runtime.state.presentation?.priority == .standard)
     #expect(block.model.phase == .naming)
+    // A full peek that says which screenshot, not a mark beside the notch.
+    #expect(runtime.state.presentation?.wing == nil)
+    #expect(runtime.state.presentation?.peek != nil)
+    #expect(block.model.currentName == "Screenshot 1.png")
     await waitUntil { block.current == nil }
+}
+
+@Test func namesReadAsWordsInTheNotchAndKeepTheirFileNames() {
+    #expect(RenameDisplay.words("shelf-rename-panel-ears.png") == "Shelf Rename Panel Ears")
+    #expect(RenameDisplay.words("2026-11-19-login_page.png") == "2026 11 19 Login Page")
+    // One word, or a name macOS gave: shown as it is, without the extension.
+    #expect(RenameDisplay.words("invoice.pdf") == "invoice")
+    #expect(RenameDisplay.words("Screenshot 2026-11-19 at 6.45.56 PM.png") == "Screenshot 2026-11-19 at 6.45.56 PM")
+    #expect(RenameDisplay.original("Screenshot 2026-11-19 at 6.45.56 PM.png") == "Screenshot 2026-11-19 at 6.45.56 PM")
 }
 
 @MainActor
@@ -211,4 +224,55 @@ private func capture(_ url: URL, on runtime: NotchRuntime) {
 
     #expect(exists(shot))
     #expect(block.actions.first?.isEnabled == false)
+}
+
+// MARK: Model prompt
+
+private func line(_ text: String, y: CGFloat, height: CGFloat) -> RecognizedLine {
+    RecognizedLine(text: text, box: CGRect(x: 0.1, y: y, width: 0.5, height: height))
+}
+
+@Test func theBiggestTextComesFirstWithoutRepeatsOrScraps() {
+    let lines = [
+        line("File  Edit  View", y: 0.97, height: 0.015),
+        line("Payment failed", y: 0.80, height: 0.06),
+        line("Your card was declined", y: 0.70, height: 0.03),
+        line("OK", y: 0.60, height: 0.05),
+        line("payment failed", y: 0.20, height: 0.02),
+    ]
+    let prominent = RecognizedLine.mostProminent(lines, count: 3)
+    #expect(prominent == ["Payment failed", "Your card was declined", "File  Edit  View"])
+}
+
+@Test func thePromptLeadsWithTheBiggestTextThenAllOfIt() {
+    let prompt = ModelNamer.prompt(text: "line one\nline two", prominent: ["Payment failed"], appName: "Safari")
+    let big = try? #require(prompt.range(of: "- Payment failed"))
+    let all = try? #require(prompt.range(of: "line one"))
+    #expect(prompt.hasPrefix("The screenshot was taken while Safari"))
+    if let big, let all { #expect(big.lowerBound < all.lowerBound) }
+    // Nothing big on screen: no empty heading.
+    let plain = ModelNamer.prompt(text: "x", prominent: [], appName: nil)
+    #expect(!plain.contains("biggest text"))
+}
+
+@Test func theInstructionsNameTheSubjectAndWhatToIgnore() {
+    let instructions = ModelNamer.instructions(for: .matchContent)
+    #expect(instructions.contains("subject first"))
+    #expect(instructions.contains("Ignore menus"))
+    #expect(instructions.contains("Examples of good names"))
+}
+
+@Test func theTextSentIsCappedAtWholeLines() {
+    let lines = Array(repeating: String(repeating: "a", count: 99), count: 30)
+    let text = ModelNamer.truncated(lines, limit: ModelNamer.textLimit)
+    #expect(text.count <= ModelNamer.textLimit)
+    #expect(ModelNamer.textLimit == 1000)
+}
+
+@Test func theModelsAnswerIsCleanedIntoWords() {
+    #expect(ModelNamer.words(in: "\"Threads.com Homepage\"\nThis name says…", max: 6) == ["threads.com", "homepage"])
+    // Repeats are dropped, and the count is capped.
+    #expect(ModelNamer.words(in: "students poll polling polling polling", max: 6) == ["students", "poll", "polling"])
+    #expect(ModelNamer.words(in: "one two three four five six seven", max: 4) == ["one", "two", "three", "four"])
+    #expect(ModelNamer.words(in: "  ", max: 4).isEmpty)
 }

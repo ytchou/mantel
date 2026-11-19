@@ -17,6 +17,8 @@ final class RenameModel {
     }
 
     var phase: Phase = .idle
+    /// The file name of the screenshot being named.
+    var currentName: String?
     var thumbnail: Thumbnail?
     /// Screenshots waiting behind the current one.
     var waiting = 0
@@ -44,9 +46,7 @@ public final class RenameBlock: NotchBlock {
         permissions: ["Access to the screenshot folder", "Apple Intelligence (optional)"]
     )
 
-    static let peekSize = CGSize(width: 340, height: 36)
-    /// Narrow, so it stays clear of the app menus. See `ShelfBlock.wingSize`.
-    static let wingSize = CGSize(width: 42, height: 32)
+    static let peekSize = CGSize(width: 420, height: 54)
     static let expandedSize = CGSize(width: 520, height: 260)
     static let resultDuration: Duration = .seconds(6)
     static let failureDuration: Duration = .seconds(4)
@@ -81,7 +81,9 @@ public final class RenameBlock: NotchBlock {
     init(
         reader: any TextReading,
         namer: any ScreenshotNaming,
-        timeLimit: Duration = .seconds(10),
+        // Measured on an M1 Pro in use: the on-device model takes 3.5 to 9 s
+        // for one name, so 10 s fell back to a dated name most of the time.
+        timeLimit: Duration = .seconds(20),
         defaults: UserDefaults,
         recentsURL: URL,
         frontmostAppName: @escaping @MainActor () -> String? = { nil },
@@ -112,6 +114,7 @@ public final class RenameBlock: NotchBlock {
         model.phase = .idle
         model.waiting = 0
         model.thumbnail = nil
+        model.currentName = nil
         context = nil
     }
 
@@ -150,6 +153,7 @@ public final class RenameBlock: NotchBlock {
         current = job
         model.waiting = queue.count
         model.thumbnail = nil
+        model.currentName = job.url.lastPathComponent
         model.phase = .naming
         refreshModelStatus()
         present(duration: nil)
@@ -205,17 +209,12 @@ public final class RenameBlock: NotchBlock {
         let model = self.model
         let undo: @MainActor () -> Void = { [weak self] in self?.undoShown() }
         let revert: @MainActor (RecentRename) -> Void = { [weak self] item in self?.revert(item) }
-        // While naming there is nothing to read or press, so a mark beside
-        // the notch is enough. The result needs room for the name and Undo,
-        // so it shows below the notch until its duration ends.
-        var wing: NotchContent?
-        if case .naming = model.phase {
-            wing = NotchContent(size: Self.wingSize) { RenameWingView(model: model) }
-        }
+        // Naming, the result and a failure all show the same peek: which
+        // screenshot, what is happening to it, and Undo once it is renamed.
+        let duration = duration
         context?.present(Presentation(
             priority: .standard,
-            peek: NotchContent(size: Self.peekSize) { RenamePeekView(model: model, undo: undo) },
-            wing: wing,
+            peek: NotchContent(size: Self.peekSize) { RenamePeekView(model: model, undoWindow: duration, undo: undo) },
             expanded: NotchContent(size: Self.expandedSize) { RenameRecentsView(model: model, revert: revert) },
             duration: duration
         ))

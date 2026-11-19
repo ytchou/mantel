@@ -7,6 +7,24 @@ struct RecognizedLine: Sendable, Equatable {
     let text: String
     /// Vision's normalised box: 0...1, origin at the bottom left.
     let box: CGRect
+
+    /// Bigger text scores higher; text nearer the top gets up to 1.5x.
+    var prominence: Double {
+        Double(box.height) * (0.5 + Double(box.maxY))
+    }
+
+    /// The text of the `count` most prominent lines, most prominent first,
+    /// without repeats or lines with fewer than 3 letters. Titles and
+    /// headings come first; menus, tabs and labels are small and sink.
+    static func mostProminent(_ lines: [RecognizedLine], count: Int) -> [String] {
+        var seen = Set<String>()
+        return lines
+            .sorted { $0.prominence > $1.prominence }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.filter(\.isLetter).count >= 3 && seen.insert($0.lowercased()).inserted }
+            .prefix(count)
+            .map { $0 }
+    }
 }
 
 /// The words to name a screenshot from, before cleaning.
@@ -42,11 +60,7 @@ enum FallbackNamer {
         guard !usable.isEmpty else { return [] }
         let topHalf = usable.filter { $0.box.maxY >= 0.5 }
         let pool = topHalf.isEmpty ? usable : topHalf
-        // Bigger text scores higher; text nearer the top gets up to 1.5x.
-        func score(_ line: RecognizedLine) -> Double {
-            Double(line.box.height) * (0.5 + Double(line.box.maxY))
-        }
-        guard let best = pool.max(by: { score($0) < score($1) }) else { return [] }
+        guard let best = pool.max(by: { $0.prominence < $1.prominence }) else { return [] }
 
         let heights = usable.map { Double($0.box.height) }.sorted()
         let median = heights[heights.count / 2]

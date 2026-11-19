@@ -1,4 +1,5 @@
 import AppKit
+import NotchCore
 import SwiftUI
 
 /// The expanded shelf: a header with the count and Clear, and a horizontally
@@ -10,7 +11,7 @@ struct ShelfView: View {
     let actions: ShelfActions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: NotchStyle.spacing) {
             header
             ZStack {
                 if store.isEmpty {
@@ -22,15 +23,15 @@ struct ShelfView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .padding(.bottom, 10)
+        .padding(.horizontal, NotchStyle.padding)
+        .padding(.top, 6)
+        .padding(.bottom, 14)
     }
 
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             if let stack = expandedStack {
                 Button {
                     ui.expandedStackID = nil
@@ -41,15 +42,15 @@ struct ShelfView: View {
                 .buttonStyle(.plain)
                 .help("Back to the shelf")
                 Text("\(stack.items.count) items")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(NotchStyle.title)
             } else {
                 Text("Shelf")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(NotchStyle.title)
                 if store.itemCount > 0 {
-                    Text("\(store.itemCount)")
-                        .font(.system(size: 12))
+                    Text(store.itemCount == 1 ? "1 item" : "\(store.itemCount) items")
+                        .font(NotchStyle.secondary)
                         .monospacedDigit()
-                        .opacity(0.6)
+                        .opacity(NotchStyle.secondaryOpacity)
                 }
             }
             Spacer()
@@ -60,9 +61,7 @@ struct ShelfView: View {
             }
             if !store.isEmpty {
                 Button("Clear") { actions.clear() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .opacity(0.75)
+                    .buttonStyle(.notchCapsule)
                     .help("Remove everything from the shelf")
             }
         }
@@ -96,8 +95,8 @@ struct ShelfView: View {
             Image(systemName: "tray.and.arrow.down")
                 .font(.system(size: 26, weight: .light))
             Text("Drag files, links or text here to keep them")
-                .font(.system(size: 12))
-                .opacity(0.7)
+                .font(NotchStyle.body)
+                .opacity(NotchStyle.secondaryOpacity)
         }
         .opacity(ui.isDropTarget ? 0 : 1)
     }
@@ -111,7 +110,7 @@ struct ShelfView: View {
             }
             .overlay {
                 Label("Drop here", systemImage: "tray.and.arrow.down.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(NotchStyle.title)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Capsule().fill(Color.black.opacity(0.75)))

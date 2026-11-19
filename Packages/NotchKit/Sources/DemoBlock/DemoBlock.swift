@@ -90,15 +90,15 @@ private struct DemoView: View {
     var body: some View {
         VStack(spacing: 4) {
             Text("Clicks: \(model.clicks)")
-                .font(.system(size: 22, weight: .medium, design: .rounded))
+                .font(NotchStyle.title)
                 .monospacedDigit()
             Text(model.lastDrop.map { "Dropped: \($0)" } ?? "Drop something here")
-                .font(.system(size: 12))
+                .font(NotchStyle.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .opacity(0.7)
+                .opacity(NotchStyle.secondaryOpacity)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, NotchStyle.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
