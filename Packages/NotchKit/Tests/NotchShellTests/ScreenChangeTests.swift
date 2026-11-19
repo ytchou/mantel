@@ -127,6 +127,9 @@ private func makeController(_ screens: FakeScreens) -> NotchShellController {
     // Elsewhere, including under the large panel the shape lives in.
     #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 700, y: 760), shape: shape, isInside: false) == slow)
     #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), shape: shape, isInside: false) == slow)
+    // This app frontmost: mouse moves are not reported reliably, so the timer stays quicker.
+    #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), shape: shape, isInside: false, appIsActive: true)
+        == NotchShellController.activeAppInterval)
     // Held inside by hysteresis, wherever the pointer is.
     #expect(NotchShellController.pollInterval(pointer: CGPoint(x: 100, y: 100), shape: shape, isInside: true) == fast)
 }

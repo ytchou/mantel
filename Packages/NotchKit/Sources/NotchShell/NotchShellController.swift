@@ -12,6 +12,8 @@ public final class NotchShellController {
     private var screenObserver: (any NSObjectProtocol)?
     private var hover = HoverTracker()
     private var isStarted = false
+    /// Mouse-event monitors that drive `poll()` while the pointer moves.
+    private var monitors: [Any] = []
 
     /// Where the notch is now, or nil when there is no screen.
     private let geometryProvider: @MainActor () -> NotchGeometry?
@@ -44,12 +46,15 @@ public final class NotchShellController {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.screenChanged() }
         }
+        installMonitors()
         screenChanged()
     }
 
     public func stop() {
         isStarted = false
         setPollInterval(nil)
+        monitors.forEach { NSEvent.removeMonitor($0) }
+        monitors = []
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         panel?.close()
@@ -125,20 +130,51 @@ public final class NotchShellController {
     // MARK: Tracking
 
     static let fastInterval: TimeInterval = 1.0 / 60.0
-    static let slowInterval: TimeInterval = 1.0 / 10.0
+    /// The safety net while the pointer is away from the shape. Mouse events
+    /// do the real work there; see `installMonitors`.
+    static let slowInterval: TimeInterval = 1.0
+    /// The timer's rate away from the shape while this app is frontmost.
+    static let activeAppInterval: TimeInterval = 1.0 / 10.0
     /// How close to the shape the pointer must be for fast polling.
     static let nearMargin: CGFloat = 80
 
-    /// How often to look at the pointer. Fast while it is on or near the
-    /// shape on screen now, so hover and drops feel immediate; slow while it
-    /// is elsewhere, so an idle app wakes the CPU 10 times a second, not 60.
+    /// How often the timer looks at the pointer. Fast while the pointer is
+    /// on or near the shape on screen now, so hover and drops feel immediate
+    /// and a shape that changes under a still pointer is noticed. Slow while
+    /// it is elsewhere: there, every mouse move already runs a check, and
+    /// the timer only covers what no mouse event reports. So an idle app
+    /// with a still pointer wakes once a second, not 60 times.
     /// Measured from the shape, not the whole panel: the panel covers the
     /// top centre of the screen, where the pointer spends much of its time.
-    /// The worst case is one slow interval of delay before fast polling
-    /// starts, with the pointer still up to `nearMargin` away from the shape.
-    static func pollInterval(pointer: CGPoint, shape: CGRect, isInside: Bool) -> TimeInterval {
+    ///
+    /// `appIsActive`: while this app is frontmost (its Settings window is in
+    /// use), mouse moves are not reported to it reliably, so the timer runs
+    /// at `activeAppInterval` instead.
+    static func pollInterval(pointer: CGPoint, shape: CGRect, isInside: Bool, appIsActive: Bool = false) -> TimeInterval {
         let near = shape.insetBy(dx: -nearMargin, dy: -nearMargin)
-        return isInside || near.contains(pointer) ? fastInterval : slowInterval
+        if isInside || near.contains(pointer) { return fastInterval }
+        return appIsActive ? activeAppInterval : slowInterval
+    }
+
+    /// Check the pointer on every mouse move or drag, anywhere. This is what
+    /// notices the pointer coming toward the notch; the timer then takes
+    /// over at the fast rate. Mouse events need no Accessibility permission.
+    /// The global monitor covers events going to other apps, the local one
+    /// events going to this app's own windows.
+    private func installMonitors() {
+        guard monitors.isEmpty else { return }
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.poll() }
+        }) {
+            monitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.poll() }
+            return event
+        }) {
+            monitors.append(local)
+        }
     }
 
     private var pollInterval: TimeInterval?
@@ -181,6 +217,6 @@ public final class NotchShellController {
         }
         // The shape may have changed with the hover; use the one on screen now.
         let shown = layout.geometry.shapeRect(for: runtime.state)
-        setPollInterval(Self.pollInterval(pointer: pointer, shape: shown, isInside: hover.isInside))
+        setPollInterval(Self.pollInterval(pointer: pointer, shape: shown, isInside: hover.isInside, appIsActive: NSApp.isActive))
     }
 }
