@@ -81,7 +81,9 @@ public final class RenameBlock: NotchBlock {
     init(
         reader: any TextReading,
         namer: any ScreenshotNaming,
-        timeLimit: Duration = .seconds(10),
+        // Measured on an M1 Pro in use: the on-device model takes 3.5 to 9 s
+        // for one name, so 10 s fell back to a dated name most of the time.
+        timeLimit: Duration = .seconds(20),
         defaults: UserDefaults,
         recentsURL: URL,
         frontmostAppName: @escaping @MainActor () -> String? = { nil },
