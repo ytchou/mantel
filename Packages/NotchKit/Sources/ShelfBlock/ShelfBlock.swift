@@ -12,16 +12,16 @@ import SwiftUI
 /// - its own drag-out is in progress: the shelf expanded, taking no drops, so
 ///   it stays open while the pointer is outside the notch;
 /// - a late drop may still come: see `lateDropGrace`;
-/// - it holds items: a peek with the count, expanding on hover;
+/// - it holds items: the count beside the notch, expanding on hover;
 /// - otherwise nothing.
 @MainActor
 public final class ShelfBlock: NotchBlock {
     public let id: BlockID = "shelf"
     public let title = "Shelf"
     public let info = BlockInfo(
-        summary: "Holds files, links and text you drop on the notch until you drag them out again.",
+        summary: "Holds files, links and text you drop on the notch, and new screenshots, until you drag them out again.",
         symbol: "tray.full",
-        trigger: "Dragging something toward the notch"
+        trigger: "Dragging something toward the notch, or taking a screenshot"
     )
 
     /// View state the block drives. The views observe it.
@@ -46,9 +46,12 @@ public final class ShelfBlock: NotchBlock {
 
     static let acceptedKinds: Set<DropKind> = [.file, .link, .text]
     static let expandedSize = CGSize(width: 500, height: 168)
-    static let peekSize = CGSize(width: 120, height: 32)
+    /// The count beside the notch. Only the width matters. Kept narrow: the
+    /// app menus can end about 45 pt from the notch, and the wing must not reach them.
+    static let wingSize = CGSize(width: 42, height: 32)
 
     let store: ShelfStore
+    let settings: ShelfSettings
     let ui = UIState()
     private(set) var mode: Mode = .none
 
@@ -80,9 +83,11 @@ public final class ShelfBlock: NotchBlock {
         self.init(directory: ShelfStore.defaultDirectory)
     }
 
-    init(directory: URL, lateDropGrace: Duration = .seconds(16)) {
+    init(directory: URL, lateDropGrace: Duration = .seconds(16), defaults: UserDefaults = .standard) {
         store = ShelfStore(directory: directory)
+        settings = ShelfSettings(defaults: defaults)
         self.lateDropGrace = lateDropGrace
+        settings.onChange = { [weak self] in self?.presentAgain() }
     }
 
     // MARK: NotchBlock
@@ -93,6 +98,12 @@ public final class ShelfBlock: NotchBlock {
         context.subscribe(to: DragSessionEnded.self) { [weak self] _ in self?.dragEnded() }
         context.subscribe(to: PointerHoverChanged.self) { [weak self] event in
             self?.pointerInside = event.isInside
+        }
+        // The shelf hears about screenshots from the event source, not from
+        // the rename block, so each block works with the other one off. When
+        // the rename block renames the file, the item's bookmark follows it.
+        context.subscribe(to: ScreenshotCaptured.self) { [weak self] event in
+            self?.screenshotCaptured(event.url)
         }
         store.pruneMissing()
         mode = .none
@@ -126,7 +137,18 @@ public final class ShelfBlock: NotchBlock {
         }]
     }
 
+    public var settingsPane: AnyView? {
+        AnyView(ShelfSettingsView(settings: settings))
+    }
+
     // MARK: Events
+
+    private func screenshotCaptured(_ url: URL) {
+        guard settings.collectScreenshots else { return }
+        // Held by reference: the file stays where macOS saved it.
+        store.add([.file(url)])
+        refresh()
+    }
 
     private func dragStarted() {
         if isDraggingOut {
@@ -234,6 +256,12 @@ public final class ShelfBlock: NotchBlock {
         }
     }
 
+    /// Rebuild the presentation for the current mode, after a setting changed.
+    private func presentAgain() {
+        guard let context, let presentation = presentation(for: mode) else { return }
+        context.present(presentation)
+    }
+
     private func presentation(for mode: Mode) -> Presentation? {
         let store = self.store
         let ui = self.ui
@@ -246,9 +274,11 @@ public final class ShelfBlock: NotchBlock {
         let expanded = NotchContent(size: Self.expandedSize) {
             ShelfView(store: store, ui: ui, actions: actions)
         }
-        let peek = NotchContent(size: Self.peekSize) {
-            ShelfPeekView(store: store, ui: ui)
-        }
+        // With the count off, a wing of no width: the shape stays the notch
+        // itself and takes no room, and hovering it still opens the shelf.
+        let wing = settings.showCount
+            ? NotchContent(size: Self.wingSize) { ShelfPeekView(store: store, ui: ui) }
+            : NotchContent(size: .zero) { EmptyView() }
         switch mode {
         case .none:
             return nil
@@ -257,11 +287,11 @@ public final class ShelfBlock: NotchBlock {
         case .dragOut:
             return Presentation(priority: .interactive, expanded: expanded, opensAt: .expanded)
         case .receiving:
-            return Presentation(priority: .interactive, peek: peek, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
+            return Presentation(priority: .interactive, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
         case .ambient:
             // Takes drops too, so a promise that outlives the grace period is
             // still kept while the shelf owns the notch.
-            return Presentation(priority: .ambient, peek: peek, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
+            return Presentation(priority: .ambient, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
         }
     }
 }

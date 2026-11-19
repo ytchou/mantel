@@ -89,7 +89,7 @@ public final class NotchShellController {
         // Only the shape takes mouse and drag events; the rest passes through.
         // NSEvent.mouseLocation keeps updating while a drag holds the button, so
         // this also lets the drop target receive drags over the shape.
-        let neck = layout.geometry.neck
+        let neck = layout.geometry.neck(for: runtime.state)
         let overShape = NotchGeometry.hits(shape, pointer, neck: neck)
         if panel.ignoresMouseEvents == overShape {
             panel.ignoresMouseEvents = !overShape

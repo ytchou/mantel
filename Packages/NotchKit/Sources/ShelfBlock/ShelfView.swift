@@ -173,20 +173,20 @@ struct TileView: View {
                 onHover: { isHovering = $0 }
             )
         }
-        .overlay(alignment: .topLeading) {
-            if isHovering {
-                Button {
-                    actions.remove(target)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.black, .white)
-                }
-                .buttonStyle(.plain)
-                .help("Remove from the shelf")
-                .offset(x: -2, y: -2)
+        // Always shown, not only on hover: on hover alone it was easy to miss.
+        .overlay(alignment: .topTrailing) {
+            Button {
+                actions.remove(target)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.black, .white)
+                    .opacity(isHovering ? 1 : 0.6)
             }
+            .buttonStyle(.plain)
+            .help("Remove from the shelf")
+            .offset(x: 2, y: -2)
         }
         .help(title)
     }
@@ -278,13 +278,13 @@ struct TilePreview: View {
     }
 }
 
-/// The peek: a tray and the item count.
+/// Beside the notch: a tray and the item count.
 struct ShelfPeekView: View {
     let store: ShelfStore
     let ui: ShelfBlock.UIState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             Image(systemName: store.isEmpty ? "tray.and.arrow.down" : "tray.full.fill")
             if !store.isEmpty {
                 Text("\(store.itemCount)")
@@ -295,7 +295,7 @@ struct ShelfPeekView: View {
                     .controlSize(.mini)
             }
         }
-        .font(.system(size: 13, weight: .semibold))
+        .font(.system(size: 12, weight: .semibold))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Shelf, \(store.itemCount) items")

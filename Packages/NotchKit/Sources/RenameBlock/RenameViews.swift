@@ -67,6 +67,25 @@ struct RenamePeekView: View {
     }
 }
 
+/// Beside the notch while a screenshot is being named.
+struct RenameWingView: View {
+    let model: RenameModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "camera.viewfinder")
+            if model.waiting > 0 {
+                Text("+\(model.waiting)").monospacedDigit()
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel("Naming screenshot")
+    }
+}
+
 /// The panel on hover: recent renames, newest first.
 struct RenameRecentsView: View {
     let model: RenameModel
@@ -167,6 +186,11 @@ struct RenameSettingsView: View {
                 }
                 Toggle("Start names with the date", isOn: $settings.datePrefix)
                 Toggle("End names with the app name", isOn: $settings.appNameSuffix)
+            }
+            Section("Speed") {
+                Text("macOS saves a screenshot only after its floating thumbnail goes away, about 5 seconds after the capture. Naming cannot start before that. To name screenshots at once, press \u{21E7}\u{2318}5, open Options and turn off Show Floating Thumbnail.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("On-device model") {
                 Text(model.modelStatus.explanation)

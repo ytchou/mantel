@@ -132,3 +132,15 @@ struct ArbiterTests {
         #expect(arbiter.nextDeadline == nil)
     }
 }
+
+@MainActor
+@Test func aWingAloneIsShownAtThePeekLevel() {
+    let runtime = NotchRuntime()
+    let block = FakeBlock("a")
+    runtime.register(block)
+    block.context?.present(Presentation(wing: content(), expanded: content()))
+    #expect(runtime.state.owner == "a")
+    #expect(runtime.state.level == .peek)
+    runtime.pointerHoverChanged(isInside: true)
+    #expect(runtime.state.level == .expanded)
+}

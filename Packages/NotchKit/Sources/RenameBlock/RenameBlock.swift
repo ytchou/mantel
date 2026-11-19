@@ -45,6 +45,8 @@ public final class RenameBlock: NotchBlock {
     )
 
     static let peekSize = CGSize(width: 340, height: 36)
+    /// Narrow, so it stays clear of the app menus. See `ShelfBlock.wingSize`.
+    static let wingSize = CGSize(width: 42, height: 32)
     static let expandedSize = CGSize(width: 520, height: 260)
     static let resultDuration: Duration = .seconds(6)
     static let failureDuration: Duration = .seconds(4)
@@ -203,9 +205,17 @@ public final class RenameBlock: NotchBlock {
         let model = self.model
         let undo: @MainActor () -> Void = { [weak self] in self?.undoShown() }
         let revert: @MainActor (RecentRename) -> Void = { [weak self] item in self?.revert(item) }
+        // While naming there is nothing to read or press, so a mark beside
+        // the notch is enough. The result needs room for the name and Undo,
+        // so it shows below the notch until its duration ends.
+        var wing: NotchContent?
+        if case .naming = model.phase {
+            wing = NotchContent(size: Self.wingSize) { RenameWingView(model: model) }
+        }
         context?.present(Presentation(
             priority: .standard,
             peek: NotchContent(size: Self.peekSize) { RenamePeekView(model: model, undo: undo) },
+            wing: wing,
             expanded: NotchContent(size: Self.expandedSize) { RenameRecentsView(model: model, revert: revert) },
             duration: duration
         ))
