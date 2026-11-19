@@ -160,23 +160,45 @@ extension NotchGeometry {
         Self.wing(for: state) == nil ? neck : nil
     }
 
-    /// Geometry for the built-in (notched) screen, else the main screen as a pill.
-    /// `nil` when there is no screen at all. `forcePill` ignores the notch, to
-    /// try the pill on a notched Mac.
+    /// Geometry for the screens connected now. See `choose`.
     static func current(forcePill: Bool = false) -> NotchGeometry? {
-        for screen in NSScreen.screens where !forcePill {
-            if let notch = notchRect(of: screen) {
+        choose(screens: NSScreen.screens.map(ScreenInfo.init), main: NSScreen.main.map(ScreenInfo.init), forcePill: forcePill)
+    }
+}
+
+/// What the geometry needs to know about one screen. Screen selection takes
+/// these instead of `NSScreen`, so it can be tested with made-up screens.
+struct ScreenInfo: Equatable {
+    var frame: CGRect
+    var visibleFrame: CGRect
+    /// The areas beside a hardware notch, in the screen's own coordinates. Nil without a notch.
+    var topLeft: CGRect?
+    var topRight: CGRect?
+    var safeTop: CGFloat = 0
+}
+
+extension ScreenInfo {
+    @MainActor
+    init(_ screen: NSScreen) {
+        self.init(frame: screen.frame, visibleFrame: screen.visibleFrame,
+                  topLeft: screen.auxiliaryTopLeftArea, topRight: screen.auxiliaryTopRightArea,
+                  safeTop: screen.safeAreaInsets.top)
+    }
+}
+
+extension NotchGeometry {
+    /// The first screen with a notch, else `main` (or the first screen) as a
+    /// pill. `nil` when there is no screen at all, as with the lid closed and
+    /// no display connected. `forcePill` ignores the notch, to try the pill on
+    /// a notched Mac.
+    static func choose(screens: [ScreenInfo], main: ScreenInfo?, forcePill: Bool = false) -> NotchGeometry? {
+        for screen in screens where !forcePill {
+            if let notch = notchRect(screenFrame: screen.frame, topLeft: screen.topLeft,
+                                     topRight: screen.topRight, safeTop: screen.safeTop) {
                 return NotchGeometry(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, notch: notch)
             }
         }
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return nil }
+        guard let screen = main ?? screens.first else { return nil }
         return NotchGeometry(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, notch: nil)
-    }
-
-    private static func notchRect(of screen: NSScreen) -> CGRect? {
-        notchRect(screenFrame: screen.frame,
-                  topLeft: screen.auxiliaryTopLeftArea,
-                  topRight: screen.auxiliaryTopRightArea,
-                  safeTop: screen.safeAreaInsets.top)
     }
 }

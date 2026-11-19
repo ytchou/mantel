@@ -27,5 +27,7 @@ let package = Package(
         .testTarget(name: "ShelfBlockTests", dependencies: ["ShelfBlock"]),
         .testTarget(name: "RenameBlockTests", dependencies: ["RenameBlock"]),
         .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
+        // Both blocks in one runtime: what happens when they want the notch at once.
+        .testTarget(name: "BothBlocksTests", dependencies: ["NotchCore", "ShelfBlock", "RenameBlock"]),
     ]
 )

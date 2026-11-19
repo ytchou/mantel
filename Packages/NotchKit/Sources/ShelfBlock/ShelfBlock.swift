@@ -12,7 +12,8 @@ import SwiftUI
 /// - its own drag-out is in progress: the shelf expanded, taking no drops, so
 ///   it stays open while the pointer is outside the notch;
 /// - a late drop may still come: see `lateDropGrace`;
-/// - it holds items: the count beside the notch, expanding on hover;
+/// - it holds items: nothing at rest (or the count beside the notch),
+///   expanding on hover; while the pointer is on it, it keeps the notch;
 /// - otherwise nothing.
 @MainActor
 public final class ShelfBlock: NotchBlock {
@@ -42,6 +43,8 @@ public final class ShelfBlock: NotchBlock {
         case dragOut
         case receiving
         case ambient
+        /// Holding items, with the pointer on the open shelf.
+        case browsing
     }
 
     static let acceptedKinds: Set<DropKind> = [.file, .link, .text]
@@ -70,6 +73,8 @@ public final class ShelfBlock: NotchBlock {
     private let lateDropGrace: Duration
 
     private var pointerInside = false
+    /// The pointer is on the shelf while the shelf is what the notch shows.
+    private var isBrowsing = false
     /// Another app's drag is in progress.
     private var isDragActive = false
     /// The shelf's own drag-out is in progress.
@@ -97,7 +102,12 @@ public final class ShelfBlock: NotchBlock {
         context.subscribe(to: DragSessionStarted.self) { [weak self] _ in self?.dragStarted() }
         context.subscribe(to: DragSessionEnded.self) { [weak self] _ in self?.dragEnded() }
         context.subscribe(to: PointerHoverChanged.self) { [weak self] event in
-            self?.pointerInside = event.isInside
+            guard let self else { return }
+            self.pointerInside = event.isInside
+            // In use only when the shelf is what the pointer landed on, not
+            // when it landed on another block's presentation.
+            self.isBrowsing = event.isInside && (self.context?.ownsNotch ?? false)
+            self.refresh()
         }
         // The shelf hears about screenshots from the event source, not from
         // the rename block, so each block works with the other one off. When
@@ -119,6 +129,7 @@ public final class ShelfBlock: NotchBlock {
         isDraggingOut = false
         ownDragSession = false
         pointerInside = false
+        isBrowsing = false
         ui.isDropTarget = false
         ui.isReceiving = false
     }
@@ -235,7 +246,8 @@ public final class ShelfBlock: NotchBlock {
         if isDraggingOut { return .dragOut }
         if isDragActive { return .dropTarget }
         if graceTask != nil { return .receiving }
-        return store.isEmpty ? .none : .ambient
+        if store.isEmpty { return .none }
+        return isBrowsing ? .browsing : .ambient
     }
 
     /// Bring the notch in line with the state. Presents only when the mode
@@ -287,6 +299,11 @@ public final class ShelfBlock: NotchBlock {
         case .dragOut:
             return Presentation(priority: .interactive, expanded: expanded, opensAt: .expanded)
         case .receiving:
+            return Presentation(priority: .interactive, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
+        case .browsing:
+            // Interactive while in use, so another block's news (a renamed
+            // screenshot) waits until the pointer leaves, instead of
+            // replacing the shelf under the pointer.
             return Presentation(priority: .interactive, wing: wing, expanded: expanded, opensAt: .peek, accepts: Self.acceptedKinds)
         case .ambient:
             // Takes drops too, so a promise that outlives the grace period is
