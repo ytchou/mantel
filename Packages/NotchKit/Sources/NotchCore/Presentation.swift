@@ -2,7 +2,7 @@ import SwiftUI
 
 /// How much of the notch a presentation uses.
 public enum NotchLevel: Sendable, Hashable {
-    /// A small strip that hangs just under the notch.
+    /// A small panel: the notch grown wider and a little taller.
     case peek
     /// The large panel.
     case expanded
@@ -22,9 +22,10 @@ public enum PresentationPriority: Int, Sendable, Comparable, CaseIterable {
 
 /// Size limits the shell enforces. A larger request is clamped, not rejected.
 ///
-/// The peek hangs below the menu bar, so it never covers menu bar items. The
-/// expanded panel is wider than the notch and does cover the items next to it
-/// while it is open; that is accepted because it is short-lived.
+/// Both levels grow the whole notch from the top edge of the screen, so a
+/// shape wider than the notch covers the menu bar items next to it while it is
+/// shown; that is accepted because it is short-lived. The content area starts
+/// below the notch's own height.
 public enum NotchLimits {
     public static let maxPeekSize = CGSize(width: 360, height: 44)
     public static let maxExpandedSize = CGSize(width: 520, height: 280)

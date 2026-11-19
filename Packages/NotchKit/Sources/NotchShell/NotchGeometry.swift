@@ -61,8 +61,10 @@ struct NotchGeometry: Equatable {
     var headerHeight: CGFloat { anchorRect.height }
 
     /// The shape for a level and wanted content size. `nil` level is idle.
-    /// The shape hangs from the anchor's top, centred on it, at least as wide as
-    /// it, and grows downward by the clamped content height.
+    /// The shape starts at the anchor's top (the screen edge on a notched
+    /// screen), centred on it, at least as wide as it, and grows downward by
+    /// the clamped content height. It is one rounded rectangle: the whole
+    /// notch grows, covering the menu bar beside it while it is shown.
     func shapeRect(level: NotchLevel?, contentSize: CGSize) -> CGRect {
         guard let level else { return anchorRect }
         let content = NotchLimits.clamp(contentSize, for: level)
@@ -114,22 +116,11 @@ struct NotchGeometry: Equatable {
 
     /// Inclusive containment. The top edge gets one extra point so a pointer
     /// pinned at the very top of the screen still hits the notch.
-    ///
-    /// `neck` is the hardware notch. Level with it, the shape is only as wide
-    /// as the notch, so points beside it (the menu bar) do not hit.
-    static func hits(_ rect: CGRect, _ point: CGPoint, neck: CGRect? = nil) -> Bool {
-        guard !rect.isNull,
-              point.x >= rect.minX, point.x <= rect.maxX,
-              point.y >= rect.minY, point.y <= rect.maxY + 1 else { return false }
-        if let neck, point.y >= neck.minY {
-            return point.x >= neck.minX && point.x <= neck.maxX
-        }
-        return true
+    static func hits(_ rect: CGRect, _ point: CGPoint) -> Bool {
+        !rect.isNull
+            && point.x >= rect.minX && point.x <= rect.maxX
+            && point.y >= rect.minY && point.y <= rect.maxY + 1
     }
-
-    /// The hardware notch, when there is one. A pill has no neck: it already
-    /// sits below the menu bar.
-    var neck: CGRect? { isNotch ? anchorRect : nil }
 }
 
 // MARK: - Runtime state and screens
@@ -152,12 +143,6 @@ extension NotchGeometry {
     func shapeRect(for state: NotchState) -> CGRect {
         if let wing = Self.wing(for: state) { return wingShapeRect(wingWidth: wing.size.width) }
         return shapeRect(level: state.level, contentSize: Self.content(for: state)?.size ?? .zero)
-    }
-
-    /// The neck to hit-test a state's shape with. A wing shape is a plain
-    /// rect level with the notch, so all of it takes the pointer.
-    func neck(for state: NotchState) -> CGRect? {
-        Self.wing(for: state) == nil ? neck : nil
     }
 
     /// Geometry for the screens connected now. See `choose`.
