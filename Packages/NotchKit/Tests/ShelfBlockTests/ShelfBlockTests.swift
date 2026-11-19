@@ -237,3 +237,47 @@ private func waitUntil(_ condition: () -> Bool) async {
     runtime.publish(DragSessionStarted(kinds: [.file]))
     #expect(runtime.state.owner == nil)
 }
+
+/// A fresh defaults suite, so tests never read the user's own settings.
+private func makeDefaults() -> UserDefaults {
+    UserDefaults(suiteName: "ShelfBlockTests.\(UUID().uuidString)")!
+}
+
+@MainActor
+@Test func aNewScreenshotIsAddedAndFollowsARename() throws {
+    let runtime = NotchRuntime()
+    let block = ShelfBlock(directory: try makeTemporaryDirectory(), defaults: makeDefaults())
+    runtime.register(block)
+    let folder = try makeTemporaryDirectory()
+    let shot = try makeFile(named: "Screenshot 1.png", in: folder)
+
+    runtime.publish(ScreenshotCaptured(url: shot, createdAt: Date()))
+    #expect(block.store.itemCount == 1)
+    #expect(runtime.state.owner == "shelf")
+    let item = try #require(block.store.stacks.first?.items.first)
+    #expect(item.isOwnedFile == false)
+
+    // What the rename block does: a move inside the same folder.
+    let renamed = folder.appending(path: "Login page.png")
+    try FileManager.default.moveItem(at: shot, to: renamed)
+    #expect(block.store.fileURL(of: item)?.lastPathComponent == "Login page.png")
+
+    // Removing the item leaves the user's file alone.
+    block.remove(.item(item.id))
+    #expect(block.store.isEmpty)
+    #expect(FileManager.default.fileExists(atPath: renamed.path(percentEncoded: false)))
+}
+
+@MainActor
+@Test func screenshotsAreNotAddedWhenTheSettingIsOff() throws {
+    let defaults = makeDefaults()
+    defaults.set("NO", forKey: ShelfSettings.collectScreenshotsKey)
+    let runtime = NotchRuntime()
+    let block = ShelfBlock(directory: try makeTemporaryDirectory(), defaults: defaults)
+    runtime.register(block)
+    let shot = try makeFile(named: "Screenshot 2.png", in: try makeTemporaryDirectory())
+
+    runtime.publish(ScreenshotCaptured(url: shot, createdAt: Date()))
+    #expect(block.store.isEmpty)
+    #expect(runtime.state.owner == nil)
+}

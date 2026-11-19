@@ -19,9 +19,9 @@ public final class ShelfBlock: NotchBlock {
     public let id: BlockID = "shelf"
     public let title = "Shelf"
     public let info = BlockInfo(
-        summary: "Holds files, links and text you drop on the notch until you drag them out again.",
+        summary: "Holds files, links and text you drop on the notch, and new screenshots, until you drag them out again.",
         symbol: "tray.full",
-        trigger: "Dragging something toward the notch"
+        trigger: "Dragging something toward the notch, or taking a screenshot"
     )
 
     /// View state the block drives. The views observe it.
@@ -49,6 +49,7 @@ public final class ShelfBlock: NotchBlock {
     static let peekSize = CGSize(width: 120, height: 32)
 
     let store: ShelfStore
+    let settings: ShelfSettings
     let ui = UIState()
     private(set) var mode: Mode = .none
 
@@ -80,8 +81,9 @@ public final class ShelfBlock: NotchBlock {
         self.init(directory: ShelfStore.defaultDirectory)
     }
 
-    init(directory: URL, lateDropGrace: Duration = .seconds(16)) {
+    init(directory: URL, lateDropGrace: Duration = .seconds(16), defaults: UserDefaults = .standard) {
         store = ShelfStore(directory: directory)
+        settings = ShelfSettings(defaults: defaults)
         self.lateDropGrace = lateDropGrace
     }
 
@@ -93,6 +95,12 @@ public final class ShelfBlock: NotchBlock {
         context.subscribe(to: DragSessionEnded.self) { [weak self] _ in self?.dragEnded() }
         context.subscribe(to: PointerHoverChanged.self) { [weak self] event in
             self?.pointerInside = event.isInside
+        }
+        // The shelf hears about screenshots from the event source, not from
+        // the rename block, so each block works with the other one off. When
+        // the rename block renames the file, the item's bookmark follows it.
+        context.subscribe(to: ScreenshotCaptured.self) { [weak self] event in
+            self?.screenshotCaptured(event.url)
         }
         store.pruneMissing()
         mode = .none
@@ -126,7 +134,18 @@ public final class ShelfBlock: NotchBlock {
         }]
     }
 
+    public var settingsPane: AnyView? {
+        AnyView(ShelfSettingsView(settings: settings))
+    }
+
     // MARK: Events
+
+    private func screenshotCaptured(_ url: URL) {
+        guard settings.collectScreenshots else { return }
+        // Held by reference: the file stays where macOS saved it.
+        store.add([.file(url)])
+        refresh()
+    }
 
     private func dragStarted() {
         if isDraggingOut {

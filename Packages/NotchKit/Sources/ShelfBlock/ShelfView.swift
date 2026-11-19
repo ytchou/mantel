@@ -173,20 +173,20 @@ struct TileView: View {
                 onHover: { isHovering = $0 }
             )
         }
-        .overlay(alignment: .topLeading) {
-            if isHovering {
-                Button {
-                    actions.remove(target)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.black, .white)
-                }
-                .buttonStyle(.plain)
-                .help("Remove from the shelf")
-                .offset(x: -2, y: -2)
+        // Always shown, not only on hover: on hover alone it was easy to miss.
+        .overlay(alignment: .topTrailing) {
+            Button {
+                actions.remove(target)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.black, .white)
+                    .opacity(isHovering ? 1 : 0.6)
             }
+            .buttonStyle(.plain)
+            .help("Remove from the shelf")
+            .offset(x: 2, y: -2)
         }
         .help(title)
     }
