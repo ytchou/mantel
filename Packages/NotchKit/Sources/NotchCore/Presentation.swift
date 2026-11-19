@@ -28,7 +28,7 @@ public enum PresentationPriority: Int, Sendable, Comparable, CaseIterable {
 /// below the notch's own height.
 public enum NotchLimits {
     /// Room for a 15 pt title with an 11 pt line under it, and a 36 pt image.
-    public static let maxPeekSize = CGSize(width: 380, height: 56)
+    public static let maxPeekSize = CGSize(width: 420, height: 56)
     public static let maxExpandedSize = CGSize(width: 520, height: 280)
     /// Widest a wing may be. Its height is always the notch's height.
     public static let maxWingWidth: CGFloat = 80
