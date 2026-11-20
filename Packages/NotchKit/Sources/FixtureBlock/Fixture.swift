@@ -12,6 +12,7 @@ import Foundation
 ///   pings from the main queue, so this is a hang of the main thread too,
 ///   without the block ever presenting again).
 /// On a pointer hover it presents a small peek, so tests can see a present.
+@main
 struct Fixture: Block {
     var id: String { "fixture" }
     var version: String { "1.0.0" }
@@ -40,11 +41,3 @@ struct Fixture: Block {
         }
     }
 }
-
-// `main.swift` cannot hold `@main`; start the run loop the way `Block.main` does.
-let runner = Runner(block: Fixture(), transport: SocketTransport(fd: 3))
-Task {
-    await runner.run()
-    exit(0)
-}
-dispatchMain()

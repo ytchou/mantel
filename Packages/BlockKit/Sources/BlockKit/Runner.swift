@@ -45,7 +45,7 @@ public final class Runner: Sendable {
                     // Answered from the main queue: if the block's main thread
                     // is stuck, no pong goes out and the app sees a hang.
                     DispatchQueue.main.async {
-                        MainActor.assumeIsolated { context.send(.pong(seq: seq)) }
+                        MainActor.assumeIsolated { _ = context.send(.pong(seq: seq)) }
                     }
                 default:
                     DispatchQueue.main.async {

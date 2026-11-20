@@ -94,9 +94,9 @@ struct RemoteBlockTests {
         #expect(rig.runtime.state.owner == nil)
     }
 
-    @Test func eventsBeforeWelcomeAreQueuedThenReplayed() async throws {
+    @Test func eventsBeforeWelcomeAreQueuedLiveThenReplayed() async throws {
         let rig = Rig()
-        // Published before the process said hello.
+        // Published after the launch, before the process said hello: live.
         rig.runtime.publish(OutputVolumeChanged(volume: 0.3, isMuted: false))
         rig.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "One"))
         rig.runtime.publish(OutputVolumeChanged(volume: 0.4, isMuted: false))
@@ -109,7 +109,7 @@ struct RemoteBlockTests {
             .nowPlaying(NowPlaying(player: "Spotify", state: .playing, title: "One")),
             .outputVolume(OutputVolume(volume: 0.4, isMuted: false)),
         ])
-        #expect(first.allSatisfy { $0.replay })
+        #expect(first.allSatisfy { !$0.replay }, "a change during the start still shows a peek")
         // `welcome` comes first, with settings read from the manifest defaults.
         #expect(rig.process.received.first.map { message -> Bool in
             if case let .welcome(contract, settings, _) = message {
@@ -117,23 +117,91 @@ struct RemoteBlockTests {
             } else { false }
         } == true)
 
-        // Live events are not replays.
         rig.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "Two"))
         await waitUntil { rig.process.events.count == 4 }
         #expect(rig.process.events.last?.replay == false)
 
-        // A restarted process gets the latest event of each kind.
+        // A restarted process gets the latest event of each kind as a replay,
+        // and a live event during its start as live.
         let firstProcess = rig.process
-        rig.block.restart()
-        #expect(rig.launcher.processes.count == 2)
+        rig.process.close()
+        await waitUntil { rig.launcher.processes.count == 2 }
         #expect(rig.process.generation > firstProcess.generation)
+        rig.runtime.publish(OutputVolumeChanged(volume: 0.6, isMuted: false))
         try await rig.process.start()
-        await waitUntil { rig.process.events.count == 2 }
+        await waitUntil { rig.process.events.count == 3 }
         #expect(rig.process.events.map(\.payload) == [
             .outputVolume(OutputVolume(volume: 0.4, isMuted: false)),
             .nowPlaying(NowPlaying(player: "Spotify", state: .playing, title: "Two")),
+            .outputVolume(OutputVolume(volume: 0.6, isMuted: false)),
         ])
-        #expect(rig.process.events.allSatisfy { $0.replay })
+        #expect(rig.process.events.map(\.replay) == [true, true, false])
+    }
+
+    @Test func presentSecondsAreBounded() async throws {
+        #expect(RemoteBlock.duration(seconds: .infinity) == nil)
+        #expect(RemoteBlock.duration(seconds: .nan) == nil)
+        #expect(RemoteBlock.duration(seconds: 0) == nil)
+        #expect(RemoteBlock.duration(seconds: 2.5) == .milliseconds(2500))
+
+        let rig = Rig()
+        try await rig.process.start()
+        // Before the fix this traps converting to `Duration`.
+        try rig.process.send(present(seconds: 1e300))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.duration == .seconds(3600))
+
+        try rig.process.send(present(.text("Again"), seconds: -1))
+        await waitUntil { rig.block.model.peek == .text("Again") }
+        await settle()
+        #expect(rig.runtime.state.presentation?.duration == nil)
+    }
+
+    @Test func replacePackageWithdrawsWhatTheOldProcessShowed() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present())
+        try rig.process.send(.actions(items: [ActionItem(id: "a", title: "A", enabled: true)]))
+        await waitUntil { rig.runtime.state.owner == "hello" && !rig.block.actions.isEmpty }
+
+        rig.block.replacePackage(manifest: helloManifest, source: rig.block.source)
+
+        #expect(rig.runtime.state.owner == nil)
+        #expect(rig.runtime.state.presentation == nil)
+        #expect(rig.block.actions.isEmpty)
+        #expect(rig.block.model.peek == nil)
+        #expect(rig.launcher.processes.count == 2, "the new version starts at once")
+    }
+
+    @Test func stopWithdrawsWhatTheProcessShowed() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        let first = rig.process
+        try first.send(present())
+        try first.send(.actions(items: [ActionItem(id: "a", title: "A", enabled: true)]))
+        await waitUntil { rig.runtime.state.owner == "hello" && !rig.block.actions.isEmpty }
+
+        rig.block.stop()
+
+        #expect(rig.runtime.state.owner == nil)
+        #expect(rig.block.actions.isEmpty)
+        #expect(rig.block.model.peek == nil)
+        #expect(await first.waitFor { $0 == .quit } != nil)
+    }
+
+    @Test func helloWithAnotherIDIsAFailure() async throws {
+        let rig = Rig()
+        var failures: [String] = []
+        rig.block.onFailure = { failures.append($0) }
+
+        try rig.process.send(.hello(contract: Contract.current, id: "someone-else", version: "1.0.0"))
+        await waitUntil { !failures.isEmpty }
+        await settle()
+
+        let reason = try #require(failures.first)
+        #expect(reason.contains("someone-else"))
+        #expect(reason.contains("hello"))
+        #expect(!rig.process.received.contains { if case .welcome = $0 { true } else { false } })
     }
 
     @Test func oldGenerationFramesAreDropped() async throws {

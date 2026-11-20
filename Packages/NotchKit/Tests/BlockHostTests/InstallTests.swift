@@ -21,7 +21,9 @@ struct InstallTests {
         var dataRoot: URL { root.appending(path: "BlockData") }
         lazy var store = makeStore()
 
-        func makeStore(bundledRoot: URL? = nil) -> BlockStore {
+        /// - Parameter checksRuntime: false for a second store that only scans
+        ///   the folders, so the blocks the first one registered do not count.
+        func makeStore(bundledRoot: URL? = nil, checksRuntime: Bool = true) -> BlockStore {
             BlockStore(
                 owner: { [runtime] in runtime.state.owner },
                 blocksRoot: blocksRoot,
@@ -38,7 +40,8 @@ struct InstallTests {
                     where key.hasPrefix("\(id.rawValue).") || key.hasPrefix("block.\(id.rawValue).") {
                         defaults.removeObject(forKey: key)
                     }
-                }
+                },
+                isRegistered: { [runtime] id in checksRuntime && runtime.blocks.contains { $0.id == id } }
             )
         }
 
@@ -104,7 +107,7 @@ struct InstallTests {
         #expect(setup.store.canRemove("hello"))
 
         // A new store over the same folder finds it, with the original path.
-        let again = setup.makeStore().standIns(developmentPath: nil)
+        let again = setup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
         #expect(again.map(\.id) == ["hello"])
         #expect(again.first?.info.source == .installed(from: package.path))
     }
@@ -256,10 +259,86 @@ struct InstallTests {
         try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: "Notes"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: ".alpha.topblock.incoming-1"), withIntermediateDirectories: true)
 
-        let standIns = setup.makeStore(bundledRoot: bundled).standIns(developmentPath: nil)
+        let standIns = setup.makeStore(bundledRoot: bundled, checksRuntime: false).standIns(developmentPath: nil)
 
         #expect(standIns.map(\.id) == ["nowplaying", "alpha", "zeta"])
         #expect(standIns.map(\.info.source).first == .bundled)
+    }
+
+    // MARK: Ids are unique
+
+    @Test func installOfDevelopmentBlockIdIsRefused() throws {
+        let setup = Setup()
+        let development = try setup.package(id: "hello")
+        for block in setup.store.standIns(developmentPath: development.path) { setup.runtime.register(block) }
+        let package = try setup.package(id: "hello")
+
+        #expect(throws: BlockInstallError.idInUse("hello")) { try setup.store.inspect(package) }
+        #expect(throws: BlockInstallError.idInUse("hello")) { try setup.store.install(package) }
+
+        #expect(setup.installedPackages().isEmpty)
+        #expect(setup.runtime.blocks.map(\.info.source) == [.development(path: development.path)])
+        #expect(!setup.store.canRemove("hello"), "Remove never touches the development block")
+        let text = try #require(BlockInstallError.idInUse("hello").errorDescription)
+        #expect(text.contains("\"hello\""))
+    }
+
+    @Test func installOfRegisteredIdIsRefused() throws {
+        let setup = Setup()
+        setup.runtime.register(OtherBlock())
+
+        #expect(throws: BlockInstallError.idInUse("other")) { try setup.store.install(try setup.package(id: "other")) }
+        #expect(setup.installedPackages().isEmpty)
+        #expect(setup.runtime.blocks.map(\.id) == ["other"])
+    }
+
+    // MARK: Refused at launch
+
+    /// Puts a `hello` package this app refuses (contract 99) in the
+    /// installed blocks folder, as an older app would have left it.
+    private func refusedHello(_ setup: Setup) throws {
+        try FileManager.default.createDirectory(at: setup.blocksRoot, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: try setup.package(contract: 99),
+                                         to: setup.blocksRoot.appending(path: "hello.topblock"))
+    }
+
+    @Test func refusedPackageCanBeRemoved() throws {
+        let setup = Setup()
+        try refusedHello(setup)
+        let store = setup.store
+        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
+        setup.defaults.set(true, forKey: "hello.loud")
+        let data = setup.dataRoot.appending(path: "hello")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+
+        #expect(setup.runtime.blocks.first is RefusedBlock)
+        #expect(store.canRemove("hello"))
+        try store.remove("hello")
+
+        #expect(setup.installedPackages().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: data.path))
+        #expect(setup.defaults.object(forKey: "hello.loud") == nil)
+        #expect(setup.defaults.object(forKey: "block.hello.installedFrom") == nil)
+        #expect(setup.cleared == ["hello"])
+        #expect(setup.runtime.blocks.isEmpty)
+        #expect(!store.canRemove("hello"))
+    }
+
+    @Test func installReplacesRefusedPackage() throws {
+        let setup = Setup()
+        try refusedHello(setup)
+        let store = setup.store
+        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
+        #expect(setup.runtime.blocks.first is RefusedBlock)
+        #expect(!store.canTurnOn("hello"))
+
+        try store.install(try setup.package(version: "0.4"))
+
+        let block = try #require(setup.block("hello"))
+        #expect(block.manifest.version == "0.4")
+        #expect(setup.runtime.blocks.count == 1)
+        #expect(store.canTurnOn("hello"))
+        #expect(setup.installedPackages() == ["hello.topblock"])
     }
 }
 

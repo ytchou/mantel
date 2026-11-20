@@ -33,6 +33,11 @@ case "$target" in
 	/* | .. | ../* | */../* | */..) echo "error: \"executable\" must be a path inside the package: $target" >&2; exit 1 ;;
 esac
 [ -n "$name" ] || { echo "error: manifest \"name\" is empty" >&2; exit 1; }
+# The name becomes a folder name in the output folder: no path separators,
+# and not hidden or "." / "..".
+case "$name" in
+	*/* | .*) echo "error: manifest \"name\" must not contain \"/\" or start with \".\": $name" >&2; exit 1 ;;
+esac
 
 mkdir -p "$out"
 package="$out/$name.topblock"

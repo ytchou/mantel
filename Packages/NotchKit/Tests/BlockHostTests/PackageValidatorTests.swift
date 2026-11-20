@@ -83,7 +83,8 @@ struct PackageValidatorTests {
     }
 
     @Test func refusesReservedIds() throws {
-        for id in ["shelf", "rename", "demo", "nowplaying", "block", "onboarding"] {
+        // `com`, `apple` and `ns` start common UserDefaults keys, which Remove would clear.
+        for id in ["shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns"] {
             #expect(try refusal(manifest(id: id)) == .reservedID(id), "\(id) is reserved for installed blocks")
             #expect(try refusal(manifest(id: id), source: .development(path: "/tmp/Test.topblock")) == .reservedID(id),
                     "\(id) is reserved for development blocks")
@@ -105,6 +106,52 @@ struct PackageValidatorTests {
             let error = try refusal(manifest(executable: path), writeExecutable: false)
             #expect(error == .executableOutsidePackage(path), "\(path) leaves the package")
         }
+    }
+
+    @Test func refusesSymlinkLeadingOutsidePackage() throws {
+        // The executable is a link to a program outside the package.
+        let linked = try package(manifest(executable: "HelloBlock"), writeExecutable: false)
+        try FileManager.default.createSymbolicLink(at: linked.appending(path: "HelloBlock"),
+                                                   withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
+        #expect(throws: BlockInstallError.executableOutsidePackage("HelloBlock")) {
+            try PackageValidator.load(linked, source: Self.installed)
+        }
+
+        // A folder in the path is a link to a folder outside the package.
+        let throughFolder = try package(manifest(executable: "bin/sh"), writeExecutable: false)
+        try FileManager.default.createSymbolicLink(at: throughFolder.appending(path: "bin"),
+                                                   withDestinationURL: URL(fileURLWithPath: "/bin"))
+        #expect(throws: BlockInstallError.executableOutsidePackage("bin/sh")) {
+            try PackageValidator.load(throughFolder, source: Self.installed)
+        }
+
+        // A link that stays inside the package is fine.
+        let inside = try package(manifest(executable: "Link"), writeExecutable: false)
+        let real = inside.appending(path: "Real")
+        try Data("#!/bin/sh\n".utf8).write(to: real)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: real.path)
+        try FileManager.default.createSymbolicLink(atPath: inside.appending(path: "Link").path, withDestinationPath: "Real")
+        #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
+    }
+
+    @Test func refusesDefaultThatDoesNotMatchType() throws {
+        let stringToggle = manifest(settings: [SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .string("yes"))])
+        #expect(try refusal(stringToggle) == .invalidSetting("loud"))
+
+        let options: [SettingSpec.Option] = [.init(value: "large", title: "Large")]
+        let unknownChoice = manifest(settings: [SettingSpec(key: "size", type: .choice, title: "Size",
+                                                            default: .string("medium"), options: options)])
+        #expect(try refusal(unknownChoice) == .invalidSetting("size"))
+
+        let boolChoice = manifest(settings: [SettingSpec(key: "size", type: .choice, title: "Size",
+                                                         default: .bool(true), options: options)])
+        #expect(try refusal(boolChoice) == .invalidSetting("size"))
+
+        let valid = manifest(settings: [
+            SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .bool(false)),
+            SettingSpec(key: "size", type: .choice, title: "Size", default: .string("large"), options: options),
+        ])
+        #expect(try refusal(valid) == nil)
     }
 
     @Test func refusesMissingOrNonExecutableFile() throws {

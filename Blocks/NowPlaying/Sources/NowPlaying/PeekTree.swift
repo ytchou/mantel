@@ -31,8 +31,8 @@ enum PeekTree {
                     .accessibilityLabel(isMuted ? "Muted" : "Volume \(Int((volume * 100).rounded())) percent")
             )
         }
-        // `NotchStyle.spacing` and `NotchStyle.padding`.
-        return .hstack(spacing: 10, padding: .init(horizontal: 18), children)
+        // `NotchStyle.padding`; the spacing is left out, so the app uses `NotchStyle.spacing`.
+        return .hstack(padding: .init(horizontal: 18), children)
     }
 
     /// A rounded box with a note symbol, where the artwork would be.

@@ -37,9 +37,9 @@ it is, without installing it: `make build`, then
 | `Packages/NotchKit/Sources/DemoBlock` | Demo block (hover, click and drop tester, on with `-demoBlock YES`); the template for new in-process blocks | Import `NotchShell`, any other block |
 | `Packages/NotchKit/Sources/ShelfBlock` | Shelf block (drop, hold, drag out) | Import `NotchShell`, `RenameBlock` |
 | `Packages/NotchKit/Sources/RenameBlock` | Screenshot rename block | Import `NotchShell`, `ShelfBlock` |
-| `Packages/BlockKit` | Separate package: the wire protocol (`BlockWire`, `PROTOCOL.md`), the kit block authors write against (`BlockKit`, `BlockKitTesting`), the `HelloBlock` example (the template for outside blocks) and `Scripts/package-block.sh`; see its `README.md` | Depend on `NotchKit`; import anything but Foundation in `BlockWire` and `BlockKit` |
+| `Packages/BlockKit` | Separate package: the wire protocol (`BlockWire`, `PROTOCOL.md`), the kit block authors write against (`BlockKit`, `BlockKitTesting`), the `HelloBlock` example (the template for outside blocks) and `Scripts/package-block.sh`; see its `README.md` | Depend on `NotchKit`; import anything but Foundation in `BlockWire`, or anything but Foundation, CryptoKit and Dispatch in `BlockKit` |
 | `Blocks/NowPlaying` | Separate package: the now-playing block (track on a volume or track change), run as its own process and bundled in the app | Be linked into the app; depend on `NotchKit` |
-| "Build bundled blocks" build phase (`TopNotch.xcodeproj`) | Builds each block under `Blocks/` and packages it into `Contents/Resources/Blocks/<Name>.topblock`, signed | Be skipped: it always runs |
+| "Build bundled blocks" build phase (`TopNotch.xcodeproj`) | Builds `Blocks/NowPlaying` and packages it into `Contents/Resources/Blocks/NowPlaying.topblock`, signed | Be skipped: it always runs |
 | `Helpers/NowPlayingHelper.m` | Library loaded into `/usr/bin/perl` to read macOS Now Playing; built into the app by the "Build now-playing helper" phase | Be linked into the app or the package |
 | `Packages/NotchKit/Sources/PlatformServices` | Menu bar item, settings window (including the Blocks page: install, update, remove through `BlockInstalling`), onboarding, launch at login | Import `NotchShell`, `BlockHost`, any block |
 | `spikes/` | Throwaway experiments | Be imported by the app or the package |

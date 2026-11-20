@@ -67,6 +67,69 @@ struct RestartTests {
         #expect(rig.block.health == .restarting(count: 1))
     }
 
+    @Test func restartReplaysEveryPlayer() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        rig.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "Song"))
+        rig.runtime.publish(NowPlayingChanged(player: "Chrome", state: .paused, title: "Video"))
+        await waitUntil { rig.process.events.count == 2 }
+
+        rig.process.close()
+        await waitUntil { rig.launcher.processes.count == 2 }
+        try await rig.process.start()
+        await waitUntil { rig.process.events.count == 2 }
+
+        // Spotify still plays: its event is replayed too, in arrival order.
+        #expect(rig.process.events.map(\.payload) == [
+            .nowPlaying(NowPlaying(player: "Spotify", state: .playing, title: "Song")),
+            .nowPlaying(NowPlaying(player: "Chrome", state: .paused, title: "Video")),
+        ])
+        #expect(rig.process.events.allSatisfy { $0.replay })
+    }
+
+    @Test func replayIsBoundedAndKeepsPlayersThatPlay() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        rig.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "Song"))
+        let others = (1...RemoteBlock.replayLimit + 1).map { "Player \($0)" }
+        for player in others {
+            rig.runtime.publish(NowPlayingChanged(player: player, state: .paused))
+        }
+        await waitUntil { rig.process.events.count == others.count + 1 }
+
+        rig.process.close()
+        await waitUntil { rig.launcher.processes.count == 2 }
+        try await rig.process.start()
+        await waitUntil { rig.process.events.count == RemoteBlock.replayLimit }
+        await settle()
+
+        // The two oldest paused players are forgotten; the one that plays is kept.
+        let players = rig.process.events.compactMap { event -> String? in
+            if case let .nowPlaying(value) = event.payload { value.player } else { nil }
+        }
+        #expect(players == ["Spotify"] + others.dropFirst(2))
+    }
+
+    @Test func aSlowStartIsNotAHang() async throws {
+        let rig = Rig()
+        // No hello yet: ten seconds are allowed before the first welcome.
+        await rig.beat(9)
+        #expect(rig.launcher.processes.count == 1)
+        #expect(rig.block.health == .ok)
+
+        await rig.beat()
+        await waitUntil { rig.launcher.processes.count == 2 }
+        #expect(rig.block.health == .restarting(count: 1))
+
+        // After welcome, the 3-second limit applies, counted from the welcome.
+        try await rig.process.start()
+        await rig.beat(2)
+        #expect(rig.launcher.processes.count == 2)
+        await rig.beat()
+        await waitUntil { rig.launcher.processes.count == 3 }
+        #expect(rig.launcher.processes.count == 3)
+    }
+
     @Test func turnOffCallsInjectedClosureAndStoresReason() async throws {
         let rig = Rig()
         for count in 1...3 {
@@ -147,6 +210,61 @@ struct RestartTests {
         #expect(runtime.blocks.count == 2)
         other.show(.standard)
         #expect(runtime.state.owner == "other")
+    }
+
+    @Test func stopDoesNotWaitForTheProcess() async throws {
+        let block = try hungFixture()
+        await waitLong { block.isWelcomed && block.processID != nil }
+        let pid = try #require(block.processID)
+        // Let the fixture take the welcome and block its main thread.
+        try await Task.sleep(for: .milliseconds(200))
+
+        let started = ContinuousClock.now
+        block.stop()
+        #expect(ContinuousClock.now - started < .milliseconds(300), "stop returns before the process exits")
+        #expect(block.processID == nil)
+        await waitLong { !processExists(pid) }
+        #expect(!processExists(pid), "ended off the main thread")
+    }
+
+    @Test func stopAllWaitsOnceForEveryBlock() async throws {
+        let blocks = try (0..<3).map { _ in try hungFixture() }
+        await waitLong { blocks.allSatisfy { $0.isWelcomed && $0.processID != nil } }
+        let pids = blocks.compactMap(\.processID)
+        #expect(pids.count == 3)
+        try await Task.sleep(for: .milliseconds(200))
+
+        let started = ContinuousClock.now
+        RemoteBlock.stopAll(blocks)
+        let elapsed = ContinuousClock.now - started
+
+        // Each hung fixture needs SIGTERM after 0.5 s; one after another that
+        // would be 1.5 s or more.
+        #expect(elapsed < .milliseconds(1200), "waited \(elapsed)")
+        #expect(pids.allSatisfy { !processExists($0) })
+        #expect(blocks.allSatisfy { $0.processID == nil })
+    }
+
+    /// A fixture block, registered in a runtime of its own, that blocks its
+    /// main thread once welcomed: it exits only on a signal. Its heartbeat
+    /// clock never moves, so no hang is seen.
+    private func hungFixture() throws -> RemoteBlock {
+        let package = try Fixture.package()
+        let runtime = NotchRuntime()
+        let defaults = testDefaults()
+        defaults.set("hang", forKey: "fixture.command")
+        let block = RemoteBlock(
+            manifest: Fixture.manifest,
+            packageURL: package,
+            source: .development(path: package.path),
+            dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            owner: { runtime.state.owner },
+            launcher: { try BlockProcess.spawn(executable: $0, generation: $1) },
+            defaults: defaults,
+            clock: BlockClock(ManualClock())
+        )
+        runtime.register(block)
+        return block
     }
 
     /// Like `waitUntil`, for real processes: up to about five seconds.

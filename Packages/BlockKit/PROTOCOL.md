@@ -52,7 +52,7 @@ for Swift authors.
 
 | Message | Fields | Meaning |
 |---|---|---|
-| `hello` | `contract` int, `id` string, `version` string | The first frame. Sent before anything else. |
+| `hello` | `contract` int, `id` string, `version` string | The first frame. Sent before anything else. `id` must be the manifest's `id`. |
 | `pong` | `seq` int | The answer to `ping`, with the same `seq`. |
 | `present` | `priority`, `peek`?, `wing`?, `expanded`?, `opensAt`, `seconds`?, `dismissIfNotShown` bool | Ask for the notch. At least one slot is set. |
 | `update` | `peek`?, `wing`?, `expanded`? (trees, no sizes) | Replace the trees of the current presentation. Sizes stay as presented. |
@@ -63,8 +63,12 @@ for Swift authors.
 
 - `priority` is `ambient`, `standard` or `interactive`.
 - `opensAt` is `peek` or `expanded`.
-- `seconds` dismisses the presentation after that time. Without it, the
-  presentation stays until `dismiss`.
+- `seconds` dismisses the presentation after that time, at most 3600. Without
+  it, or when it is not a positive number, the presentation stays until
+  `dismiss`.
+- The app ignores `present`, `update`, `actions` and `dismiss` before `welcome`.
+- A `hello` whose `id` is not the manifest's `id` is a failure. A different
+  `version` is only logged.
 - With `dismissIfNotShown`, the app withdraws the presentation at once if it
   did not win the notch.
 - A slot is `{width, height, root}`. `root` is a view node. The app clamps the
@@ -87,8 +91,11 @@ for Swift authors.
 - `settings` holds every declared setting's current value, keyed without the
   block id. A toggle is `true` or `false`. A choice is a string.
 - `dataFolder` is a folder the block may write to. Remove deletes it.
-- A block must answer `ping` from its main thread. No `pong` for 3 seconds is
-  a hang. The app then stops the block and counts a failure.
+- A block must answer `ping` from its main thread. No `pong` for 3 seconds
+  after `welcome` is a hang; before `welcome` the block has 10 seconds to say
+  `hello`. The app then stops the block and counts a failure.
+- A block must keep reading its socket. A frame the app cannot write within
+  0.5 s, or more than 16 MB of frames the app has not read yet, is a failure.
 - `owner` with `owns: false` is the block's only signal that its time ran out
   or that another block took the notch.
 - After `quit`, the app sends SIGTERM, then SIGKILL after 1 second.
@@ -108,7 +115,9 @@ An event payload is `{"name": <event name>, "value": <object>}`.
 
 - The app sends only the events the manifest lists.
 - When a block starts, the app resends the latest event of each kind with
-  `replay: true`. The block updates its state and does not present.
+  `replay: true`, in the order they arrived; for `nowPlaying`, the latest of
+  each player. The block updates its state and does not present. Events that
+  happen while the block starts are sent after the replay with `replay: false`.
 
 ## View nodes
 
@@ -139,8 +148,12 @@ node may carry an accessibility label.
 
 - An image id is the first 16 hex characters of the SHA-256 of its bytes.
 - A block sends `asset` before the first `present` or `update` that shows it.
-- The app keeps the 8 images per block most recently sent or shown. A block
-  sends an image again when it is no longer among those 8.
+- The app keeps the 8 images per block most recently sent or shown. After each
+  `present` or `update`, it marks the images the trees refer to as used, in
+  tree order, and only then lets go of the oldest beyond 8. A block sends an
+  image again when it is no longer among those 8.
+- An `asset` frame is limited like any frame, so an image over about 3 MB
+  cannot be sent. The kit refuses it with a log line.
 
 ## Manifest
 

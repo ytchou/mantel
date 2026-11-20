@@ -24,10 +24,11 @@ struct Hello: Block {
         }
     }
 
-    /// Values from `NotchStyle` and `NowPlayingPeekView`.
+    /// Values from `NotchStyle` and the now-playing block's `PeekTree`
+    /// (`Blocks/NowPlaying`). The row spacing is left to the app's default.
     static func peek(hovers: Int) -> ViewNode {
         let volume = 0.5
-        return .hstack(spacing: 10, padding: .init(horizontal: 18), [
+        return .hstack(padding: .init(horizontal: 18), [
             .box(width: 36, height: 36, cornerRadius: 8, fillOpacity: 0.12, .symbol("music.note", size: 15, opacity: 0.8)),
             .vstack(spacing: 2, alignment: .start, [
                 .text("Hello from a block", style: .title),

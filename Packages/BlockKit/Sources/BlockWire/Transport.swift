@@ -21,23 +21,32 @@ public extension Transport {
     }
 
     /// Received frames decoded as `M`. Throws on the first frame that does
-    /// not decode; a bad frame is never skipped.
+    /// not decode; a bad frame is never skipped. Frames are read and decoded
+    /// only as the consumer asks for them, so this adds no buffer of its own.
     func envelopes<M: WireMessage>(of type: M.Type) -> AsyncThrowingStream<Envelope<M>, any Error> {
-        let frames = self.frames
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    for try await body in frames {
-                        continuation.yield(try Framing.decode(body, as: M.self))
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
+        let frames = IteratorBox(frames.makeAsyncIterator())
+        return AsyncThrowingStream {
+            guard let body = try await frames.next() else { return nil }
+            return try Framing.decode(body, as: M.self)
         }
     }
+}
+
+/// Why a transport ended, other than a bad frame.
+public enum TransportError: Error, Equatable, Sendable {
+    /// More than `limit` bytes of frames were waiting to be read: the other
+    /// side sends faster than this side reads.
+    case overflow(limit: Int)
+}
+
+/// Holds the iterator of a stream read on demand. One consumer, as `frames` has.
+final class IteratorBox<Base: AsyncIteratorProtocol>: @unchecked Sendable {
+    // @unchecked: only the single consumer calls `next`, one call at a time.
+    private var base: Base
+
+    init(_ base: Base) { self.base = base }
+
+    func next() async throws -> Base.Element? { try await base.next() }
 }
 
 // MARK: - Socket
@@ -46,29 +55,58 @@ public extension Transport {
 /// `socketpair`. A block process uses fd 3.
 ///
 /// A dedicated thread does the blocking reads, so a busy main thread never
-/// delays a read.
+/// delays a read. Frames read and not yet consumed are limited to
+/// `maxQueuedBytes`; past that the stream ends with `TransportError.overflow`.
 public final class SocketTransport: Transport, @unchecked Sendable {
-    // @unchecked: `fd` is immutable; `lock` guards `closed` and is held for
-    // every write (so frames never interleave) and for the final close.
+    // @unchecked: `fd` is immutable. `state` guards `closed`; it is never
+    // held across a write, so `close` can shut the socket down while a write
+    // is stuck. `writing` is held for every write (so frames never
+    // interleave) and while the reader thread closes the fd.
     private let fd: Int32
-    private let lock = NSLock()
+    private let state = NSLock()
+    private let writing = NSLock()
     private var closed = false
     public let frames: AsyncThrowingStream<Data, any Error>
 
+    /// The default limit on frames read and not yet consumed.
+    public static let defaultMaxQueuedBytes = 4 * Contract.maxFrameBytes
+    /// Counted for each frame on top of its body, so many tiny frames also fill the limit.
+    static let frameCost = 64
+
     /// Takes ownership of `fd` and starts reading at once.
-    public init(fd: Int32) {
+    /// - Parameters:
+    ///   - sendTimeout: how long one write may wait for the other side to
+    ///     read. A send that times out shuts the socket down and throws
+    ///     `FramingError.closed`. Nil waits as long as it takes.
+    ///   - maxQueuedBytes: frames read and not yet consumed, at most.
+    public init(fd: Int32, sendTimeout: Duration? = nil, maxQueuedBytes: Int = SocketTransport.defaultMaxQueuedBytes) {
         self.fd = fd
         var one: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        if let sendTimeout {
+            let (seconds, attoseconds) = sendTimeout.components
+            var limit = timeval(tv_sec: Int(seconds), tv_usec: Int32(attoseconds / 1_000_000_000_000))
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+        }
+        let backlog = Backlog()
         let (stream, continuation) = AsyncThrowingStream<Data, any Error>.makeStream()
-        frames = stream
+        let queued = IteratorBox(stream.makeAsyncIterator())
+        frames = AsyncThrowingStream {
+            guard let body = try await queued.next() else { return nil }
+            backlog.remove(body.count + Self.frameCost)
+            return body
+        }
         let thread = Thread { [self] in
-            readLoop(into: continuation)
-            // The fd is closed here, under the lock, so a later `close` or
-            // `send` never touches a number the system may have reused.
-            lock.withLock {
-                closed = true
-                Darwin.close(fd)
+            readLoop(into: continuation, backlog: backlog, limit: maxQueuedBytes)
+            // Wake a write that may be stuck, so the fd can be closed.
+            state.withLock { if !closed { shutdown(fd, SHUT_RDWR) } }
+            // The fd is closed here, with no write in progress, so a later
+            // `close` or `send` never touches a number the system may have reused.
+            writing.withLock {
+                state.withLock {
+                    closed = true
+                    Darwin.close(fd)
+                }
             }
         }
         thread.name = "BlockWire.SocketTransport"
@@ -78,33 +116,50 @@ public final class SocketTransport: Transport, @unchecked Sendable {
 
     public func send(_ body: Data) throws(FramingError) {
         let frame = try Framing.frame(body)
-        let ok = lock.withLock { () -> Bool in
-            if closed { return false }
-            return frame.withUnsafeBytes { raw -> Bool in
+        let ok = writing.withLock { () -> Bool in
+            if state.withLock({ closed }) { return false }
+            let ok = frame.withUnsafeBytes { raw -> Bool in
                 guard let base = raw.baseAddress else { return true }
                 var offset = 0
                 while offset < raw.count {
                     let n = write(fd, base + offset, raw.count - offset)
                     if n < 0, errno == EINTR { continue }
+                    // n < 0 with EAGAIN is the send timeout.
                     if n <= 0 { return false }
                     offset += n
                 }
                 return true
             }
+            // A frame may be half written: nothing more can follow it.
+            if !ok { close() }
+            return ok
         }
         if !ok { throw .closed }
     }
 
-    /// Shuts the socket down. The reader thread sees the end, finishes
-    /// `frames` and closes the fd.
+    /// Shuts the socket down, even while a write is stuck. The reader thread
+    /// sees the end, finishes `frames` and closes the fd.
     public func close() {
-        lock.withLock {
+        state.withLock {
             guard !closed else { return }
             shutdown(fd, SHUT_RDWR)
         }
     }
 
-    private func readLoop(into continuation: AsyncThrowingStream<Data, any Error>.Continuation) {
+    /// Bytes of frames read and not yet consumed.
+    private final class Backlog: @unchecked Sendable {
+        // @unchecked: `lock` guards `bytes`.
+        private let lock = NSLock()
+        private var bytes = 0
+
+        /// Adds `count` and returns the new total.
+        func add(_ count: Int) -> Int { lock.withLock { bytes += count; return bytes } }
+        func remove(_ count: Int) { lock.withLock { bytes -= count } }
+    }
+
+    private func readLoop(
+        into continuation: AsyncThrowingStream<Data, any Error>.Continuation, backlog: Backlog, limit: Int
+    ) {
         while true {
             let header: Data
             switch readExact(Framing.headerSize) {
@@ -123,7 +178,12 @@ public final class SocketTransport: Transport, @unchecked Sendable {
                 return
             }
             switch readExact(length) {
-            case let .data(body): continuation.yield(body)
+            case let .data(body):
+                if backlog.add(body.count + Self.frameCost) > limit {
+                    continuation.finish(throwing: TransportError.overflow(limit: limit))
+                    return
+                }
+                continuation.yield(body)
             case let .end(got):
                 continuation.finish(throwing: FramingError.truncated(expected: length, got: got))
                 return

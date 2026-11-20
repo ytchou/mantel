@@ -146,18 +146,22 @@ enum ScriptedNowPlaying {
     /// How long its peek stays; the real block's `TrackBlock.seconds`.
     static let duration: Duration = .seconds(3)
 
-    static let manifest = Manifest(
-        id: "nowplaying",
-        name: "Now Playing",
-        version: "1.0.0",
-        executable: "NowPlaying",
-        symbol: "music.note",
-        events: ["nowPlaying", "outputVolume"],
-        settings: [
-            SettingSpec(key: "showOnVolumeChange", type: .toggle, title: "Show when the volume changes", default: .bool(true)),
-            SettingSpec(key: "showOnTrackChange", type: .toggle, title: "Show when a new track starts", default: .bool(true)),
-        ]
-    )
+    /// The real block's manifest, read from `Blocks/NowPlaying/manifest.json`,
+    /// so these tests follow it when it changes.
+    static let manifest: Manifest = {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // BothBlocksTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // NotchKit
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository root
+            .appending(path: "Blocks/NowPlaying/manifest.json")
+        do {
+            return try Manifest.decode(Data(contentsOf: url))
+        } catch {
+            fatalError("Could not read the now-playing manifest at \(url.path): \(error)")
+        }
+    }()
 
     private static let handledPrefix = "handled-"
 

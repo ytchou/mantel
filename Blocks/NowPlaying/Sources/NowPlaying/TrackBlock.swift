@@ -5,6 +5,7 @@ import Foundation
 /// track starts: the track, the artist, the artwork when there is one, and
 /// the volume. Runs in its own process; the app sends it `nowPlaying` and
 /// `outputVolume` events and draws the peek it sends back.
+@main
 struct TrackBlock: Block {
     /// Setting keys, as in `manifest.json`. The app stores them as `nowplaying.<key>`.
     nonisolated static let showOnVolumeChange = "showOnVolumeChange"
@@ -105,11 +106,3 @@ final class Session {
         return node
     }
 }
-
-// `main.swift` cannot hold `@main`; start the run loop the way `Block.main` does.
-let runner = Runner(block: TrackBlock(), transport: SocketTransport(fd: 3))
-Task {
-    await runner.run()
-    exit(0)
-}
-dispatchMain()

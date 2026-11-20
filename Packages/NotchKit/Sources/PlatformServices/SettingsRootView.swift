@@ -81,26 +81,29 @@ struct BlockEntry: Identifiable {
     let health: BlockHealth
     /// True for a block the user installed, which can be updated and removed.
     let isRemovable: Bool
+    /// False for a block that cannot start whatever the user does, such as an
+    /// installed package refused at launch.
+    let canTurnOn: Bool
     /// Shown as "~" at the start of a path.
     let home: String
 
     init(id: BlockID, title: String, info: BlockInfo, health: BlockHealth = .ok, isRemovable: Bool = false,
-         home: String = NSHomeDirectory()) {
+         canTurnOn: Bool = true, home: String = NSHomeDirectory()) {
         self.id = id
         self.title = title
         self.info = info
         self.health = health
         self.isRemovable = isRemovable
+        self.canTurnOn = canTurnOn
         self.home = home
     }
 
     /// Reads the block's state now. Call it inside `body` so changes redraw.
     @MainActor
     init(block: any NotchBlock, installer: (any BlockInstalling)?, home: String = NSHomeDirectory()) {
-        let info = block.info
-        var removable = false
-        if case .installed = info.source, let installer { removable = installer.canRemove(block.id) }
-        self.init(id: block.id, title: block.title, info: info, health: block.health, isRemovable: removable, home: home)
+        self.init(id: block.id, title: block.title, info: block.info, health: block.health,
+                  isRemovable: installer?.canRemove(block.id) ?? false,
+                  canTurnOn: installer?.canTurnOn(block.id) ?? true, home: home)
     }
 
     /// Where the block comes from, its version, the trigger, the permissions
@@ -123,14 +126,15 @@ struct BlockEntry: Identifiable {
         return parts.joined(separator: " · ")
     }
 
-    /// Why the app turned the block off after repeated failures, or nil.
+    /// Why the app turned the block off, or nil.
     var turnedOffReason: String? {
         if case let .turnedOff(reason) = health { return reason }
         return nil
     }
 
-    /// A "Turn On" button is shown while the app has turned the block off.
-    var offersTurnOn: Bool { turnedOffReason != nil }
+    /// A "Turn On" button is shown while the app has turned the block off,
+    /// unless turning it on cannot start it.
+    var offersTurnOn: Bool { turnedOffReason != nil && canTurnOn }
 
     /// `path` with the home folder written as "~".
     private func abbreviated(_ path: String) -> String {
@@ -171,13 +175,15 @@ private struct BlocksPane: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            Button("Turn On") { settings.setEnabled(entry.id, true, in: runtime) }
+                            if entry.offersTurnOn {
+                                Button("Turn On") { settings.setEnabled(entry.id, true, in: runtime) }
+                            }
                         }
                     }
                     if entry.isRemovable, installer != nil {
                         HStack {
                             Spacer()
-                            Button("Update\u{2026}") { choosePackage() }
+                            Button("Update\u{2026}") { choosePackage(updating: entry.id) }
                             Button("Remove", role: .destructive) { removing = entry }
                         }
                     }
@@ -252,8 +258,9 @@ private struct BlocksPane: View {
         }
     }
 
-    /// Asks for a `.topblock` folder, then shows what it contains, or why it is refused.
-    private func choosePackage() {
+    /// Asks for a `.topblock` folder, then shows what it contains, or why it
+    /// is refused. With `id`, from a row's "Update…", only that block's package is accepted.
+    private func choosePackage(updating id: BlockID? = nil) {
         guard let installer else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose a Block"
@@ -264,7 +271,9 @@ private struct BlocksPane: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            pending = PendingInstall(url: url, summary: try installer.inspect(url))
+            let summary = try installer.inspect(url)
+            if let refusal = summary.refusal(updating: id) { throw refusal }
+            pending = PendingInstall(url: url, summary: summary)
         } catch {
             failure = Failure(title: "The block cannot be installed", message: error.localizedDescription)
         }
@@ -284,6 +293,15 @@ private struct BlocksPane: View {
         } catch {
             failure = Failure(title: "The block was not fully removed", message: error.localizedDescription)
         }
+    }
+}
+
+extension BlockPackageSummary {
+    /// Why this package cannot update the block `id`, or nil when it can.
+    /// Nil `id`, from "Install Block…", accepts any package.
+    func refusal(updating id: BlockID?) -> BlockInstallError? {
+        guard let id, id != self.id else { return nil }
+        return .differentBlock(expected: id.rawValue, found: self.id.rawValue)
     }
 }
 

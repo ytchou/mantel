@@ -41,7 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A block installed from the Blocks page joins like one found at launch.
         register: { [settings, runtime] block in runtime.register(block, enabled: settings.isEnabled(block.id)) },
         unregister: { [runtime] id in runtime.unregister(id) },
-        clearKeys: { [settings] id in settings.clear(id) }
+        clearKeys: { [settings] id in settings.clear(id) },
+        // A package whose id the runtime already has is refused, as the runtime would drop it.
+        isRegistered: { [runtime] id in runtime.blocks.contains { $0.id == id } }
     )
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
@@ -55,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
         // The bundled blocks (now-playing), the installed blocks, then, with
         // `-devBlock <path to .topblock>`, one block run from where it is.
-        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock")) as [any NotchBlock]
+        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         // `-demoBlock YES` adds the demo block, to try hover, click and drop.
         if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
         for block in blocks {

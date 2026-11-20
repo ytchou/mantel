@@ -208,7 +208,7 @@ private final class ActionBlock: NotchBlock {
     defaults.set(true, forKey: "shelf.keep")
     defaults.set(false, forKey: "block.shelf.enabled")
     defaults.set(true, forKey: "onboarding.completed")
-    let settings = BlockSettings(defaults: defaults)
+    let settings = BlockSettings(defaults: defaults, domain: name)
 
     settings.clear("hello")
 
@@ -220,6 +220,18 @@ private final class ActionBlock: NotchBlock {
     #expect(defaults.object(forKey: "block.shelf.enabled") as? Bool == false)
     #expect(defaults.bool(forKey: "onboarding.completed"))
     #expect(settings.isEnabled("hello"), "a block with no stored value is on again")
+}
+
+@MainActor
+@Test func clearLooksOnlyAtTheAppsOwnKeys() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    defaults.set(true, forKey: "hello.loud")
+    // Seen through `dictionaryRepresentation()`, but not stored by the app.
+    defaults.register(defaults: ["hello.registered": true])
+    let settings = BlockSettings(defaults: defaults, domain: name)
+
+    #expect(settings.storedKeys(of: "hello") == ["hello.loud"])
 }
 
 /// A block with chosen info and health, as a stand-in would report them.
@@ -238,15 +250,22 @@ private final class InfoBlock: NotchBlock {
     func activate(_ context: any BlockContext) {}
 }
 
-/// Answers `canRemove` with yes for every id, so the entry's own rule is what is checked.
+/// Answers `canRemove` and `canTurnOn` from the ids it is given.
 @MainActor
 private final class FakeInstaller: BlockInstalling {
+    let removable: Set<BlockID>
+    let cannotRun: Set<BlockID>
+    init(removable: Set<BlockID> = [], cannotRun: Set<BlockID> = []) {
+        self.removable = removable
+        self.cannotRun = cannotRun
+    }
     func inspect(_ url: URL) throws -> BlockPackageSummary {
         BlockPackageSummary(id: "x", name: "X", version: "1", contract: 1, sourcePath: url.path)
     }
     func install(_ url: URL) throws {}
     func remove(_ id: BlockID) throws {}
-    func canRemove(_ id: BlockID) -> Bool { true }
+    func canRemove(_ id: BlockID) -> Bool { removable.contains(id) }
+    func canTurnOn(_ id: BlockID) -> Bool { !cannotRun.contains(id) }
 }
 
 @MainActor
@@ -286,6 +305,17 @@ private final class FakeInstaller: BlockInstalling {
 }
 
 @MainActor
+@Test func refusedPackageShowsReasonWithoutTurnOn() {
+    let block = InfoBlock("old", info: BlockInfo(source: .installed(from: "/tmp/Old.topblock")),
+                          health: .turnedOff(reason: "Built for contract 99."))
+    let installer = FakeInstaller(removable: ["old"], cannotRun: ["old"])
+    let entry = BlockEntry(block: block, installer: installer)
+    #expect(entry.turnedOffReason == "Built for contract 99.")
+    #expect(!entry.offersTurnOn, "turning it on cannot start it")
+    #expect(entry.isRemovable)
+}
+
+@MainActor
 @Test func restartCountIsShown() {
     let block = InfoBlock("hello", info: BlockInfo(trigger: "Pointer hover"), health: .restarting(count: 1))
     #expect(BlockEntry(block: block, installer: nil).detail == "Built in · Pointer hover · Restarted once")
@@ -295,7 +325,8 @@ private final class FakeInstaller: BlockInstalling {
 
 @MainActor
 @Test func removeOfferedOnlyWhenRemovable() {
-    let installer = FakeInstaller()
+    // The installer alone decides.
+    let installer = FakeInstaller(removable: ["hello"])
     let installed = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.topblock")))
     let bundled = InfoBlock("nowplaying", info: BlockInfo(source: .bundled))
     let builtIn = InfoBlock("shelf", info: BlockInfo())
@@ -318,6 +349,16 @@ private final class FakeInstaller: BlockInstalling {
     #expect(SettingsPane.block("hello").remaining(in: ids()) == .blocks)
     #expect(SettingsPane.block("shelf").remaining(in: ids()) == .block("shelf"))
     #expect(SettingsPane.general.remaining(in: ids()) == .general)
+}
+
+@Test func updateRefusesPackageOfAnotherBlock() throws {
+    let other = BlockPackageSummary(id: "other", name: "Other", version: "1.0", contract: 1, sourcePath: "/tmp/Other.topblock")
+
+    #expect(other.refusal(updating: "hello") == .differentBlock(expected: "hello", found: "other"))
+    #expect(other.refusal(updating: "other") == nil)
+    #expect(other.refusal(updating: nil) == nil, "Install Block… takes any id")
+    let text = try #require(BlockInstallError.differentBlock(expected: "hello", found: "other").errorDescription)
+    #expect(text.contains("\"hello\"") && text.contains("\"other\""))
 }
 
 @Test func summaryMarksNewEvents() {

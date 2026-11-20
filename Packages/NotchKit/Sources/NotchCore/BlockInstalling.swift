@@ -19,6 +19,15 @@ public protocol BlockInstalling: AnyObject {
 
     /// True only for blocks the user installed.
     func canRemove(_ id: BlockID) -> Bool
+
+    /// False for a block that cannot start whatever the user does, such as an
+    /// installed package refused at launch; the Blocks page then offers no
+    /// "Turn On". True by default.
+    func canTurnOn(_ id: BlockID) -> Bool
+}
+
+public extension BlockInstalling {
+    func canTurnOn(_ id: BlockID) -> Bool { true }
 }
 
 /// What a package says about itself, shown before the user confirms an install.
@@ -84,6 +93,10 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case notRemovable(String)
     /// Copying or deleting files failed.
     case copyFailed(String)
+    /// Another block with this id is already running, such as the development block.
+    case idInUse(String)
+    /// The package chosen to update one block is a different block.
+    case differentBlock(expected: String, found: String)
 
     public var errorDescription: String? {
         switch self {
@@ -110,6 +123,10 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "The block \"\(id)\" comes with TopNotch and cannot be removed. Turn it off on the Blocks page instead."
         case let .copyFailed(detail):
             return "TopNotch could not copy or delete the block's files (\(detail)). Check that you have free disk space and access to the folder, then try again."
+        case let .idInUse(id):
+            return "A block with the id \"\(id)\" is already running in TopNotch, for example as the development block. Quit TopNotch and open it without that block, or ask the block's author to choose a different id."
+        case let .differentBlock(expected, found):
+            return "This package is the block \"\(found)\", not \"\(expected)\", so it cannot update \"\(expected)\". Choose the package of \"\(expected)\", or use Install Block\u{2026} to add \"\(found)\"."
         }
     }
 }

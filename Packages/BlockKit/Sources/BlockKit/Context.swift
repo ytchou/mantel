@@ -91,9 +91,14 @@ public final class Context {
     // MARK: The view
 
     /// An `image` node for these bytes (PNG or JPEG). The bytes are sent to
-    /// the app the first time a tree that shows them is presented.
+    /// the app the first time a tree that shows them is presented. Bytes too
+    /// large for one frame (about 3 MB) are refused with a log line, and the
+    /// app draws a placeholder.
     public func image(_ bytes: Data, size: Double, cornerRadius: Double = 0) -> ViewNode {
-        .image(asset: assets.register(bytes), size: size, cornerRadius: cornerRadius)
+        if !Assets.fitsInFrame(bytes) {
+            log("image refused: \(bytes.count) bytes is too large to send; the app shows a placeholder")
+        }
+        return .image(asset: assets.register(bytes), size: size, cornerRadius: cornerRadius)
     }
 
     /// Asks for the notch. `seconds` dismisses the presentation after that
@@ -136,9 +141,22 @@ public final class Context {
 
     // MARK: Runner side
 
-    func send(_ message: BlockToHost) {
-        // A closed transport means the app is gone; the runner is ending.
-        try? transport.send(message, generation: generation)
+    /// Sends one message. False when it was not sent: too large (said in a
+    /// log line), or the transport is closed, which means the app is gone
+    /// and the runner is ending.
+    @discardableResult
+    func send(_ message: BlockToHost) -> Bool {
+        do {
+            try transport.send(message, generation: generation)
+            return true
+        } catch let FramingError.tooLarge(length, limit) {
+            // A short line: never too large itself.
+            try? transport.send(BlockToHost.log(text: "message refused: \(length) bytes is over the \(limit)-byte frame limit"),
+                                generation: generation)
+            return false
+        } catch {
+            return false
+        }
     }
 
     /// A tree over the node limit is refused here, with a log line, so the
@@ -152,8 +170,9 @@ public final class Context {
                 return false
             }
         }
-        for asset in assets.take(for: trees) {
-            send(.asset(id: asset.id, bytes: asset.bytes))
+        let missing = assets.take(for: trees) { id, bytes in send(.asset(id: id, bytes: bytes)) }
+        for id in missing {
+            log("image \(id) has no bytes to send; make its node with image(_:size:) again")
         }
         return true
     }

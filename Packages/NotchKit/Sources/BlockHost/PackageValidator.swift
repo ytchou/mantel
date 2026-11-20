@@ -6,9 +6,17 @@ import NotchCore
 /// refusal is one `BlockInstallError` case whose text tells the owner what
 /// to do next.
 enum PackageValidator {
-    /// Ids that belong to blocks built into the app, and the `block` settings
-    /// prefix. Only a bundled package may use one (now-playing ships that way).
-    static let reservedIDs: Set<String> = ["shelf", "rename", "demo", "nowplaying", "block", "onboarding"]
+    /// Ids that belong to blocks built into the app, the app's own key
+    /// prefixes (`block`, `onboarding`), and prefixes of common UserDefaults
+    /// keys (`com`, `apple`, `ns`) that Remove, which clears `<id>.*`, must
+    /// not touch. Only a bundled package may use one (now-playing ships that way).
+    // Hand-kept: a new built-in block or app key prefix must be added here by
+    // hand. Fine while the built-in blocks are a short list fixed at compile
+    // time; if they grow or become dynamic, build this set from the built-in
+    // blocks' ids plus the fixed prefixes, in one place the app also reads.
+    static let reservedIDs: Set<String> = [
+        "shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns",
+    ]
 
     /// Reads `manifest.json` in `package` and checks it. Returns the manifest
     /// when the package may run.
@@ -39,7 +47,9 @@ enum PackageValidator {
         try checkSettings(manifest.settings)
     }
 
-    private static func checkID(_ id: String, source: BlockSource) throws(BlockInstallError) {
+    /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
+    /// source is not bundled.
+    static func checkID(_ id: String, source: BlockSource) throws(BlockInstallError) {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
         guard !id.isEmpty, id.allSatisfy(allowed.contains) else { throw .invalidID(id) }
         switch source {
@@ -51,11 +61,19 @@ enum PackageValidator {
     }
 
     private static func checkExecutable(_ path: String, package: URL) throws(BlockInstallError) {
-        let root = package.standardizedFileURL.path
-        let resolved = package.appending(path: path).standardizedFileURL.path
+        func isInside(_ child: URL, _ parent: URL) -> Bool {
+            let root = parent.path
+            return child.path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        }
+        let executable = package.appending(path: path)
+        let resolved = executable.standardizedFileURL.path
         // `appending(path:)` treats a leading "/" as relative, so an absolute
-        // path is refused on its own.
-        guard !path.hasPrefix("/"), resolved.hasPrefix(root.hasSuffix("/") ? root : root + "/") else {
+        // path is refused on its own. The path is checked as written, then
+        // with symbolic links followed, so a link cannot lead outside.
+        guard !path.hasPrefix("/"),
+              isInside(executable.standardizedFileURL, package.standardizedFileURL),
+              isInside(executable.resolvingSymlinksInPath(), package.resolvingSymlinksInPath())
+        else {
             throw .executableOutsidePackage(path)
         }
         var isDirectory: ObjCBool = false
@@ -73,9 +91,13 @@ enum PackageValidator {
             guard seen.insert(setting.key).inserted else { throw .invalidSetting(setting.key) }
             switch setting.type {
             case .toggle:
-                break
+                // The form shows a toggle's default as on or off, so it must be a bool.
+                if let value = setting.default, value.bool == nil { throw .invalidSetting(setting.key) }
             case .choice:
-                if setting.options?.isEmpty ?? true { throw .invalidSetting(setting.key) }
+                guard let options = setting.options, !options.isEmpty else { throw .invalidSetting(setting.key) }
+                if let value = setting.default, !options.contains(where: { $0.value == value.string }) {
+                    throw .invalidSetting(setting.key)
+                }
             case .note:
                 if setting.title.isEmpty { throw .invalidSetting(setting.key) }
             }

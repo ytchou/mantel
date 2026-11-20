@@ -60,10 +60,12 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var launchedAt: ContinuousClock.Instant?
     /// True once the current process has said a valid hello and was welcomed.
     @ObservationIgnored private(set) var isWelcomed = false
-    /// Events for the current process that arrived before `welcome`, in order.
-    @ObservationIgnored private var pending: [EventPayload] = []
-    /// The latest event of each kind, with the order it arrived in, for replay.
-    @ObservationIgnored private var latest: [WireEvent: (order: Int, payload: EventPayload)] = [:]
+    /// Events for the current process to send at `welcome`, in order: the
+    /// replay of `latest` from the launch, then live events that arrived since.
+    @ObservationIgnored private var pending: [(payload: EventPayload, replay: Bool)] = []
+    /// The latest event of each kind (for `nowPlaying`, of each player), with
+    /// the order it arrived in, for replay.
+    @ObservationIgnored private var latest: [ReplayKey: (order: Int, payload: EventPayload)] = [:]
     @ObservationIgnored private var eventCount = 0
     /// The ownership the block process was last told.
     @ObservationIgnored private var toldOwns = false
@@ -168,7 +170,7 @@ public final class RemoteBlock: NotchBlock {
 
     public func deactivate() {
         context = nil
-        endProcess(wait: false)
+        endProcess()?.close()
         latest = [:]
         actions = []
         model.clear()
@@ -185,9 +187,29 @@ public final class RemoteBlock: NotchBlock {
         manifest.settings.isEmpty ? nil : AnyView(SettingsForm(block: self))
     }
 
-    /// Ends the process now and waits for it to exit. For app quit.
+    /// Withdraws the presentation and ends the process without waiting for
+    /// it: it is signalled, and reaped, off the main thread. For update and
+    /// remove.
     public func stop() {
-        endProcess(wait: true)
+        withdraw()
+        endProcess()?.close()
+    }
+
+    /// Ends the processes of every block in `blocks` together and waits for
+    /// them: at most about 2.5 s in total, however many there are. For app
+    /// quit, where waiting is the point.
+    public static func stopAll(_ blocks: [RemoteBlock]) {
+        var processes: [BlockProcess] = []
+        for block in blocks {
+            block.withdraw()
+            guard let transport = block.endProcess() else { continue }
+            if let process = transport as? BlockProcess {
+                processes.append(process)
+            } else {
+                transport.close()
+            }
+        }
+        BlockProcess.terminate(processes)
     }
 
     /// Takes the manifest of the package now at `packageURL`, after an update
@@ -195,8 +217,10 @@ public final class RemoteBlock: NotchBlock {
     /// stand-in keeps its place in the runtime; settings are read again.
     /// Call `stop()` before replacing the folder. Also used with the old
     /// manifest to start the old version again when the replacement failed.
+    /// The old process is ended without waiting; its late frames are dropped.
     func replacePackage(manifest: Manifest, source: BlockSource) {
-        endProcess(wait: true)
+        withdraw()
+        endProcess()?.close()
         self.manifest = manifest
         self.source = source
         settings = readSettings()
@@ -207,13 +231,6 @@ public final class RemoteBlock: NotchBlock {
 
     // MARK: Process
 
-    /// Ends the current process and starts a new one, which gets the latest
-    /// event of each kind as a replay.
-    func restart() {
-        endProcess(wait: false)
-        launch()
-    }
-
     private func launch() {
         generation += 1
         isWelcomed = false
@@ -221,6 +238,7 @@ public final class RemoteBlock: NotchBlock {
         // Only events this version listens to; an update may drop some.
         pending = latest.values.sorted { $0.order < $1.order }.map(\.payload)
             .filter { manifest.events.contains($0.name.rawValue) }
+            .map { ($0, true) }
         launchedAt = .now
         pingSeq = 0
         lastPong = 0
@@ -244,10 +262,12 @@ public final class RemoteBlock: NotchBlock {
     }
 
     /// One heartbeat step: a hang when the process has not answered for
-    /// `hangAfter`, otherwise the next ping. False ends the heartbeat.
+    /// `hangAfter` (`startAllowance` before `welcome`), otherwise the next
+    /// ping. False ends the heartbeat.
     private func heartbeatTick(generation: Int) -> Bool {
         guard generation == self.generation, transport != nil else { return false }
-        if clock.now() - lastAnswer >= BlockProcess.hangAfter {
+        let limit = isWelcomed ? BlockProcess.hangAfter : BlockProcess.startAllowance
+        if clock.now() - lastAnswer >= limit {
             handleFailure(reason: "\(manifest.name) stopped answering")
             return false
         }
@@ -256,28 +276,35 @@ public final class RemoteBlock: NotchBlock {
         return true
     }
 
-    /// Sends `quit` and closes the transport. Frames still in flight from
-    /// this process are dropped.
-    private func endProcess(wait: Bool) {
+    /// Stops reading and pinging the current process, sends it `quit` and
+    /// lets it go. Returns its transport, still open, for the caller to close
+    /// or to wait on. Frames still in flight from this process are dropped.
+    private func endProcess() -> (any Transport)? {
         reader?.cancel()
         reader = nil
         heartbeat?.cancel()
         heartbeat = nil
         isWelcomed = false
         pending = []
-        guard let transport else { return }
+        guard let transport else { return nil }
         self.transport = nil
         try? transport.send(HostToBlock.quit, generation: generation)
-        if wait, let process = transport as? BlockProcess {
-            process.terminate()
-        } else {
-            transport.close()
-        }
+        return transport
+    }
+
+    /// Withdraws what the block shows: its presentation, its menu actions
+    /// and the trees and images it sent.
+    private func withdraw() {
+        context?.dismiss()
+        actions = []
+        model.clear()
     }
 
     private func transportEnded(_ error: (any Error)?, generation: Int) {
         guard generation == self.generation, transport != nil else { return }
-        if let error {
+        if let error = error as? TransportError, case .overflow = error {
+            handleFailure(reason: "\(manifest.name) sent more than the app could read")
+        } else if let error {
             handleFailure(reason: "\(manifest.name) sent a bad frame: \(error)")
         } else {
             handleFailure(reason: "\(manifest.name) stopped unexpectedly")
@@ -287,13 +314,12 @@ public final class RemoteBlock: NotchBlock {
     /// Every failure of the block process comes through here: it did not
     /// start, ended, sent a bad frame or tree, stopped answering pings, or
     /// speaks an unsupported contract. The presentation is withdrawn, the
-    /// actions cleared and the process ended; then `Supervisor` decides
-    /// between a new process at once and turning the block off.
+    /// actions and view cleared and the process ended; then `Supervisor`
+    /// decides between a new process at once and turning the block off.
     func handleFailure(reason: String) {
         log.error("\(self.id.rawValue, privacy: .public) failed: \(reason, privacy: .public)")
-        context?.dismiss()
-        actions = []
-        endProcess(wait: false)
+        withdraw()
+        endProcess()?.close()
         onFailure?(reason)
         // Turned off meanwhile: nothing to restart.
         guard context != nil else { return }
@@ -335,6 +361,7 @@ public final class RemoteBlock: NotchBlock {
             guard isWelcomed, validate([peek, wing, expanded]) else { return }
             model.setTrees(peek: peek, wing: wing, expanded: expanded)
         case .dismiss:
+            guard isWelcomed else { return }
             context?.dismiss()
         case let .asset(assetID, bytes):
             model.storeAsset(id: assetID, bytes: bytes)
@@ -375,6 +402,12 @@ public final class RemoteBlock: NotchBlock {
                 : "contracts \(Contract.supported.lowerBound) to \(Contract.supported.upperBound)"
             return handleFailure(reason: "\(manifest.name) speaks contract \(contract); this app supports \(supported)")
         }
+        guard blockID == manifest.id else {
+            return handleFailure(reason: "\(manifest.name) says it is \(blockID), but its manifest says \(manifest.id)")
+        }
+        if version != manifest.version {
+            log.info("\(self.id.rawValue, privacy: .public) says version \(version, privacy: .public); its manifest says \(self.manifest.version, privacy: .public)")
+        }
         if let launchedAt {
             let elapsed = launchedAt.duration(to: .now)
             log.info("\(self.id.rawValue, privacy: .public) \(version, privacy: .public) said hello after \(elapsed, privacy: .public), generation \(self.generation)")
@@ -383,8 +416,10 @@ public final class RemoteBlock: NotchBlock {
         settings = readSettings()
         send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
         isWelcomed = true
-        for payload in pending {
-            send(.event(payload: payload, replay: true))
+        // The hang limit runs from here, no longer from the launch.
+        lastAnswer = clock.now()
+        for event in pending {
+            send(.event(payload: event.payload, replay: event.replay))
         }
         pending = []
         pushOwner()
@@ -416,11 +451,21 @@ public final class RemoteBlock: NotchBlock {
             wing: content(wing, .wing),
             expanded: content(expanded, .expanded),
             opensAt: opensAt == .expanded ? .expanded : .peek,
-            duration: seconds.map { Duration.seconds($0) }
+            duration: seconds.flatMap(Self.duration(seconds:))
         ))
         // Exactly what an in-app block does to answer a change just made:
         // shown later it would answer nothing, so it does not wait.
         if dismissIfNotShown, !context.ownsNotch { context.dismiss() }
+    }
+
+    /// The longest presentation a block may ask for, in seconds.
+    static let maxSeconds = 3600.0
+
+    /// A presentation's time from the block's `seconds`: nil (until dismissed)
+    /// when it is not finite or not positive, and at most `maxSeconds`.
+    static func duration(seconds: Double) -> Duration? {
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        return .seconds(min(seconds, maxSeconds))
     }
 
     /// False, after reporting a failure, when a tree is over the node limit.
@@ -454,13 +499,47 @@ public final class RemoteBlock: NotchBlock {
     private func received(_ payload: EventPayload) {
         // A subscription kept from before an update that dropped this event.
         guard manifest.events.contains(payload.name.rawValue) else { return }
-        eventCount += 1
-        latest[payload.name] = (eventCount, payload)
+        remember(payload)
         if isWelcomed {
             send(.event(payload: payload, replay: false))
         } else if transport != nil {
-            pending.append(payload)
+            // Live, though it waits for `welcome`.
+            pending.append((payload, false))
         }
+    }
+
+    // MARK: Replay
+
+    /// What one replayed event stands for: its kind, and for `nowPlaying` the
+    /// player, since each player has its own state.
+    struct ReplayKey: Hashable {
+        let name: WireEvent
+        let detail: String
+
+        init(_ payload: EventPayload) {
+            name = payload.name
+            if case let .nowPlaying(value) = payload { detail = value.player } else { detail = "" }
+        }
+    }
+
+    /// The most events of one kind kept for replay.
+    static let replayLimit = 8
+
+    /// Keeps `payload` as the latest of its key. Over `replayLimit` for its
+    /// kind, the oldest player that no longer plays is forgotten first: a
+    /// block that never saw it play ends in the same state without it.
+    private func remember(_ payload: EventPayload) {
+        eventCount += 1
+        let key = ReplayKey(payload)
+        latest[key] = (eventCount, payload)
+        let sameKind = latest.filter { $0.key.name == key.name }.sorted { $0.value.order < $1.value.order }
+        guard sameKind.count > Self.replayLimit else { return }
+        let stale = sameKind.first { !Self.isPlaying($0.value.payload) } ?? sameKind.first
+        if let stale { latest[stale.key] = nil }
+    }
+
+    private static func isPlaying(_ payload: EventPayload) -> Bool {
+        if case let .nowPlaying(value) = payload { value.state == .playing } else { false }
     }
 
     // MARK: Settings

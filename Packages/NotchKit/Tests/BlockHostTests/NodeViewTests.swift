@@ -43,13 +43,21 @@ struct NodeViewTests {
         let model = RemoteModel()
         for index in 0..<Contract.assetCacheSize {
             model.storeAsset(id: "a\(index)", bytes: Data([UInt8(index)]))
+            model.setTrees(peek: .image(asset: "a\(index)", size: 10, cornerRadius: 0), wing: nil, expanded: nil)
         }
-        // Referencing the oldest makes it recent, so the next one evicts a1.
-        model.touchAssets(in: [.image(asset: "a0", size: 10, cornerRadius: 0)])
+        // As the kit does: a new tree refers to the oldest image and a new
+        // one. The new image arrives first and evicts nothing; the tree then
+        // makes both recent, and only then is the cache trimmed, so a1 goes.
         model.storeAsset(id: "new", bytes: Data([9]))
+        #expect(model.hasAsset("a0"), "storing does not evict an image the next tree refers to")
+        model.setTrees(peek: .hstack([
+            .image(asset: "a0", size: 10, cornerRadius: 0),
+            .image(asset: "new", size: 10, cornerRadius: 0),
+        ]), wing: nil, expanded: nil)
         #expect(model.hasAsset("a0"))
         #expect(!model.hasAsset("a1"))
         #expect(model.hasAsset("new"))
+        #expect((2..<Contract.assetCacheSize).allSatisfy { model.hasAsset("a\($0)") })
     }
 
     static func onePixelPNG() -> Data? {

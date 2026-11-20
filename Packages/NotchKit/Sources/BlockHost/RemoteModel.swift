@@ -21,7 +21,8 @@ public final class RemoteModel {
     /// Images by asset id, decoded once.
     private var images: [String: NSImage] = [:]
     /// Asset ids, least recently sent or referenced first. The kit keeps the
-    /// same order, so it knows which images to send again.
+    /// same order and evicts at the same moment (after the trees that refer
+    /// to the images), so it knows which images to send again.
     @ObservationIgnored private var recency: [String] = []
 
     public init() {}
@@ -35,11 +36,14 @@ public final class RemoteModel {
     }
 
     /// Replaces the trees that are given; leaves the others as they are.
+    /// Then marks the images they refer to as used and keeps the
+    /// `Contract.assetCacheSize` most recent, as the kit does.
     func setTrees(peek: ViewNode?, wing: ViewNode?, expanded: ViewNode?) {
         if let peek { self.peek = peek }
         if let wing { self.wing = wing }
         if let expanded { self.expanded = expanded }
         touchAssets(in: [peek, wing, expanded].compactMap { $0 })
+        trim(to: Contract.assetCacheSize)
     }
 
     func clear() {
@@ -52,14 +56,21 @@ public final class RemoteModel {
 
     // MARK: Assets
 
+    /// The most images held between two trees. The kit sends the images of
+    /// one `present` or `update` just before it; a block that sends more
+    /// without a tree loses the oldest.
+    static let maxPendingAssets = Contract.assetCacheSize + 3 * Contract.maxNodes
+
     /// Keeps an image. Bytes that are not an image are kept as a missing
-    /// image, so the view draws its placeholder.
+    /// image, so the view draws its placeholder. Nothing the kit counts as
+    /// held is evicted here: that waits for the tree that refers to it.
     func storeAsset(id: String, bytes: Data) {
         images[id] = NSImage(data: bytes) ?? NSImage()
         markRecent(id)
+        trim(to: Self.maxPendingAssets)
     }
 
-    /// Marks every image the trees refer to as just used.
+    /// Marks every image the trees refer to as just used, in tree order.
     func touchAssets(in trees: [ViewNode]) {
         for id in trees.flatMap(\.assetIDs) where images[id] != nil {
             markRecent(id)
@@ -77,7 +88,11 @@ public final class RemoteModel {
     private func markRecent(_ id: String) {
         recency.removeAll { $0 == id }
         recency.append(id)
-        while recency.count > Contract.assetCacheSize {
+    }
+
+    /// Evicts the least recently used images beyond `count`.
+    private func trim(to count: Int) {
+        while recency.count > count {
             images[recency.removeFirst()] = nil
         }
     }
