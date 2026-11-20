@@ -36,11 +36,13 @@ public struct ViewNode: Codable, Hashable, Sendable {
         /// A thin capsule bar, filled from the left by `value` (0 to 1).
         /// Without a width it fills the space it is given. With
         /// `drainsOver`, the bar empties from `value` to 0 over that many
-        /// seconds (still with Reduce Motion).
-        case progress(value: Double, width: Double?, color: WireColor? = nil, drainsOver: Double? = nil)
+        /// seconds (still with Reduce Motion). `track` colours the unfilled
+        /// bar (white at 0.2 when nil).
+        case progress(value: Double, width: Double?, color: WireColor? = nil, drainsOver: Double? = nil, track: WireColor? = nil)
         /// A button. A click sends `input` with `button(id)`. `restOpacity`
-        /// is its opacity while the pointer is not on it.
-        case button(id: String, title: String, style: ButtonStyle? = nil, symbol: String? = nil, enabled: Bool? = nil, color: WireColor? = nil, restOpacity: Double? = nil)
+        /// is its opacity while the pointer is not on it. `labelColor`
+        /// colours the title and symbol of an `accent` button.
+        case button(id: String, title: String, style: ButtonStyle? = nil, symbol: String? = nil, enabled: Bool? = nil, color: WireColor? = nil, restOpacity: Double? = nil, labelColor: WireColor? = nil)
         /// Flexible space.
         case spacer(minLength: Double?)
 
@@ -268,8 +270,8 @@ public extension ViewNode {
         ViewNode(.image(asset: asset, size: size, cornerRadius: cornerRadius))
     }
 
-    static func progress(_ value: Double, width: Double? = nil, color: WireColor? = nil, drainsOver: Double? = nil) -> ViewNode {
-        ViewNode(.progress(value: value, width: width, color: color, drainsOver: drainsOver))
+    static func progress(_ value: Double, width: Double? = nil, color: WireColor? = nil, drainsOver: Double? = nil, track: WireColor? = nil) -> ViewNode {
+        ViewNode(.progress(value: value, width: width, color: color, drainsOver: drainsOver, track: track))
     }
 
     static func button(
@@ -279,9 +281,10 @@ public extension ViewNode {
         symbol: String? = nil,
         enabled: Bool? = nil,
         color: WireColor? = nil,
-        restOpacity: Double? = nil
+        restOpacity: Double? = nil,
+        labelColor: WireColor? = nil
     ) -> ViewNode {
-        ViewNode(.button(id: id, title: title, style: style, symbol: symbol, enabled: enabled, color: color, restOpacity: restOpacity))
+        ViewNode(.button(id: id, title: title, style: style, symbol: symbol, enabled: enabled, color: color, restOpacity: restOpacity, labelColor: labelColor))
     }
 
     static func spacer(minLength: Double? = nil) -> ViewNode {

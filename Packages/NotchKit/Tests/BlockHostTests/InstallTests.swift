@@ -17,6 +17,8 @@ struct InstallTests {
         let defaults = testDefaults()
         let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-install-\(UUID().uuidString)")
         var cleared: [BlockID] = []
+        /// Every package counts as signed by `FakeSignatures.signer` until a test says otherwise.
+        let signatures = FakeSignatures()
         var blocksRoot: URL { root.appending(path: "Blocks") }
         var dataRoot: URL { root.appending(path: "BlockData") }
         lazy var store = makeStore()
@@ -24,7 +26,7 @@ struct InstallTests {
         /// - Parameter checksRuntime: false for a second store that only scans
         ///   the folders, so the blocks the first one registered do not count.
         func makeStore(bundledRoot: URL? = nil, checksRuntime: Bool = true) -> BlockStore {
-            BlockStore(
+            let store = BlockStore(
                 owner: { [runtime] in runtime.state.owner },
                 blocksRoot: blocksRoot,
                 dataRoot: dataRoot,
@@ -43,24 +45,22 @@ struct InstallTests {
                 },
                 isRegistered: { [runtime] id in checksRuntime && runtime.blocks.contains { $0.id == id } }
             )
+            store.signatures = signatures
+            return store
         }
 
-        /// A `<folder>/<Name>.topblock` outside the store, with an executable script.
+        /// A `<folder>/<Name>.topblock` bundle outside the store, with an executable script.
         func package(
             id: String = "hello", version: String = "0.2", events: [String] = ["pointerHover"],
             contract: Int = Contract.current, folder: String = "hello-block"
         ) throws -> URL {
             let url = root.appending(path: "source-\(UUID().uuidString)").appending(path: folder)
                 .appending(path: "Hello.topblock")
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             let manifest = Manifest(id: id, name: "Hello", version: version, contract: contract, executable: "HelloBlock",
                                     summary: "Says hello.", trigger: "Pointer hover",
                                     permissions: ["Nothing special"], events: events,
                                     settings: [SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .bool(false))])
-            try Framing.encoder().encode(manifest).write(to: url.appending(path: "manifest.json"))
-            let executable = url.appending(path: "HelloBlock")
-            try Data("#!/bin/sh\n".utf8).write(to: executable)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            try writeBundle(at: url, manifest: manifest)
             return url
         }
 
@@ -155,7 +155,7 @@ struct InstallTests {
         #expect(block.info.version == "0.3")
         #expect(block.info.source == .installed(from: newer.path))
         #expect(setup.installedPackages() == ["hello.topblock"])
-        let installed = try Manifest.decode(Data(contentsOf: setup.blocksRoot.appending(path: "hello.topblock/manifest.json")))
+        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock"))
         #expect(installed.version == "0.3")
         #expect(setup.defaults.bool(forKey: "hello.loud"))
         #expect(setup.defaults.object(forKey: "block.hello.enabled") != nil)
@@ -194,7 +194,7 @@ struct InstallTests {
         }
 
         #expect(block.manifest.version == "0.2")
-        let installed = try Manifest.decode(Data(contentsOf: setup.blocksRoot.appending(path: "hello.topblock/manifest.json")))
+        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock"))
         #expect(installed.version == "0.2")
         #expect(setup.installedPackages() == ["hello.topblock"], "no temporary copy is left")
         #expect(setup.launcher.processes.count == 1)
@@ -339,6 +339,114 @@ struct InstallTests {
         #expect(setup.runtime.blocks.count == 1)
         #expect(store.canTurnOn("hello"))
         #expect(setup.installedPackages() == ["hello.topblock"])
+    }
+
+    // MARK: Signature
+
+    @Test func unsignedInstallIsRefusedUntilTheSwitchIsOn() throws {
+        let setup = Setup()
+        for result: PackageSignature in [.unsigned, .adHoc] {
+            setup.signatures.set(result)
+            let package = try setup.package()
+            #expect(throws: BlockInstallError.unsigned) { try setup.store.inspect(package) }
+            #expect(throws: BlockInstallError.unsigned) { try setup.store.install(package) }
+        }
+        #expect(setup.installedPackages().isEmpty)
+        #expect(setup.runtime.blocks.isEmpty)
+
+        // A broken seal is refused whatever the switch says.
+        setup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        setup.signatures.set(.invalid(reason: "a file changed"))
+        #expect(throws: BlockInstallError.badSignature("a file changed")) { try setup.store.install(try setup.package()) }
+
+        setup.signatures.set(.adHoc)
+        let package = try setup.package()
+        let summary = try setup.store.inspect(package)
+        #expect(!summary.isSigned)
+        #expect(summary.signer == nil)
+        try setup.store.install(package)
+        #expect(setup.installedPackages() == ["hello.topblock"])
+        #expect(setup.defaults.object(forKey: BlockStore.signerKey("hello")) == nil)
+    }
+
+    @Test func updateFromAnotherSignerIsRefused() async throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(version: "0.2"))
+        let block = try #require(setup.block("hello"))
+
+        setup.signatures.set(.valid(signer: "Someone Else", teamID: ""))
+        let newer = try setup.package(version: "0.3")
+        let expected = BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "Someone Else")
+        #expect(throws: expected) { try setup.store.inspect(newer) }
+        #expect(throws: expected) { try setup.store.install(newer) }
+
+        // Unsigned, even with the switch on, does not replace a signed block.
+        setup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        setup.signatures.set(.unsigned)
+        #expect(throws: BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "no signature")) {
+            try setup.store.install(newer)
+        }
+
+        #expect(block.manifest.version == "0.2")
+        #expect(try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock")).version == "0.2")
+
+        // The same signer updates.
+        setup.signatures.set(.valid(signer: FakeSignatures.signer, teamID: ""))
+        try setup.store.install(newer)
+        #expect(block.manifest.version == "0.3")
+    }
+
+    @Test func changedPackageIsRefusedAtLaunch() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package())
+
+        // Changed on disk after install: the next launch refuses it.
+        setup.signatures.set(.invalid(reason: "a sealed resource is modified"))
+        let standIns = setup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
+
+        let refused = try #require(standIns.first as? RefusedBlock)
+        #expect(standIns.count == 1)
+        let reason = try #require(BlockInstallError.badSignature("a sealed resource is modified").errorDescription)
+        #expect(refused.health == .turnedOff(reason: reason))
+
+        // Unsigned at launch, with the switch off, is refused too.
+        let unsignedSetup = Setup()
+        unsignedSetup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        unsignedSetup.signatures.set(.unsigned)
+        try unsignedSetup.store.install(try unsignedSetup.package())
+        unsignedSetup.defaults.set(false, forKey: BlockStore.allowUnsignedKey)
+        let again = unsignedSetup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
+        #expect(again.first is RefusedBlock)
+    }
+
+    @Test func signerIsStoredAndClearedOnRemove() throws {
+        let setup = Setup()
+        let package = try setup.package()
+        let summary = try setup.store.inspect(package)
+        #expect(summary.isSigned)
+        #expect(summary.signer == FakeSignatures.signer)
+
+        try setup.store.install(package)
+        #expect(setup.defaults.string(forKey: BlockStore.signerKey("hello")) == FakeSignatures.signer)
+        #expect(setup.defaults.string(forKey: "block.hello.signer") == FakeSignatures.signer)
+
+        try setup.store.remove("hello")
+        #expect(setup.defaults.object(forKey: "block.hello.signer") == nil)
+    }
+
+    @Test func summaryAndInfoShowAccessInTheUsersWords() throws {
+        let setup = Setup()
+        let package = try setup.package()
+        var manifest = try bundleManifest(package)
+        manifest.access = [.network, .filesScreenshots]
+        try Framing.encoder().encode(manifest).write(to: package.appending(path: "Contents/Resources/manifest.json"))
+
+        let summary = try setup.store.inspect(package)
+        #expect(summary.access == ["Use the network", "Rename files in the screenshot folder"])
+
+        try setup.store.install(package)
+        let block = try #require(setup.block("hello"))
+        #expect(block.info.permissions == ["Nothing special", "Use the network", "Rename files in the screenshot folder"])
     }
 }
 

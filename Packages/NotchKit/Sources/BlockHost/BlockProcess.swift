@@ -57,8 +57,24 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     // MARK: Spawn
 
     /// Starts `executable` with the socket as fd 3 and `generation` in its
-    /// environment.
+    /// environment, without a sandbox. Blocks the app runs use
+    /// `spawn(executable:generation:sandbox:)`.
     public static func spawn(executable: URL, generation: Int) throws(BlockProcessError) -> BlockProcess {
+        try spawn(executable: executable, generation: generation, sandbox: nil)
+    }
+
+    /// The tool that applies a sandbox profile and then runs the block in
+    /// its own place: the process id stays the block's after the exec.
+    // Deprecated by Apple but present on macOS 26. If it goes, a small
+    // launcher that calls `sandbox_init_with_parameters` and then execs the
+    // block replaces it, with no protocol change.
+    static let sandboxExec = "/usr/bin/sandbox-exec"
+
+    /// Starts `executable` with the socket as fd 3 and `generation` in its
+    /// environment. With `sandbox`, the block runs under that profile through
+    /// `sandbox-exec`, and its `TMPDIR` is the profile's temporary folder.
+    /// Create the profile's folders before building it.
+    static func spawn(executable: URL, generation: Int, sandbox: SandboxProfile?) throws(BlockProcessError) -> BlockProcess {
         var fds: [Int32] = [0, 0]
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { throw .socketFailed(errno) }
         // Neither end may leak into other processes the app starts; the
@@ -82,9 +98,12 @@ public final class BlockProcess: Transport, @unchecked Sendable {
         // Only fds 0 to 3 reach the block.
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 
-        let path = executable.path
-        let argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), nil]
-        let envp: [UnsafeMutablePointer<CChar>?] = environment(generation: generation).map { strdup($0) } + [nil]
+        let path = sandbox == nil ? executable.path : sandboxExec
+        let arguments = sandbox.map { [sandboxExec, "-p", $0.text, executable.path] } ?? [executable.path]
+        let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+        let temporary = sandbox.map { SandboxProfile.resolvedPath($0.temporaryFolder) }
+        let envp: [UnsafeMutablePointer<CChar>?] = environment(generation: generation, temporaryFolder: temporary)
+            .map { strdup($0) } + [nil]
         defer {
             argv.forEach { free($0) }
             envp.forEach { free($0) }
@@ -100,17 +119,18 @@ public final class BlockProcess: Transport, @unchecked Sendable {
 
         let process = BlockProcess(pid: pid, socket: SocketTransport(fd: fds[0], sendTimeout: sendTimeout))
         process.watchExit()
-        log.info("block process \(pid) started: \(path, privacy: .public), generation \(generation)")
+        log.info("block process \(pid) started: \(executable.path, privacy: .public), generation \(generation), sandboxed: \(sandbox != nil)")
         return process
     }
 
     /// The environment a block starts with. The app's own is not passed on.
-    static func environment(generation: Int) -> [String] {
+    /// `temporaryFolder` is the `TMPDIR`; nil keeps the app's.
+    static func environment(generation: Int, temporaryFolder: String? = nil) -> [String] {
         let own = ProcessInfo.processInfo.environment
         return [
             "PATH=" + (own["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"),
             "HOME=" + (own["HOME"] ?? NSHomeDirectory()),
-            "TMPDIR=" + (own["TMPDIR"] ?? NSTemporaryDirectory()),
+            "TMPDIR=" + (temporaryFolder ?? own["TMPDIR"] ?? NSTemporaryDirectory()),
             "TOPNOTCH_BLOCK_GENERATION=\(generation)",
         ]
     }

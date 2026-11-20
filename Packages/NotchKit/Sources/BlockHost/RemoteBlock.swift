@@ -6,8 +6,9 @@ import os
 import SwiftUI
 
 /// Starts one block process: the executable to run and its generation.
-/// Returns the transport to it. The real one is `BlockProcess.spawn`; tests
-/// return one end of `MemoryTransport.pair()`.
+/// Returns the transport to it. Tests return one end of
+/// `MemoryTransport.pair()`. A stand-in without one starts its block
+/// sandboxed, with `BlockProcess.spawn(executable:generation:sandbox:)`.
 public typealias BlockLauncher = @MainActor (_ executable: URL, _ generation: Int) throws -> any Transport
 
 /// The stand-in for a block that runs in its own process.
@@ -24,7 +25,9 @@ public final class RemoteBlock: NotchBlock {
     public var title: String { manifest.name }
     public var info: BlockInfo {
         BlockInfo(summary: manifest.summary, symbol: manifest.symbol.isEmpty ? "square.grid.2x2" : manifest.symbol,
-                  trigger: manifest.trigger, permissions: manifest.permissions,
+                  // The access the sandbox grants, in the user's words, after
+                  // what the author wrote: the Blocks page shows both.
+                  trigger: manifest.trigger, permissions: manifest.permissions + manifest.access.map(BlockStore.accessText),
                   version: manifest.version, source: source)
     }
 
@@ -43,13 +46,18 @@ public final class RemoteBlock: NotchBlock {
     public private(set) var actions: [BlockAction] = []
     /// Each declared setting's current value: stored, or the manifest default.
     public private(set) var settings: [String: SettingValue] = [:]
+    /// The text the block set for its `note` settings with `settingNote`,
+    /// by key. A note without one shows its manifest title.
+    public private(set) var notes: [String: String] = [:]
 
     @ObservationIgnored private let dataFolder: URL
     @ObservationIgnored private let owner: @MainActor () -> BlockID?
-    @ObservationIgnored private let launcher: BlockLauncher
+    @ObservationIgnored private let launcher: BlockLauncher?
+    @ObservationIgnored private let screenshotFolder: @MainActor () -> URL?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let clock: BlockClock
     @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
+    @ObservationIgnored private let preview: @MainActor ([URL]) -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -60,6 +68,13 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var launchedAt: ContinuousClock.Instant?
     /// True once the current process has said a valid hello and was welcomed.
     @ObservationIgnored private(set) var isWelcomed = false
+    /// The contract version the current process said in `hello`. Version 2
+    /// messages go only to a version 2 block.
+    @ObservationIgnored private var contract = 1
+    /// The `seq` of the last event sent; one counter per stand-in.
+    @ObservationIgnored private var eventSeq = 0
+    /// When each of the last `sentTimesKept` events was sent, on `clock`, by `seq`.
+    @ObservationIgnored private var sentTimes: [Int: Duration] = [:]
     /// Events for the current process to send at `welcome`, in order: the
     /// replay of `latest` from the launch, then live events that arrived since.
     @ObservationIgnored private var pending: [(payload: EventPayload, replay: Bool)] = []
@@ -94,22 +109,29 @@ public final class RemoteBlock: NotchBlock {
     ///   - dataFolder: the folder the block may write to. Created when the block starts.
     ///   - owner: who owns the notch now, read inside observation tracking so
     ///     changes are pushed to the block. Pass `{ runtime.state.owner }`.
-    ///   - launcher: starts the process.
+    ///   - launcher: starts the process. Nil starts it under the sandbox
+    ///     profile built from the manifest's `access`.
+    ///   - screenshotFolder: the folder `files.screenshots` opens, read at
+    ///     each start; the app passes the folder the screenshot watcher uses.
     ///   - defaults: where the block's settings (`<id>.<key>`) and the reason
     ///     it was turned off (`block.<id>.failure`) are stored.
     ///   - clock: times the heartbeat and failures. Must stop while the Mac sleeps.
     ///   - turnOff: turns the block off after repeated failures. The app
     ///     passes a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
+    ///   - preview: shows files in Quick Look, for the block's `preview`.
+    ///     Nil uses the system Quick Look panel.
     public init(
         manifest: Manifest,
         packageURL: URL,
         source: BlockSource,
         dataFolder: URL,
         owner: @escaping @MainActor () -> BlockID?,
-        launcher: @escaping BlockLauncher,
+        launcher: BlockLauncher? = nil,
+        screenshotFolder: @escaping @MainActor () -> URL? = { nil },
         defaults: UserDefaults = .standard,
         clock: BlockClock = .suspending,
-        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in }
+        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
+        preview: (@MainActor ([URL]) -> Void)? = nil
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -119,12 +141,15 @@ public final class RemoteBlock: NotchBlock {
         self.dataFolder = dataFolder
         self.owner = owner
         self.launcher = launcher
+        self.screenshotFolder = screenshotFolder
         self.defaults = defaults
         self.clock = clock
         self.turnOff = turnOff
+        self.preview = preview ?? { FilePreview.shared.show($0) }
         // Turned off after failures, and not yet turned on again.
         health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
         settings = readSettings()
+        wireItemCallbacks()
     }
 
     /// Where the reason for the last turn-off is stored.
@@ -173,13 +198,45 @@ public final class RemoteBlock: NotchBlock {
         endProcess()?.close()
         latest = [:]
         actions = []
+        notes = [:]
         model.clear()
     }
 
-    /// Forwards a click while this block owns the notch. Drops are not forwarded.
+    /// Forwards a click, and to a version 2 block a drop, while this block
+    /// owns the notch. The runtime passes only drops of kinds the
+    /// presentation `accepts`.
     public func handle(_ input: NotchInput) {
-        guard case .click = input, context?.ownsNotch == true, isWelcomed else { return }
-        send(.input(input: .click))
+        guard context?.ownsNotch == true, isWelcomed else { return }
+        switch input {
+        case .click:
+            send(.input(input: .click))
+        case let .drop(items):
+            guard contract >= 2, !items.isEmpty else { return }
+            send(.input(input: .drop(items: items.map(Self.wireDrop))))
+        }
+    }
+
+    static func wireDrop(_ item: DroppedItem) -> WireDrop {
+        switch item {
+        case let .file(url): .file(path: url.path)
+        case let .link(url): .link(url: url.absoluteString)
+        case let .text(text): .text(string: text)
+        }
+    }
+
+    /// Routes the item layer's clicks, menu entries and drags to `input`
+    /// frames. `dragBegan` is sent in the main-actor turn that starts the
+    /// dragging session, so it reaches the block before the drag monitor's
+    /// `dragStarted`: both go down the same socket.
+    private func wireItemCallbacks() {
+        model.onItemAction = { [weak self] id, action in self?.sendItemInput(.item(id: id, action: action)) }
+        model.onDragBegan = { [weak self] id in self?.sendItemInput(.dragBegan(id: id)) }
+        model.onDragEnded = { [weak self] id, succeeded in self?.sendItemInput(.dragEnded(id: id, succeeded: succeeded)) }
+    }
+
+    private func sendItemInput(_ input: WireInput) {
+        guard isWelcomed, contract >= 2 else { return }
+        send(.input(input: input))
     }
 
     /// The block's settings drawn from its manifest, or nil when it declares none.
@@ -224,6 +281,7 @@ public final class RemoteBlock: NotchBlock {
         self.manifest = manifest
         self.source = source
         settings = readSettings()
+        notes = [:]
         guard context != nil else { return }
         subscribeToManifestEvents()
         launch()
@@ -234,6 +292,7 @@ public final class RemoteBlock: NotchBlock {
     private func launch() {
         generation += 1
         isWelcomed = false
+        contract = 1
         toldOwns = false
         // Only events this version listens to; an update may drop some.
         pending = latest.values.sorted { $0.order < $1.order }.map(\.payload)
@@ -245,7 +304,11 @@ public final class RemoteBlock: NotchBlock {
         lastAnswer = clock.now()
         let transport: any Transport
         do {
-            transport = try launcher(executableURL, generation)
+            if let launcher {
+                transport = try launcher(executableURL, self.generation)
+            } else {
+                transport = try spawnSandboxed()
+            }
         } catch {
             return handleFailure(reason: "\(manifest.name) could not start: \(error)")
         }
@@ -259,6 +322,24 @@ public final class RemoteBlock: NotchBlock {
         heartbeat = BlockProcess.heartbeat(clock: clock) { [weak self] in
             self?.heartbeatTick(generation: generation) ?? false
         }
+    }
+
+    /// Starts the block under the sandbox profile its manifest asks for.
+    /// The data folder is created first: the profile names real paths.
+    /// The temporary folder is the app's, where the shell writes dropped
+    /// files, so every block can read them.
+    private func spawnSandboxed() throws -> any Transport {
+        try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
+        let profile = SandboxProfile(
+            network: manifest.access.contains(.network),
+            readsHome: manifest.access.contains(.filesRead),
+            screenshotFolder: manifest.access.contains(.filesScreenshots) ? screenshotFolder() : nil,
+            package: packageURL,
+            dataFolder: dataFolder,
+            temporaryFolder: FileManager.default.temporaryDirectory,
+            home: FileManager.default.homeDirectoryForCurrentUser
+        )
+        return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
     }
 
     /// One heartbeat step: a hang when the process has not answered for
@@ -353,11 +434,13 @@ public final class RemoteBlock: NotchBlock {
         switch envelope.message {
         case let .hello(contract, blockID, version):
             hello(contract: contract, blockID: blockID, version: version)
-        // `accepts` and `answering` (contract version 2) are handled in a later task.
-        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown, _, _):
+        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown, accepts, answering):
             guard isWelcomed else { return }
+            if dismissIfNotShown, let answering, isLate(answering) {
+                return log.info("\(self.id.rawValue, privacy: .public): present answering event \(answering) dropped: older than \(Self.answerWindow, privacy: .public)")
+            }
             present(priority: priority, peek: peek, wing: wing, expanded: expanded,
-                    opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown)
+                    opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown, accepts: accepts ?? [])
         case let .update(peek, wing, expanded):
             guard isWelcomed, validate([peek, wing, expanded]) else { return }
             model.setTrees(peek: peek, wing: wing, expanded: expanded)
@@ -380,9 +463,13 @@ public final class RemoteBlock: NotchBlock {
                     self?.perform(item.id, offeredBy: generation)
                 }
             }
-        case .preview, .settingNote:
-            // Contract version 2 messages, handled in a later task; ignored until then.
-            break
+        case let .preview(paths):
+            guard isWelcomed else { return }
+            let urls = paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
+            if !urls.isEmpty { preview(urls) }
+        case let .settingNote(key, text):
+            guard isWelcomed, manifest.settings.contains(where: { $0.key == key && $0.type == .note }) else { return }
+            notes[key] = text
         }
     }
 
@@ -418,12 +505,13 @@ public final class RemoteBlock: NotchBlock {
         }
         try? FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
         settings = readSettings()
+        self.contract = contract
         send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
         isWelcomed = true
         // The hang limit runs from here, no longer from the launch.
         lastAnswer = clock.now()
         for event in pending {
-            send(.event(payload: event.payload, replay: event.replay))
+            sendEvent(event.payload, replay: event.replay)
         }
         pending = []
         pushOwner()
@@ -431,7 +519,7 @@ public final class RemoteBlock: NotchBlock {
 
     private func present(
         priority: Priority, peek: ViewSlot?, wing: ViewSlot?, expanded: ViewSlot?,
-        opensAt: Level, seconds: Double?, dismissIfNotShown: Bool
+        opensAt: Level, seconds: Double?, dismissIfNotShown: Bool, accepts: [DragStarted.Kind]
     ) {
         guard let context else { return }
         guard peek != nil || wing != nil || expanded != nil else {
@@ -455,7 +543,8 @@ public final class RemoteBlock: NotchBlock {
             wing: content(wing, .wing),
             expanded: content(expanded, .expanded),
             opensAt: opensAt == .expanded ? .expanded : .peek,
-            duration: seconds.flatMap(Self.duration(seconds:))
+            duration: seconds.flatMap(Self.duration(seconds:)),
+            accepts: Set(accepts.map(Self.dropKind))
         ))
         // Exactly what an in-app block does to answer a change just made:
         // shown later it would answer nothing, so it does not wait.
@@ -485,6 +574,32 @@ public final class RemoteBlock: NotchBlock {
         return true
     }
 
+    private static func dropKind(_ kind: DragStarted.Kind) -> DropKind {
+        switch kind {
+        case .file: .file
+        case .link: .link
+        case .text: .text
+        }
+    }
+
+    // MARK: Late answers
+
+    /// How old the event a `present` answers may be, when the present has
+    /// `dismissIfNotShown`. Shown later than this it would answer nothing
+    /// the user still sees, so it is dropped. A present without
+    /// `dismissIfNotShown` is never dropped (a rename result may take 20 s).
+    static let answerWindow: Duration = .seconds(2)
+    /// How many events' send times are kept to judge late answers.
+    static let sentTimesKept = 32
+
+    /// True when event `seq` was sent more than `answerWindow` ago, or so
+    /// long ago that its time is no longer kept. A `seq` never sent is not late.
+    private func isLate(_ seq: Int) -> Bool {
+        guard seq > 0, seq <= eventSeq else { return false }
+        guard let sent = sentTimes[seq] else { return true }
+        return clock.now() - sent > Self.answerWindow
+    }
+
     private static func priority(_ priority: Priority) -> PresentationPriority {
         switch priority {
         case .ambient: .ambient
@@ -500,12 +615,21 @@ public final class RemoteBlock: NotchBlock {
         try? transport?.send(message, generation: generation)
     }
 
+    /// Sends an event, numbered for a version 2 block, and keeps its send time.
+    private func sendEvent(_ payload: EventPayload, replay: Bool) {
+        guard contract >= 2 else { return send(.event(payload: payload, replay: replay)) }
+        eventSeq += 1
+        sentTimes[eventSeq] = clock.now()
+        sentTimes[eventSeq - Self.sentTimesKept] = nil
+        send(.event(payload: payload, replay: replay, seq: eventSeq))
+    }
+
     private func received(_ payload: EventPayload) {
         // A subscription kept from before an update that dropped this event.
         guard manifest.events.contains(payload.name.rawValue) else { return }
         remember(payload)
         if isWelcomed {
-            send(.event(payload: payload, replay: false))
+            sendEvent(payload, replay: false)
         } else if transport != nil {
             // Live, though it waits for `welcome`.
             pending.append((payload, false))

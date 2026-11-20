@@ -234,4 +234,64 @@ struct RemoteBlockTests {
         #expect(rig.runtime.state.owner == nil)
         #expect(!rig.process.received.contains { if case .welcome = $0 { true } else { false } })
     }
+
+    // MARK: Contract version 2
+
+    @Test func presentWithAcceptsSetsPresentationAccepts() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+
+        try rig.process.send(present(accepts: [.file, .text]))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+
+        let presentation = try #require(rig.runtime.state.presentation)
+        #expect(presentation.accepts == [.file, .text])
+    }
+
+    @Test func eventsCarryIncreasingSeq() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+
+        rig.runtime.publish(OutputVolumeChanged(volume: 0.3, isMuted: false))
+        rig.runtime.publish(OutputVolumeChanged(volume: 0.4, isMuted: false))
+        rig.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "One"))
+        await waitUntil { rig.process.eventSeqs.count == 3 }
+
+        let seqs = rig.process.eventSeqs.compactMap { $0 }
+        #expect(seqs.count == 3)
+        #expect(zip(seqs, seqs.dropFirst()).allSatisfy { $1 == $0 + 1 })
+    }
+
+    @Test func lateAnswerWithDismissIfNotShownIsDropped() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        rig.runtime.publish(OutputVolumeChanged(volume: 0.3, isMuted: false))
+        await waitUntil { rig.process.eventSeqs.count == 1 }
+        let seq = try #require(rig.process.eventSeqs.first ?? nil)
+
+        // Over the answer window on the stand-in's clock, under the hang limit.
+        await waitUntil { rig.heartbeat.sleeperCount > 0 }
+        rig.heartbeat.advance(by: .milliseconds(2500))
+        await settle()
+
+        try rig.process.send(present(dismissIfNotShown: true, answering: seq))
+        await settle()
+        #expect(rig.runtime.state.owner == nil, "a late answer that asked to be dropped is not shown")
+        #expect(rig.block.model.peek == nil)
+
+        try rig.process.send(present(answering: seq))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.owner == "hello", "without dismissIfNotShown a late answer is shown")
+    }
+
+    @Test func previewAsksTheHostPreview() async throws {
+        var shown: [[URL]] = []
+        let rig = Rig(preview: { shown.append($0) })
+        try await rig.process.start()
+
+        try rig.process.send(.preview(paths: ["/tmp/a.png", "/tmp/b.pdf"]))
+        await waitUntil { !shown.isEmpty }
+
+        #expect(shown == [[URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.pdf")]])
+    }
 }

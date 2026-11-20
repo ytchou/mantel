@@ -17,8 +17,8 @@ struct PackageValidatorTests {
 
     private static let installed = BlockSource.installed(from: "/tmp/Hello.topblock")
 
-    /// A temporary `<Name>.topblock` holding `manifest` and, unless told
-    /// otherwise, an executable file at `manifest.executable`.
+    /// A temporary `<Name>.topblock` bundle holding `manifest` and, unless
+    /// told otherwise, an executable file at `Contents/MacOS/<manifest.executable>`.
     private func package(
         _ manifest: Manifest,
         writeExecutable: Bool = true,
@@ -27,13 +27,7 @@ struct PackageValidatorTests {
         let folder = FileManager.default.temporaryDirectory
             .appending(path: "topnotch-validator-\(UUID().uuidString)")
             .appending(path: "Test.topblock")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Framing.encoder().encode(manifest).write(to: folder.appending(path: "manifest.json"))
-        if writeExecutable {
-            let executable = folder.appending(path: manifest.executable)
-            try Data("#!/bin/sh\n".utf8).write(to: executable)
-            try FileManager.default.setAttributes([.posixPermissions: executableMode], ofItemAtPath: executable.path)
-        }
+        try writeBundle(at: folder, manifest: manifest, writeExecutable: writeExecutable, mode: executableMode)
         return folder
     }
 
@@ -102,7 +96,8 @@ struct PackageValidatorTests {
     }
 
     @Test func refusesExecutableOutsidePackage() throws {
-        for path in ["../x", "/bin/sh", "bin/../../x"] {
+        // `../x` stays in the package but leaves `Contents/MacOS`.
+        for path in ["../x", "/bin/sh", "bin/../../x", "../../../x"] {
             let error = try refusal(manifest(executable: path), writeExecutable: false)
             #expect(error == .executableOutsidePackage(path), "\(path) leaves the package")
         }
@@ -111,7 +106,7 @@ struct PackageValidatorTests {
     @Test func refusesSymlinkLeadingOutsidePackage() throws {
         // The executable is a link to a program outside the package.
         let linked = try package(manifest(executable: "HelloBlock"), writeExecutable: false)
-        try FileManager.default.createSymbolicLink(at: linked.appending(path: "HelloBlock"),
+        try FileManager.default.createSymbolicLink(at: macOS(linked).appending(path: "HelloBlock"),
                                                    withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
         #expect(throws: BlockInstallError.executableOutsidePackage("HelloBlock")) {
             try PackageValidator.load(linked, source: Self.installed)
@@ -119,7 +114,7 @@ struct PackageValidatorTests {
 
         // A folder in the path is a link to a folder outside the package.
         let throughFolder = try package(manifest(executable: "bin/sh"), writeExecutable: false)
-        try FileManager.default.createSymbolicLink(at: throughFolder.appending(path: "bin"),
+        try FileManager.default.createSymbolicLink(at: macOS(throughFolder).appending(path: "bin"),
                                                    withDestinationURL: URL(fileURLWithPath: "/bin"))
         #expect(throws: BlockInstallError.executableOutsidePackage("bin/sh")) {
             try PackageValidator.load(throughFolder, source: Self.installed)
@@ -127,10 +122,10 @@ struct PackageValidatorTests {
 
         // A link that stays inside the package is fine.
         let inside = try package(manifest(executable: "Link"), writeExecutable: false)
-        let real = inside.appending(path: "Real")
+        let real = macOS(inside).appending(path: "Real")
         try Data("#!/bin/sh\n".utf8).write(to: real)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: real.path)
-        try FileManager.default.createSymbolicLink(atPath: inside.appending(path: "Link").path, withDestinationPath: "Real")
+        try FileManager.default.createSymbolicLink(atPath: macOS(inside).appending(path: "Link").path, withDestinationPath: "Real")
         #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
     }
 
@@ -201,5 +196,40 @@ struct PackageValidatorTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         #expect(throws: BlockInstallError.self) { try PackageValidator.load(folder, source: Self.installed) }
+    }
+
+    @Test func flatPackageIsRefusedAsOldFormat() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "topnotch-validator-\(UUID().uuidString)")
+            .appending(path: "Flat.topblock")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let hello = manifest()
+        try Framing.encoder().encode(hello).write(to: folder.appending(path: "manifest.json"))
+        let executable = folder.appending(path: hello.executable)
+        try Data("#!/bin/sh\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        #expect(throws: BlockInstallError.oldPackageFormat) { try PackageValidator.load(folder, source: Self.installed) }
+        #expect(try #require(BlockInstallError.oldPackageFormat.errorDescription).contains("package-block.sh"))
+    }
+
+    @Test func unknownAccessTokenIsRefused() throws {
+        let url = try package(manifest())
+        let manifestFile = url.appending(path: "Contents/Resources/manifest.json")
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: manifestFile)) as? [String: Any])
+        object["access"] = ["network", "camera"]
+        try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
+
+        #expect(throws: BlockInstallError.unknownAccess("camera")) { try PackageValidator.load(url, source: Self.installed) }
+
+        // Known tokens pass.
+        object["access"] = ["network", "files.read", "files.screenshots"]
+        try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
+        let loaded = try PackageValidator.load(url, source: Self.installed)
+        #expect(loaded.access == [.network, .filesRead, .filesScreenshots])
+    }
+
+    private func macOS(_ package: URL) -> URL {
+        package.appending(path: "Contents/MacOS")
     }
 }

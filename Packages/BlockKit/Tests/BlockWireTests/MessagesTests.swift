@@ -314,10 +314,11 @@ enum SamplesV2 {
         .box(cornerRadius: 8, fillOpacity: 0, stroke: ViewNode.Stroke(color: amber, width: 1), .text("Drop here")),
         .frame(fill: .width, .spacer()),
         .symbol("checkmark.circle.fill", size: 14, color: amber, weight: .semibold, secondaryColor: dim),
-        .button(id: "undo", title: "Undo", style: .accent, symbol: "arrow.uturn.backward", enabled: true, color: amber, restOpacity: 0.7),
+        .button(id: "undo", title: "Undo", style: .accent, symbol: "arrow.uturn.backward", enabled: true, color: amber, restOpacity: 0.7,
+                labelColor: WireColor("#000000", opacity: 0.85)),
         .button(id: "revert", title: "Revert", style: .plain, enabled: false),
         .button(id: "keep", title: "Keep", style: .capsule),
-        .progress(1, color: amber, drainsOver: 5),
+        .progress(1, color: amber, drainsOver: 5, track: WireColor("#FFFFFF", opacity: 0.15)),
         .progress(0.25, width: 80),
     ])
 

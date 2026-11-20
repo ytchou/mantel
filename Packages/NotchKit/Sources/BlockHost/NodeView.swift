@@ -111,15 +111,15 @@ public struct NodeView: View {
                     .frame(width: size, height: size)
             }
 
-        case let .progress(value, width, color, drainsOver):
-            ProgressNode(value: value, width: width, color: color, drainsOver: drainsOver, model: model)
+        case let .progress(value, width, color, drainsOver, track):
+            ProgressNode(value: value, width: width, color: color, drainsOver: drainsOver, track: track, model: model)
                 // A new value or duration starts the bar again; the same one
                 // sent again in a new tree keeps it draining.
                 .id(drainsOver.map { [value, $0] } ?? [])
 
-        case let .button(id, title, style, symbol, enabled, color, restOpacity):
+        case let .button(id, title, style, symbol, enabled, color, restOpacity, labelColor):
             ButtonNode(id: id, title: title, style: style ?? .capsule, symbol: symbol, enabled: enabled ?? true,
-                       color: color, restOpacity: restOpacity, onButton: onButton)
+                       color: color, restOpacity: restOpacity, labelColor: labelColor, onButton: onButton)
 
         case let .spacer(minLength):
             Spacer(minLength: minLength.map { CGFloat($0) })
@@ -290,6 +290,8 @@ private struct ProgressNode: View {
     let width: Double?
     let color: WireColor?
     let drainsOver: Double?
+    /// The unfilled bar; white at 0.2 when nil.
+    let track: WireColor?
     let model: RemoteModel
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var drained = false
@@ -316,7 +318,7 @@ private struct ProgressNode: View {
     private func bar(width: CGFloat, height: CGFloat) -> some View {
         let fraction = drained ? 0 : min(max(value, 0), 1)
         return Capsule()
-            .fill(.white.opacity(0.2))
+            .fill(track.map { Color(wire: $0) } ?? .white.opacity(0.2))
             .frame(width: width, height: height)
             .overlay(alignment: .leading) {
                 Capsule().fill(Color(wire: color)).frame(width: width * fraction, height: height)
@@ -364,12 +366,13 @@ private struct ButtonNode: View {
     let enabled: Bool
     let color: WireColor?
     let restOpacity: Double?
+    let labelColor: WireColor?
     let onButton: @MainActor (String) -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button { onButton(id) } label: { label }
-            .buttonStyle(WireButtonStyle(style: style, color: color))
+            .buttonStyle(WireButtonStyle(style: style, color: color, labelColor: labelColor))
             .disabled(!enabled)
             .opacity(enabled ? (isHovering ? 1 : restOpacity ?? 1) : 0.4)
             .onHover { isHovering = $0 }
@@ -393,6 +396,8 @@ private struct ButtonNode: View {
 private struct WireButtonStyle: ButtonStyle {
     let style: ViewNode.ButtonStyle
     let color: WireColor?
+    /// The label colour of an `accent` button; nil derives it from `color`.
+    let labelColor: WireColor?
 
     @ViewBuilder func makeBody(configuration: Configuration) -> some View {
         switch style {
@@ -423,6 +428,7 @@ private struct WireButtonStyle: ButtonStyle {
     /// Text on the accent: the accent at 17% brightness, which gives
     /// Rename's dark amber on its amber. White on the system accent.
     private var onAccent: Color {
+        if let labelColor { return Color(wire: labelColor) }
         guard let rgb = color?.rgb else { return .white }
         return Color(red: rgb.red * 0.17, green: rgb.green * 0.17, blue: rgb.blue * 0.17)
     }

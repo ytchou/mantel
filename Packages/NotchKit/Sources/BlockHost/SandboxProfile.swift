@@ -50,11 +50,16 @@ struct SandboxProfile: Sendable, Equatable {
     // Resolves only a path that exists; build the profile after creating the
     // block's folders. A missing path is used as given.
     static func literal(_ url: URL) -> String {
-        let path = realPath(url) ?? url.standardizedFileURL.path
+        let path = resolvedPath(url)
         let escaped = path
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+
+    /// `url`'s path with symbolic links resolved when it exists, else as given.
+    static func resolvedPath(_ url: URL) -> String {
+        realPath(url) ?? url.standardizedFileURL.path
     }
 
     private static func realPath(_ url: URL) -> String? {

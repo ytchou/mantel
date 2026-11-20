@@ -18,40 +18,53 @@ enum PackageValidator {
         "shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns",
     ]
 
-    /// True when `package` is a bundle: `Contents/Resources/manifest.json`
-    /// and the executable in `Contents/MacOS`.
-    // Stop-gap: the flat layout (manifest.json and the executable at the top)
-    // is still accepted; Task 7 refuses it and drops this check.
-    static func isBundle(_ package: URL) -> Bool {
-        FileManager.default.fileExists(atPath: package.appending(path: "Contents/Resources/manifest.json").path)
-    }
-
-    /// The package's `manifest.json`, in either layout.
+    /// The package's `manifest.json`: `Contents/Resources/manifest.json`.
+    /// `codesign` seals it with the executable.
     static func manifestURL(in package: URL) -> URL {
-        isBundle(package)
-            ? package.appending(path: "Contents/Resources/manifest.json")
-            : package.appending(path: "manifest.json")
+        package.appending(path: "Contents/Resources/manifest.json")
     }
 
-    /// The folder the manifest's `executable` is relative to, in either layout.
+    /// The folder the manifest's `executable` is relative to: `Contents/MacOS`.
     static func executableFolder(in package: URL) -> URL {
-        isBundle(package) ? package.appending(path: "Contents/MacOS", directoryHint: .isDirectory) : package
+        package.appending(path: "Contents/MacOS", directoryHint: .isDirectory)
+    }
+
+    /// True for a package in the old flat format: `manifest.json` at the
+    /// top and no bundle manifest. Refused, with a message to package again.
+    static func isOldFormat(_ package: URL) -> Bool {
+        !FileManager.default.fileExists(atPath: manifestURL(in: package).path)
+            && FileManager.default.fileExists(atPath: package.appending(path: "manifest.json").path)
     }
 
     /// Reads the package's `manifest.json` and checks it. Returns the manifest
-    /// when the package may run.
+    /// when the package may run. The signature is checked by `BlockStore`.
     static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
+        if isOldFormat(package) { throw .oldPackageFormat }
         let manifest: Manifest
+        let data: Data
         do {
-            let data = try Data(contentsOf: manifestURL(in: package))
-            manifest = try Manifest.decode(data)
-        } catch let error as ManifestError {
-            throw .unreadableManifest(describe(error))
+            data = try Data(contentsOf: manifestURL(in: package))
         } catch {
             throw .unreadableManifest(error.localizedDescription)
         }
+        do throws(ManifestError) {
+            manifest = try Manifest.decode(data)
+        } catch .invalidField("access") {
+            throw unknownAccess(in: data) ?? .unreadableManifest(describe(.invalidField("access")))
+        } catch {
+            throw .unreadableManifest(describe(error))
+        }
         try validate(manifest, package: package, source: source)
         return manifest
+    }
+
+    /// The first `access` token this app does not know, as a refusal.
+    private static func unknownAccess(in data: Data) -> BlockInstallError? {
+        struct Tokens: Decodable { var access: [String] }
+        guard let tokens = try? JSONDecoder().decode(Tokens.self, from: data),
+              let unknown = tokens.access.first(where: { Access(rawValue: $0) == nil })
+        else { return nil }
+        return .unknownAccess(unknown)
     }
 
     /// Checks the meaning of a decoded manifest against its package folder.
@@ -85,14 +98,16 @@ enum PackageValidator {
             let root = parent.path
             return child.path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
         }
-        let executable = executableFolder(in: package).appending(path: path)
+        let folder = executableFolder(in: package)
+        let executable = folder.appending(path: path)
         let resolved = executable.standardizedFileURL.path
         // `appending(path:)` treats a leading "/" as relative, so an absolute
         // path is refused on its own. The path is checked as written, then
-        // with symbolic links followed, so a link cannot lead outside.
+        // with symbolic links followed, so a link cannot lead outside
+        // `Contents/MacOS`.
         guard !path.hasPrefix("/"),
-              isInside(executable.standardizedFileURL, package.standardizedFileURL),
-              isInside(executable.resolvingSymlinksInPath(), package.resolvingSymlinksInPath())
+              isInside(executable.standardizedFileURL, folder.standardizedFileURL),
+              isInside(executable.resolvingSymlinksInPath(), folder.resolvingSymlinksInPath())
         else {
             throw .executableOutsidePackage(path)
         }

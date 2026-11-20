@@ -4,7 +4,7 @@ import SwiftUI
 /// A block's settings, drawn by the app from its manifest. The rows go inside
 /// a grouped `Form` section, where the settings window places a block's pane:
 /// a switch for each `toggle`, a menu for each `choice`, and secondary text
-/// for each `note`. Values are read from and written through the stand-in,
+/// for each `note` (the block may replace it with `settingNote`). Values are read from and written through the stand-in,
 /// which stores them as `<id>.<key>` and tells the running block.
 struct SettingsForm: View {
     let block: RemoteBlock
@@ -21,12 +21,17 @@ struct SettingsForm: View {
                     }
                 }
             case .note:
-                Text(spec.title)
+                Text(noteText(for: spec.key, title: spec.title))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// A note's text: what the block last set, or the manifest title.
+    func noteText(for key: String, title: String) -> String {
+        block.notes[key] ?? title
     }
 
     /// A toggle's value. Unknown keys read as on, as an unset toggle does.

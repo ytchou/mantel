@@ -10,14 +10,16 @@ import os
 /// Three kinds of package, in this order: the bundled blocks, shipped inside
 /// the app bundle (now-playing); the installed blocks in `blocksRoot`; and
 /// the development block, one package run from where it is, named with the
-/// `-devBlock <path>` launch argument.
+/// `-devBlock <path>` launch argument. Every block runs sandboxed; only
+/// installed packages have their signature checked (see `checkSignature`).
 @MainActor
 public final class BlockStore: BlockInstalling {
     private let owner: @MainActor () -> BlockID?
     private let blocksRoot: URL
     private let dataRoot: URL
     private let bundledRoot: URL?
-    private let launcher: BlockLauncher
+    private let launcher: BlockLauncher?
+    private let screenshotFolder: @MainActor () -> URL?
     private let defaults: UserDefaults
     private let turnOff: @MainActor (BlockID) -> Void
     private let register: @MainActor (any NotchBlock) -> Void
@@ -29,6 +31,8 @@ public final class BlockStore: BlockInstalling {
     private var made: [RemoteBlock] = []
     /// Installed packages refused at launch, listed so they can be removed.
     private var refused: [RefusedBlock] = []
+    /// Checks the signature of installed packages. Tests inject results.
+    var signatures: any SignatureChecking = SystemSignatureChecker()
 
     /// - Parameters:
     ///   - owner: who owns the notch now; pass `{ runtime.state.owner }`.
@@ -37,7 +41,12 @@ public final class BlockStore: BlockInstalling {
     ///   - dataRoot: the folder holding one data folder per block.
     ///   - bundledRoot: the folder of `.topblock` packages shipped with the
     ///     app; the app passes `Contents/Resources/Blocks`. Nil for none.
-    ///   - defaults: where block settings, turn-off reasons and install paths are stored.
+    ///   - launcher: starts block processes; nil starts each one sandboxed
+    ///     from its manifest's `access`. Tests pass in-memory processes.
+    ///   - screenshotFolder: the folder `files.screenshots` opens; the app
+    ///     passes the folder the screenshot watcher uses.
+    ///   - defaults: where block settings, turn-off reasons, install paths,
+    ///     signers and the "Allow blocks without a signature" switch are stored.
     ///   - turnOff: turns a block off after repeated failures; the app passes
     ///     a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
     ///   - register: adds a newly installed block to the runtime, on unless
@@ -53,7 +62,8 @@ public final class BlockStore: BlockInstalling {
         blocksRoot: URL,
         dataRoot: URL,
         bundledRoot: URL? = nil,
-        launcher: @escaping BlockLauncher = { try BlockProcess.spawn(executable: $0, generation: $1) },
+        launcher: BlockLauncher? = nil,
+        screenshotFolder: @escaping @MainActor () -> URL? = { nil },
         defaults: UserDefaults = .standard,
         turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
         register: @escaping @MainActor (any NotchBlock) -> Void = { _ in },
@@ -66,6 +76,7 @@ public final class BlockStore: BlockInstalling {
         self.dataRoot = dataRoot
         self.bundledRoot = bundledRoot
         self.launcher = launcher
+        self.screenshotFolder = screenshotFolder
         self.defaults = defaults
         self.turnOff = turnOff
         self.register = register
@@ -90,6 +101,13 @@ public final class BlockStore: BlockInstalling {
     /// Where the path a block was installed from is kept. Under `block.<id>.`,
     /// so Remove clears it with the block's other keys.
     static func installedFromKey(_ id: String) -> String { "block.\(id).installedFrom" }
+
+    /// Where the signer of an installed block is kept; an update must have
+    /// the same one. Under `block.<id>.`, so Remove clears it.
+    static func signerKey(_ id: String) -> String { "block.\(id).signer" }
+
+    /// The "Allow blocks without a signature" switch (`BlockSettings`), off by default.
+    static let allowUnsignedKey = "block.allowUnsigned"
 
     /// The stand-ins to register, in order: the bundled blocks by folder
     /// name, the installed blocks by id, then the development block.
@@ -117,7 +135,38 @@ public final class BlockStore: BlockInstalling {
         }
         made += blocks.compactMap { $0 as? RemoteBlock }
         refused += blocks.compactMap { $0 as? RefusedBlock }
+        // Stand-ins start their processes only when registered, after this.
+        Self.moveOldDataFolders(from: dataRoot.deletingLastPathComponent(), to: dataRoot,
+                                for: Set(blocks.compactMap { ($0 as? RemoteBlock)?.id.rawValue }))
         return blocks
+    }
+
+    // MARK: Old data folders
+
+    /// The data folders of the blocks that ran inside the app, next to
+    /// `BlockData`, and the block id each now belongs to.
+    // Remove this table and `moveOldDataFolders` two releases after Shelf and
+    // Rename left the app: by then every Mac has moved its folders.
+    static let oldDataFolders: [(folder: String, id: String)] = [("Shelf", "shelf"), ("Rename", "rename")]
+
+    /// Moves each old data folder to `<dataRoot>/<id>`, once: only when the
+    /// target does not exist yet. Only for `ids`, the blocks that now run as
+    /// packages, so a block still built into the app keeps its folder.
+    static func moveOldDataFolders(from oldRoot: URL, to dataRoot: URL, for ids: Set<String>) {
+        let files = FileManager.default
+        let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
+        for (folder, id) in oldDataFolders where ids.contains(id) {
+            let source = oldRoot.appending(path: folder, directoryHint: .isDirectory)
+            let target = dataRoot.appending(path: id, directoryHint: .isDirectory)
+            guard files.fileExists(atPath: source.path), !files.fileExists(atPath: target.path) else { continue }
+            do {
+                try files.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+                try files.moveItem(at: source, to: target)
+                log.info("moved the old data folder \(folder, privacy: .public) to BlockData/\(id, privacy: .public)")
+            } catch {
+                log.error("moving the old data folder \(folder, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     /// Ends every block process this store started and waits for each to exit.
@@ -130,6 +179,7 @@ public final class BlockStore: BlockInstalling {
     public func inspect(_ url: URL) throws -> BlockPackageSummary {
         let manifest = try PackageValidator.load(url, source: .installed(from: url.path))
         try checkAvailable(manifest.id)
+        let signer = try checkSignature(url, id: manifest.id)
         let installed = installedBlock(manifest.id)
         let events = manifest.events.compactMap(WireEvent.init(rawValue:))
         let oldEvents = Set(installed?.manifest.events ?? [])
@@ -142,7 +192,10 @@ public final class BlockStore: BlockInstalling {
             newEvents: installed == nil ? [] : events.filter { !oldEvents.contains($0.rawValue) }.map(Self.eventText),
             permissions: manifest.permissions,
             sourcePath: url.path,
-            installedVersion: installed?.manifest.version
+            installedVersion: installed?.manifest.version,
+            access: manifest.access.map(Self.accessText),
+            signer: signer,
+            isSigned: signer != nil
         )
     }
 
@@ -156,6 +209,7 @@ public final class BlockStore: BlockInstalling {
         let source = BlockSource.installed(from: url.path)
         let manifest = try PackageValidator.load(url, source: source)
         try checkAvailable(manifest.id)
+        let signer = try checkSignature(url, id: manifest.id)
         let destination = blocksRoot.appending(path: "\(manifest.id).topblock", directoryHint: .isDirectory)
         // Copied beside the destination first, so a failed copy leaves the
         // installed version untouched. Its extension is not `.topblock`, so a
@@ -187,6 +241,7 @@ public final class BlockStore: BlockInstalling {
             throw BlockInstallError.copyFailed(error.localizedDescription)
         }
         defaults.set(url.path, forKey: Self.installedFromKey(manifest.id))
+        if let signer { defaults.set(signer, forKey: Self.signerKey(manifest.id)) }
 
         if let existing {
             log.info("updated \(manifest.id, privacy: .public) to \(manifest.version, privacy: .public)")
@@ -219,6 +274,7 @@ public final class BlockStore: BlockInstalling {
         }
         unregister(id)
         clearKeys(id)
+        defaults.removeObject(forKey: Self.signerKey(id.rawValue))
         let data = dataRoot.appending(path: id.rawValue)
         if FileManager.default.fileExists(atPath: data.path) { try? FileManager.default.removeItem(at: data) }
         do {
@@ -249,6 +305,47 @@ public final class BlockStore: BlockInstalling {
         case .dragStarted: "Dragging starts"
         case .dragEnded: "Dragging ends"
         }
+    }
+
+    /// An access token in the user's words, for the install sheet and the Blocks page.
+    nonisolated static func accessText(_ access: Access) -> String {
+        switch access {
+        case .network: "Use the network"
+        case .filesRead: "Read your files"
+        case .filesScreenshots: "Rename files in the screenshot folder"
+        }
+    }
+
+    // MARK: Signature
+
+    /// The rule for an installed package, at install and at every launch:
+    /// a valid signature that is not ad hoc, by the signer stored for this
+    /// id if there is one. An unsigned or ad hoc package passes only with
+    /// the "Allow blocks without a signature" switch on, and never as an
+    /// update of a signed block. A broken seal never passes. Bundled blocks
+    /// are covered by the app's own seal and development blocks have no
+    /// rule; neither comes through here.
+    /// - Returns: the signer to store, or nil for an unsigned package let in by the switch.
+    private func checkSignature(_ package: URL, id: String) throws(BlockInstallError) -> String? {
+        let pinned = defaults.string(forKey: Self.signerKey(id))
+        switch signatures.check(package) {
+        case let .invalid(reason):
+            throw .badSignature(reason)
+        case let .valid(signer, teamID):
+            let name = Self.signerName(signer: signer, teamID: teamID)
+            if let pinned, pinned != name { throw .differentSigner(installed: pinned, found: name) }
+            return name
+        case .adHoc, .unsigned:
+            if let pinned { throw .differentSigner(installed: pinned, found: "no signature") }
+            guard defaults.bool(forKey: Self.allowUnsignedKey) else { throw .unsigned }
+            return nil
+        }
+    }
+
+    /// The signer as shown and stored: the certificate's name, with the
+    /// team id when the name does not already carry it.
+    nonisolated static func signerName(signer: String, teamID: String) -> String {
+        teamID.isEmpty || signer.contains(teamID) ? signer : "\(signer) (\(teamID))"
     }
 
     // MARK: Scanning
@@ -309,6 +406,10 @@ public final class BlockStore: BlockInstalling {
                 }
                 do throws(BlockInstallError) {
                     let manifest = try PackageValidator.load(package, source: source)
+                    // Checked again at every launch: a package changed on disk does not run.
+                    if let signer = try checkSignature(package, id: id) {
+                        defaults.set(signer, forKey: Self.signerKey(id))
+                    }
                     log.info("installed block \(id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
                     return standIn(manifest: manifest, package: package, source: source)
                 } catch {
@@ -358,6 +459,7 @@ public final class BlockStore: BlockInstalling {
             dataFolder: dataRoot.appending(path: manifest.id),
             owner: owner,
             launcher: launcher,
+            screenshotFolder: screenshotFolder,
             defaults: defaults,
             turnOff: turnOff
         )
