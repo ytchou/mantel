@@ -230,7 +230,7 @@ struct RemoteBlockTests {
 
         let reason = try #require(failures.first)
         #expect(reason.contains("99"))
-        #expect(reason.contains("contract 1"))
+        #expect(reason.contains("contracts 1 to 2"))
         #expect(rig.runtime.state.owner == nil)
         #expect(!rig.process.received.contains { if case .welcome = $0 { true } else { false } })
     }

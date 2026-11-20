@@ -238,10 +238,11 @@ private func matchGoldenFile(_ name: String, blockToHost: [BlockToHost], hostToB
 /// The first `blockToHostCount` lines are block-to-app messages.
 private func decodeAndEncodeGoldenFile(_ name: String, blockToHostCount: Int) throws {
     let text = try String(contentsOf: fixtureURL(name), encoding: .utf8)
-    let lines = text.split(separator: "\n")
-        .map(String.init)
-        .filter { $0 != "[" && $0 != "]" }
-        .map { $0.hasSuffix(",") ? String($0.dropLast()) : $0 }
+    let raw: [String] = text.split(separator: "\n").map(String.init)
+    let kept: [String] = raw.filter { (line: String) -> Bool in line != "[" && line != "]" }
+    let lines: [String] = kept.map { (line: String) -> String in
+        line.hasSuffix(",") ? String(line.dropLast()) : line
+    }
     #expect(lines.count > blockToHostCount)
     for (index, line) in lines.enumerated() {
         let body = Data(line.utf8)

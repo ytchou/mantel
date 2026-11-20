@@ -79,7 +79,7 @@ struct PackageValidatorTests {
         #expect(error == .unsupportedContract(found: 99, supported: Contract.supported))
         let text = try #require(error.errorDescription)
         #expect(text.contains("contract 99"))
-        #expect(text.contains("supports contract 1"))
+        #expect(text.contains("supports contracts 1 to 2"))
     }
 
     @Test func refusesReservedIds() throws {
