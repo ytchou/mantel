@@ -15,7 +15,7 @@ enum PackageValidator {
     // time; if they grow or become dynamic, build this set from the built-in
     // blocks' ids plus the fixed prefixes, in one place the app also reads.
     static let reservedIDs: Set<String> = [
-        "shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns",
+        "shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns",
     ]
 
     /// The package's `manifest.json`: `Contents/Resources/manifest.json`.

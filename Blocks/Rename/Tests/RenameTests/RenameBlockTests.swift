@@ -117,7 +117,7 @@ private func texts(_ node: ViewNode?) -> [String] {
 }
 
 private func buttonIDs(_ node: ViewNode?) -> [String] {
-    allNodes(node).compactMap { if case let .button(id, _, _, _, _, _, _, _) = $0.kind { id } else { nil } }
+    allNodes(node).compactMap { if case let .button(id, _, _, _, _, _, _, _, _) = $0.kind { id } else { nil } }
 }
 
 private func hasSweep(_ node: ViewNode?) -> Bool {
@@ -409,7 +409,7 @@ private func line(_ text: String, y: CGFloat, height: CGFloat) -> RecognizedLine
     #expect(!hasSweep(renamed))
     #expect(drainingBars(renamed) == [6])
     let undo = try #require(allNodes(renamed).first { if case .button = $0.kind { true } else { false } })
-    guard case let .button(_, title, style, symbol, _, color, _, labelColor) = undo.kind else { return }
+    guard case let .button(_, title, style, symbol, _, color, _, labelColor, _) = undo.kind else { return }
     #expect(title == "Undo")
     #expect(style == .accent)
     #expect(symbol == "arrow.uturn.backward")
@@ -519,4 +519,39 @@ private func line(_ text: String, y: CGFloat, height: CGFloat) -> RecognizedLine
 
     // Sent once, after `welcome`: the note in the manifest is only a placeholder.
     #expect(host.notes == [SettingNote(key: "modelStatus", text: ModelStatus.modelNotReady.explanation)])
+}
+
+// MARK: - The look of the in-app view
+
+@Test func recentsHeaderLinesUpOnTheFirstBaselineInsideTheInAppPadding() throws {
+    let item = RecentRename(
+        folderPath: "/tmp", newName: "payment-failed-dialog.png", originalName: "Screenshot 1.png",
+        renamedAt: Date(), usedFallback: false
+    )
+    var state = RenameState()
+    state.phase = .naming
+    state.recents = [item]
+    let tree = RenameTrees.recents(state, fileExists: { _ in false })
+
+    // 18 at the sides and bottom, 6 at the top, on the stack of content.
+    guard case let .frame(content, _, _, fill, alignment) = tree.kind,
+          case let .vstack(children, spacing, _, padding, _) = content.kind else {
+        Issue.record("not a frame around a vstack")
+        return
+    }
+    #expect(fill == .both && alignment == .topLeading)
+    #expect(spacing == 12)
+    #expect(padding == .init(horizontal: 18, top: 6, bottom: 18))
+
+    let header = try #require(children.first?.children.first)
+    guard case let .hstack(_, _, headerAlignment, _, _) = header.kind else {
+        Issue.record("header is not an hstack")
+        return
+    }
+    #expect(headerAlignment == .firstTextBaseline)
+
+    // A file that is gone: Revert is disabled, which the app draws at 0.4.
+    let revert = try #require(allNodes(tree).first { if case .button = $0.kind { true } else { false } })
+    guard case let .button(_, _, _, _, enabled, _, _, _, _) = revert.kind else { return }
+    #expect(enabled == false)
 }

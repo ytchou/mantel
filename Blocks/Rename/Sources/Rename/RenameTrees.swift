@@ -175,7 +175,7 @@ enum RenameTrees {
         }
         var content: [ViewNode] = [
             .vstack(spacing: 2, alignment: .start, [
-                .hstack(heading),
+                .hstack(alignment: .firstTextBaseline, heading),
                 .styledText("Every rename can go back to its old name", size: secondarySize, opacity: secondaryOpacity),
             ]),
         ]
@@ -192,10 +192,8 @@ enum RenameTrees {
             content.append(.scroll(.vertical, .vstack(spacing: 12, rows)))
         }
         // Padding 18 at the sides and bottom, 6 at the top, as in the in-app view.
-        return .frame(fill: .both, alignment: .topLeading, .vstack(spacing: 0, alignment: .start, padding: .init(horizontal: padding, vertical: 6), [
-            .vstack(spacing: 12, alignment: .start, content),
-            .frame(height: padding - 6, .spacer(minLength: 0)),
-        ]))
+        return .frame(fill: .both, alignment: .topLeading,
+                      .vstack(spacing: 12, alignment: .start, padding: .init(horizontal: padding, top: 6, bottom: padding), content))
     }
 
     private static func row(_ item: RecentRename, isNewest: Bool, canRevert: Bool) -> ViewNode {

@@ -1,12 +1,9 @@
 import AppKit
 import BlockHost
-import DemoBlock
 import EventSources
 import NotchCore
 import NotchShell
 import PlatformServices
-import RenameBlock
-import ShelfBlock
 import SwiftUI
 
 /// Thin app target. It only starts the process and wires the modules together;
@@ -35,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dataRoot: BlockStore.defaultDataRoot,
         // Built into Contents/Resources/Blocks by the "Build bundled blocks" phase.
         bundledRoot: Bundle.main.resourceURL?.appending(path: "Blocks"),
+        // The folder `files.screenshots` opens: the one the screenshot watcher reads.
+        screenshotFolder: { ScreenshotFolder.current() },
         defaults: .standard,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
@@ -50,15 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
-        // The bundled blocks (now-playing), the installed blocks, then, with
-        // `-devBlock <path to .topblock>`, one block run from where it is.
-        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
-        // `-demoBlock YES` adds the demo block, to try hover, click and drop.
-        if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
+        // The bundled blocks (Shelf, Now Playing, Screenshot Names), the
+        // installed blocks, then, with `-devBlock <path to .topblock>`, one
+        // block run from where it is. Every block runs in its own process.
+        let blocks = blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         for block in blocks {
             runtime.register(block, enabled: settings.isEnabled(block.id))
         }
+        // The order the owner set on the Blocks page, or the default one.
+        settings.applyOrder(to: runtime)
 
         // `-forcePill YES` tries the floating pill on a Mac with a notch.
         let shell = NotchShellController(runtime: runtime, forcePill: defaults.bool(forKey: "forcePill"))

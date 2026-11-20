@@ -78,7 +78,7 @@ struct PackageValidatorTests {
 
     @Test func refusesReservedIds() throws {
         // `com`, `apple` and `ns` start common UserDefaults keys, which Remove would clear.
-        for id in ["shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns"] {
+        for id in ["shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns"] {
             #expect(try refusal(manifest(id: id)) == .reservedID(id), "\(id) is reserved for installed blocks")
             #expect(try refusal(manifest(id: id), source: .development(path: "/tmp/Test.topblock")) == .reservedID(id),
                     "\(id) is reserved for development blocks")

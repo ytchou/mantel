@@ -6,14 +6,17 @@ import Foundation
 /// encoded, so a tree built with version 1 fields encodes as in version 1.
 ///
 /// Every node may carry an accessibility label; the app applies it as the
-/// element's label for VoiceOver.
+/// element's label for VoiceOver, and (version 2) a tooltip, `help`.
 public struct ViewNode: Codable, Hashable, Sendable {
     public var kind: Kind
     public var accessibilityLabel: String?
+    /// The tooltip shown while the pointer rests on the element.
+    public var help: String?
 
-    public init(_ kind: Kind, accessibilityLabel: String? = nil) {
+    public init(_ kind: Kind, accessibilityLabel: String? = nil, help: String? = nil) {
         self.kind = kind
         self.accessibilityLabel = accessibilityLabel
+        self.help = help
     }
 
     public indirect enum Kind: Codable, Hashable, Sendable {
@@ -41,8 +44,10 @@ public struct ViewNode: Codable, Hashable, Sendable {
         case progress(value: Double, width: Double?, color: WireColor? = nil, drainsOver: Double? = nil, track: WireColor? = nil)
         /// A button. A click sends `input` with `button(id)`. `restOpacity`
         /// is its opacity while the pointer is not on it. `labelColor`
-        /// colours the title and symbol of an `accent` button.
-        case button(id: String, title: String, style: ButtonStyle? = nil, symbol: String? = nil, enabled: Bool? = nil, color: WireColor? = nil, restOpacity: Double? = nil, labelColor: WireColor? = nil)
+        /// colours the title and symbol of an `accent` button. `label`, when
+        /// set, is drawn instead of the title and symbol; the title is then
+        /// what VoiceOver reads.
+        case button(id: String, title: String, style: ButtonStyle? = nil, symbol: String? = nil, enabled: Bool? = nil, color: WireColor? = nil, restOpacity: Double? = nil, labelColor: WireColor? = nil, label: ViewNode? = nil)
         /// Flexible space.
         case spacer(minLength: Double?)
 
@@ -68,14 +73,19 @@ public struct ViewNode: Codable, Hashable, Sendable {
         /// highlight, drag-out of `drag`, a context `menu`, click and
         /// double-click (sent only when set to true) and a tooltip.
         /// Answers come as `input` with `item(id, action)`, `dragBegan(id)`
-        /// and `dragEnded(id, succeeded)`.
-        case item(id: String, child: ViewNode, hoverFill: WireColor?, cornerRadius: Double?, drag: ItemDrag?, menu: [ActionItem]?, click: Bool?, doubleClick: Bool?, help: String?)
+        /// and `dragEnded(id, succeeded)`. `overlay` is drawn over the item,
+        /// above the layer that takes its drags, so buttons in it can be
+        /// clicked; a button in it is at its `restOpacity` while the pointer
+        /// is not on the item, rather than not on the button.
+        case item(id: String, child: ViewNode, hoverFill: WireColor?, cornerRadius: Double?, drag: ItemDrag?, menu: [ActionItem]?, click: Bool?, doubleClick: Bool?, help: String?, overlay: ViewNode? = nil)
     }
 
     /// The order of a stack's children across the stack: leading, centre or
     /// trailing for a vertical stack; top, centre or bottom for a horizontal one.
+    /// `firstTextBaseline` (version 2) lines up the first text baselines of a
+    /// horizontal stack's children; a vertical stack treats it as `start`.
     public enum StackAlignment: String, Codable, Hashable, Sendable {
-        case start, center, end
+        case start, center, end, firstTextBaseline
     }
 
     public enum TextStyle: String, Codable, Hashable, Sendable {
@@ -87,12 +97,18 @@ public struct ViewNode: Codable, Hashable, Sendable {
         case secondary
     }
 
+    /// Padding. `top` and `bottom` (version 2), when set, replace
+    /// `vertical` on that edge.
     public struct Insets: Codable, Hashable, Sendable {
         public var horizontal: Double
         public var vertical: Double
-        public init(horizontal: Double = 0, vertical: Double = 0) {
+        public var top: Double?
+        public var bottom: Double?
+        public init(horizontal: Double = 0, vertical: Double = 0, top: Double? = nil, bottom: Double? = nil) {
             self.horizontal = horizontal
             self.vertical = vertical
+            self.top = top
+            self.bottom = bottom
         }
     }
 
@@ -141,6 +157,11 @@ public struct ViewNode: Codable, Hashable, Sendable {
         case tail, middle
     }
 
+    /// How the lines of a multi-line `styledText` line up.
+    public enum TextAlignment: String, Codable, Hashable, Sendable {
+        case leading, center, trailing
+    }
+
     /// An outline: `dash` is the lengths of dashes and gaps, solid when nil.
     public struct Stroke: Codable, Hashable, Sendable {
         public var color: WireColor
@@ -164,7 +185,8 @@ public struct ViewNode: Codable, Hashable, Sendable {
     }
 
     /// How a `styledText` is drawn. Nil fields take the app's defaults:
-    /// 12 pt, regular, white, opaque, one line, truncated at the end.
+    /// 12 pt, regular, white, opaque, one line, truncated at the end, lines
+    /// lined up leading.
     public struct TextAttributes: Codable, Hashable, Sendable {
         public var size: Double?
         public var weight: FontWeight?
@@ -173,6 +195,7 @@ public struct ViewNode: Codable, Hashable, Sendable {
         public var lineLimit: Int?
         public var truncation: Truncation?
         public var monospacedDigits: Bool?
+        public var alignment: TextAlignment?
 
         public init(
             size: Double? = nil,
@@ -181,7 +204,8 @@ public struct ViewNode: Codable, Hashable, Sendable {
             opacity: Double? = nil,
             lineLimit: Int? = nil,
             truncation: Truncation? = nil,
-            monospacedDigits: Bool? = nil
+            monospacedDigits: Bool? = nil,
+            alignment: TextAlignment? = nil
         ) {
             self.size = size
             self.weight = weight
@@ -190,6 +214,7 @@ public struct ViewNode: Codable, Hashable, Sendable {
             self.lineLimit = lineLimit
             self.truncation = truncation
             self.monospacedDigits = monospacedDigits
+            self.alignment = alignment
         }
     }
 
@@ -282,9 +307,10 @@ public extension ViewNode {
         enabled: Bool? = nil,
         color: WireColor? = nil,
         restOpacity: Double? = nil,
-        labelColor: WireColor? = nil
+        labelColor: WireColor? = nil,
+        label: ViewNode? = nil
     ) -> ViewNode {
-        ViewNode(.button(id: id, title: title, style: style, symbol: symbol, enabled: enabled, color: color, restOpacity: restOpacity, labelColor: labelColor))
+        ViewNode(.button(id: id, title: title, style: style, symbol: symbol, enabled: enabled, color: color, restOpacity: restOpacity, labelColor: labelColor, label: label))
     }
 
     static func spacer(minLength: Double? = nil) -> ViewNode {
@@ -315,11 +341,13 @@ public extension ViewNode {
         lineLimit: Int? = nil,
         truncation: Truncation? = nil,
         monospacedDigits: Bool? = nil,
-        strikethrough: Bool? = nil
+        strikethrough: Bool? = nil,
+        alignment: TextAlignment? = nil
     ) -> ViewNode {
         styledText([TextRun(text, strikethrough: strikethrough)], TextAttributes(
             size: size, weight: weight, color: color, opacity: opacity,
-            lineLimit: lineLimit, truncation: truncation, monospacedDigits: monospacedDigits
+            lineLimit: lineLimit, truncation: truncation, monospacedDigits: monospacedDigits,
+            alignment: alignment
         ))
     }
 
@@ -348,15 +376,23 @@ public extension ViewNode {
         click: Bool? = nil,
         doubleClick: Bool? = nil,
         help: String? = nil,
+        overlay: ViewNode? = nil,
         _ child: ViewNode
     ) -> ViewNode {
-        ViewNode(.item(id: id, child: child, hoverFill: hoverFill, cornerRadius: cornerRadius, drag: drag, menu: menu, click: click, doubleClick: doubleClick, help: help))
+        ViewNode(.item(id: id, child: child, hoverFill: hoverFill, cornerRadius: cornerRadius, drag: drag, menu: menu, click: click, doubleClick: doubleClick, help: help, overlay: overlay))
     }
 
     /// A copy of this node with an accessibility label.
     func accessibilityLabel(_ label: String) -> ViewNode {
         var copy = self
         copy.accessibilityLabel = label
+        return copy
+    }
+
+    /// A copy of this node with a tooltip.
+    func help(_ text: String) -> ViewNode {
+        var copy = self
+        copy.help = text
         return copy
     }
 }
@@ -373,8 +409,10 @@ public extension ViewNode {
         switch kind {
         case let .vstack(children, _, _, _, _), let .hstack(children, _, _, _, _), let .zstack(children, _): children
         case let .box(child, _, _, _, _, _, _), let .scroll(_, child), let .capsule(child, _, _, _),
-             let .frame(child, _, _, _, _), let .item(_, child, _, _, _, _, _, _, _): [child]
-        case .text, .symbol, .image, .progress, .button, .spacer, .styledText, .spinner, .sweep: []
+             let .frame(child, _, _, _, _): [child]
+        case let .item(_, child, _, _, _, _, _, _, _, overlay): [child] + (overlay.map { [$0] } ?? [])
+        case let .button(_, _, _, _, _, _, _, _, label): label.map { [$0] } ?? []
+        case .text, .symbol, .image, .progress, .spacer, .styledText, .spinner, .sweep: []
         }
     }
 
@@ -393,7 +431,7 @@ public extension ViewNode {
         func walk(_ node: ViewNode) {
             switch node.kind {
             case let .image(asset, _, _): add(asset)
-            case let .item(_, _, _, _, drag, _, _, _, _): if let image = drag?.image { add(image) }
+            case let .item(_, _, _, _, drag, _, _, _, _, _): if let image = drag?.image { add(image) }
             default: break
             }
             node.children.forEach(walk)

@@ -3,18 +3,19 @@ import Foundation
 import Testing
 @testable import BlockHost
 import NotchCore
+import PlatformServices
 
 @MainActor
 @Suite(.serialized)
 struct BlockStoreTests {
     private func store(
-        _ runtime: NotchRuntime, bundledRoot: URL? = nil, blocksRoot: URL? = nil,
+        _ runtime: NotchRuntime, bundledRoot: URL? = nil, blocksRoot: URL? = nil, dataRoot: URL? = nil,
         isRegistered: @escaping @MainActor (BlockID) -> Bool = { _ in false }
     ) -> BlockStore {
         let store = BlockStore(
             owner: { runtime.state.owner },
             blocksRoot: blocksRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)"),
-            dataRoot: FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            dataRoot: dataRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
             bundledRoot: bundledRoot,
             defaults: testDefaults(),
             isRegistered: isRegistered
@@ -61,6 +62,38 @@ struct BlockStoreTests {
         #expect(standIns.map(\.id) == ["alpha", "nowplaying", "fixture"])
         #expect(standIns.map(\.info.source) == [.bundled, .bundled, .development(path: development.path)])
         #expect((standIns.first as? RemoteBlock)?.packageURL.lastPathComponent == "Alpha.topblock")
+    }
+
+    /// The app at launch: the three bundled blocks, registered, then put in
+    /// the stored order, which is the default when none is stored. Shelf and
+    /// Rename ran inside the app before: their old data folders move to
+    /// `BlockData` now that bundled stand-ins have their ids.
+    @Test func bundledBlocksAreShelfNowPlayingRenameInDefaultOrder() throws {
+        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
+        let root = support.appending(path: "Bundled/Blocks")
+        for (id, name) in [("shelf", "Shelf"), ("nowplaying", "NowPlaying"), ("rename", "Rename")] {
+            try bundledPackage(id: id, name: name, in: root)
+        }
+        for folder in ["Shelf", "Rename"] {
+            try FileManager.default.createDirectory(at: support.appending(path: folder), withIntermediateDirectories: true)
+            try Data(folder.utf8).write(to: support.appending(path: "\(folder)/state"))
+        }
+        let runtime = NotchRuntime()
+
+        let standIns = store(runtime, bundledRoot: root, dataRoot: support.appending(path: "BlockData"))
+            .standIns(developmentPath: nil)
+        // By folder name, as found.
+        #expect(standIns.map(\.id) == ["nowplaying", "rename", "shelf"])
+        #expect(standIns.allSatisfy { $0.info.source == .bundled })
+
+        for block in standIns { runtime.register(block, enabled: false) }
+        BlockSettings(defaults: testDefaults(), domain: nil).applyOrder(to: runtime)
+        #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "rename"])
+
+        #expect(try Data(contentsOf: support.appending(path: "BlockData/shelf/state")) == Data("Shelf".utf8))
+        #expect(try Data(contentsOf: support.appending(path: "BlockData/rename/state")) == Data("Rename".utf8))
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Shelf").path))
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Rename").path))
     }
 
     @Test func missingBundledFolderGivesNone() {

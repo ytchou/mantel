@@ -3,16 +3,15 @@ import PackageDescription
 
 // Every module is declared here. Parallel work stays inside one module
 // directory and does not edit this file; adding a module is its own change.
-// Rule: blocks depend on NotchCore only. They never import NotchShell or each other.
-// BlockHost runs blocks that live outside the app, in their own process, over
-// the wire protocol in ../BlockKit.
+// No block is linked into the app: every block runs in its own process, over
+// the wire protocol in ../BlockKit, and BlockHost runs its stand-in.
 let package = Package(
     name: "NotchKit",
     platforms: [.macOS(.v26)],
     products: [
         .library(
             name: "NotchKit",
-            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "PlatformServices", "BlockHost"]
+            targets: ["NotchCore", "NotchShell", "EventSources", "PlatformServices", "BlockHost"]
         )
     ],
     dependencies: [
@@ -22,9 +21,6 @@ let package = Package(
         .target(name: "NotchCore"),
         .target(name: "NotchShell", dependencies: ["NotchCore"]),
         .target(name: "EventSources", dependencies: ["NotchCore"]),
-        .target(name: "DemoBlock", dependencies: ["NotchCore"]),
-        .target(name: "ShelfBlock", dependencies: ["NotchCore"]),
-        .target(name: "RenameBlock", dependencies: ["NotchCore"]),
         .target(name: "PlatformServices", dependencies: ["NotchCore"]),
         .target(name: "BlockHost", dependencies: ["NotchCore", .product(name: "BlockWire", package: "BlockKit")]),
         // A tiny block process for BlockHostTests. Not part of the product.
@@ -32,15 +28,15 @@ let package = Package(
         .testTarget(name: "NotchCoreTests", dependencies: ["NotchCore"]),
         .testTarget(name: "NotchShellTests", dependencies: ["NotchShell"]),
         .testTarget(name: "EventSourcesTests", dependencies: ["EventSources"]),
-        .testTarget(name: "DemoBlockTests", dependencies: ["DemoBlock"]),
-        .testTarget(name: "ShelfBlockTests", dependencies: ["ShelfBlock"]),
-        .testTarget(name: "RenameBlockTests", dependencies: ["RenameBlock"]),
         .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
-        .testTarget(name: "BlockHostTests", dependencies: ["BlockHost", "NotchCore", .product(name: "BlockWire", package: "BlockKit")]),
+        // PlatformServices only to put the bundled blocks in the app's default order.
+        .testTarget(name: "BlockHostTests", dependencies: [
+            "BlockHost", "NotchCore", "PlatformServices", .product(name: "BlockWire", package: "BlockKit"),
+        ]),
         // All blocks in one runtime: what happens when they want the notch at once.
-        // Now-playing runs as a stand-in over an in-memory connection, scripted as the block.
+        // Each runs as a stand-in over an in-memory connection, scripted as the block.
         .testTarget(name: "BothBlocksTests", dependencies: [
-            "NotchCore", "ShelfBlock", "RenameBlock", "BlockHost", .product(name: "BlockWire", package: "BlockKit"),
+            "NotchCore", "BlockHost", .product(name: "BlockWire", package: "BlockKit"),
         ]),
     ]
 )

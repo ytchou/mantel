@@ -77,6 +77,24 @@ struct NodeViewTests {
         .progress(1, width: 120, color: amber, drainsOver: 5),
         .vstack(offset: .init(x: 4, y: 4), [.text("Moved")]),
         .hstack(offset: .init(x: -2, y: 0), [.text("Moved")]),
+        // The fields added for the Shelf and Rename look.
+        .hstack(spacing: 8, alignment: .firstTextBaseline, padding: .init(horizontal: 18, top: 6, bottom: 14), [
+            .text("Shelf", style: .title),
+            .styledText("2 items", size: 11, opacity: 0.5),
+        ]),
+        .vstack(alignment: .firstTextBaseline, [.text("Treated as start")]),
+        .styledText("a-long-host.example.com", size: 9, weight: .medium, lineLimit: 2, alignment: .center),
+        ViewNode.text("Tooltip").help("A tooltip"),
+        ViewNode.spinner(.small).help("Waiting for dropped files"),
+        ViewNode.button(id: "remove", title: "Remove from the shelf", style: .plain, restOpacity: 0.6,
+                        label: .symbol("xmark.circle.fill", size: 16, color: WireColor("#000000"), secondaryColor: WireColor("#FFFFFF")))
+            .help("Remove from the shelf"),
+        .item(id: "tile-2", cornerRadius: 10, help: "a.png",
+              overlay: .frame(fill: .both, alignment: .topTrailing, .hstack(offset: .init(x: 2, y: -2), [
+                  .button(id: "remove:tile-2", title: "Remove", style: .plain, restOpacity: 0.6,
+                          label: .symbol("xmark.circle.fill", size: 16, color: WireColor("#000000"), secondaryColor: WireColor("#FFFFFF"))),
+              ])),
+              .box(width: 64, height: 64, cornerRadius: 8, fillOpacity: 0.12, .symbol("doc", size: 22))),
     ]
 
     @Test func everyV2NodeBuildsAView() throws {

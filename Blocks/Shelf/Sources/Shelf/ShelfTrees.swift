@@ -48,9 +48,8 @@ enum ShelfTrees {
     static func expanded(_ state: State) -> ViewNode {
         var area: [ViewNode] = [state.tiles.isEmpty ? emptyState(hidden: state.isDropTarget) : tiles(state.tiles)]
         if state.isDropTarget { area.append(dropOverlay) }
-        // Padding 18 at the sides, 6 at the top and 14 at the bottom: 10 and
-        // 10, then moved up 4.
-        return .vstack(spacing: 10, alignment: .start, padding: .init(horizontal: 18, vertical: 10), offset: .init(y: -4), [
+        // Padding 18 at the sides, 6 at the top and 14 at the bottom.
+        return .vstack(spacing: 10, alignment: .start, padding: .init(horizontal: 18, top: 6, bottom: 14), [
             header(state),
             .frame(fill: .both, .zstack(area)),
         ])
@@ -59,7 +58,7 @@ enum ShelfTrees {
     private static func header(_ state: State) -> ViewNode {
         var row: [ViewNode] = []
         if let count = state.shownStackCount {
-            row.append(.button(id: "back", title: "Back", style: .plain, symbol: "chevron.left"))
+            row.append(ViewNode.button(id: "back", title: "Back", style: .plain, symbol: "chevron.left").help("Back to the shelf"))
             row.append(.text("\(count) items", style: .title))
         } else {
             row.append(.text("Shelf", style: .title))
@@ -70,12 +69,12 @@ enum ShelfTrees {
         }
         row.append(.spacer())
         if state.isReceiving {
-            row.append(ViewNode.spinner(.small).accessibilityLabel("Waiting for dropped files"))
+            row.append(ViewNode.spinner(.small).accessibilityLabel("Waiting for dropped files").help("Waiting for dropped files"))
         }
         if state.itemCount > 0 {
-            row.append(.button(id: "clear", title: "Clear"))
+            row.append(ViewNode.button(id: "clear", title: "Clear").help("Remove everything from the shelf"))
         }
-        return .hstack(spacing: 8, row)
+        return .hstack(spacing: 8, alignment: .firstTextBaseline, row)
     }
 
     private static func tiles(_ tiles: [Tile]) -> ViewNode {
@@ -103,9 +102,9 @@ enum ShelfTrees {
 
     // MARK: Tiles
 
-    /// The tile as an `item`, with the remove button beside it in a
-    /// `zstack`: the app's item layer covers the item's child, so a button
-    /// inside it could not be clicked.
+    /// The tile as an `item`, with the remove button in its overlay: the
+    /// app's item layer covers the item's child, so a button inside it could
+    /// not be clicked. In the overlay it brightens with the tile's hover.
     static func tile(_ tile: Tile) -> ViewNode {
         var picture: [ViewNode] = [tile.preview]
         if tile.count > 1 {
@@ -121,17 +120,18 @@ enum ShelfTrees {
                 .frame(width: tileWidth, .styledText(tile.title, size: 10, lineLimit: 1, truncation: .middle)),
             ]),
         ])
-        let item = ViewNode.item(
+        // Always shown, not only on hover: on hover alone it was easy to miss.
+        // 16 pt, black on white, at 0.6 until the pointer is on the tile.
+        let remove = ViewNode.frame(fill: .both, alignment: .topTrailing, .hstack(offset: .init(x: 2, y: -2), [
+            ViewNode.button(id: "remove:\(tile.id)", title: "Remove from the shelf", style: .plain, restOpacity: 0.6,
+                            label: .symbol("xmark.circle.fill", size: 16, color: black, secondaryColor: white))
+                .help("Remove from the shelf"),
+        ]))
+        return .item(
             id: tile.id, cornerRadius: 10, drag: tile.drag, menu: menu(tile),
-            click: tile.isStack, doubleClick: tile.hasFiles, help: tile.title,
+            click: tile.isStack, doubleClick: tile.hasFiles, help: tile.title, overlay: remove,
             .frame(width: tileWidth, body)
         )
-        // Always shown, not only on hover: on hover alone it was easy to miss.
-        let remove = ViewNode.hstack(offset: .init(x: 2, y: -2), [
-            .button(id: "remove:\(tile.id)", title: "Remove from the shelf", style: .plain,
-                    symbol: "xmark.circle.fill", restOpacity: 0.6),
-        ])
-        return .zstack(alignment: .topTrailing, [item, remove])
     }
 
     private static func menu(_ tile: Tile) -> [ActionItem] {
@@ -155,7 +155,7 @@ enum ShelfTrees {
     static func link(_ url: URL) -> ViewNode {
         card(.vstack(spacing: 4, padding: .init(horizontal: 4, vertical: 4), [
             .symbol("link", size: 18, weight: .medium),
-            .styledText(url.host() ?? url.absoluteString, size: 9, weight: .medium, lineLimit: 2),
+            .styledText(url.host() ?? url.absoluteString, size: 9, weight: .medium, lineLimit: 2, alignment: .center),
         ]))
     }
 

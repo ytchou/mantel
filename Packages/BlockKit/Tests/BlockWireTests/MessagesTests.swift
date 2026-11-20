@@ -176,6 +176,34 @@ struct MessagesTests {
         }
     }
 
+    /// The fields added for the Shelf and Rename look are left out when nil.
+    @Test func lookFieldsEncodeOnlyWhenSet() throws {
+        func json(_ node: ViewNode) throws -> String {
+            String(decoding: try Framing.encoder().encode(node), as: UTF8.self)
+        }
+        let plain = try json(.hstack(padding: .init(horizontal: 1, vertical: 2), [
+            .button(id: "b", title: "B"),
+            .styledText("t"),
+            .item(id: "i", .spacer()),
+        ]))
+        for key in ["\"help\"", "\"top\"", "\"bottom\"", "\"label\"", "\"overlay\"", "\"alignment\""] {
+            #expect(!plain.contains(key), "\(key) encoded while nil")
+        }
+
+        let set = ViewNode.hstack(alignment: .firstTextBaseline, padding: .init(top: 6, bottom: 14), [
+            ViewNode.button(id: "b", title: "B", label: .symbol("x", size: 16)).help("Tip"),
+            .styledText("t", alignment: .center),
+            .item(id: "i", overlay: .spacer(), .spacer()),
+        ])
+        let encoded = try json(set)
+        for key in ["\"firstTextBaseline\"", "\"help\":\"Tip\"", "\"top\":6", "\"bottom\":14", "\"label\"", "\"overlay\"", "\"alignment\":\"center\""] {
+            #expect(encoded.contains(key), "\(key) missing")
+        }
+        #expect(try roundTrip(ViewSlot(width: 1, height: 1, root: set)).message.root == set)
+        // The label and the overlay are part of the tree.
+        #expect(set.nodeCount == 7)
+    }
+
     @Test func itemNodeCarriesDragMenuAndActions() throws {
         let item = ViewNode.item(
             id: "tile-1",
@@ -190,7 +218,7 @@ struct MessagesTests {
         )
         let decoded = try roundTrip(ViewSlot(width: 60, height: 60, root: item)).message.root
         #expect(decoded == item)
-        guard case let .item(id, _, _, _, drag, menu, click, doubleClick, help) = decoded.kind else {
+        guard case let .item(id, _, _, _, drag, menu, click, doubleClick, help, _) = decoded.kind else {
             Issue.record("not an item")
             return
         }
@@ -286,6 +314,11 @@ enum SamplesV2 {
         click: true,
         doubleClick: true,
         help: "a.png",
+        overlay: .frame(fill: .both, alignment: .topTrailing, .hstack(offset: .init(x: 2, y: -2), [
+            ViewNode.button(id: "remove", title: "Remove", style: .plain, restOpacity: 0.6,
+                            label: .symbol("xmark.circle.fill", size: 16, color: WireColor("#000000"), secondaryColor: WireColor("#FFFFFF")))
+                .help("Remove from the shelf"),
+        ])),
         .frame(width: 56, height: 56, alignment: .topTrailing, .zstack(alignment: .topTrailing, [
             .image(asset: "0123456789abcdef", size: 48, cornerRadius: 6),
             .capsule(fill: amber, padding: .init(horizontal: 5, vertical: 1), height: 16,
@@ -297,8 +330,12 @@ enum SamplesV2 {
     static let root = ViewNode.vstack(spacing: 6, offset: .init(x: 0, y: -2), [
         .hstack(alignment: .center, offset: .init(x: 4, y: 0), [
             .scroll(.horizontal, .hstack(spacing: 8, [tile])),
-            .spinner(.small),
+            ViewNode.spinner(.small).help("Waiting"),
             .spinner(.mini),
+        ]),
+        .hstack(alignment: .firstTextBaseline, padding: .init(horizontal: 18, top: 6, bottom: 14), [
+            .text("Shelf", style: .title),
+            .styledText("example.com", size: 9, lineLimit: 2, alignment: .center),
         ]),
         .scroll(.vertical, .vstack([
             .styledText(

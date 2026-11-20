@@ -141,13 +141,15 @@ private struct ItemNode {
     let click: Bool
     let doubleClick: Bool
     let child: ViewNode
+    let overlay: ViewNode?
 }
 
 private func items(_ node: ViewNode?) -> [ItemNode] {
     guard let node else { return [] }
     return nodes(node).compactMap { node in
-        if case let .item(id, child, _, _, drag, menu, click, doubleClick, _) = node.kind {
-            ItemNode(id: id, drag: drag, menu: menu ?? [], click: click == true, doubleClick: doubleClick == true, child: child)
+        if case let .item(id, child, _, _, drag, menu, click, doubleClick, _, overlay) = node.kind {
+            ItemNode(id: id, drag: drag, menu: menu ?? [], click: click == true, doubleClick: doubleClick == true,
+                     child: child, overlay: overlay)
         } else { nil }
     }
 }
@@ -155,7 +157,7 @@ private func items(_ node: ViewNode?) -> [ItemNode] {
 private func buttons(_ node: ViewNode?) -> [String] {
     guard let node else { return [] }
     return nodes(node).compactMap { node in
-        if case let .button(id, _, _, _, _, _, _, _) = node.kind { id } else { nil }
+        if case let .button(id, _, _, _, _, _, _, _, _) = node.kind { id } else { nil }
     }
 }
 
@@ -553,9 +555,9 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
     #expect(pair.click && pair.doubleClick)
     // The count badge.
     #expect(texts(pair.child).contains("2"))
-    // The remove button sits beside the item, not inside it.
+    // The remove button sits in the item's overlay, not inside its child.
     #expect(buttons(pair.child).isEmpty)
-    #expect(buttons(tree).contains("remove:\(pair.id)"))
+    #expect(buttons(pair.overlay) == ["remove:\(pair.id)"])
     #expect(buttons(tree).contains("clear"))
 }
 
@@ -612,4 +614,63 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
     let wing = try #require(shown(on.host)?.wing)
     #expect(wing.width == ShelfTrees.wingWidth)
     #expect(texts(wing.root) == ["2"])
+}
+
+// MARK: - The look of the in-app view
+
+private func node(_ tree: ViewNode, button id: String) -> ViewNode? {
+    nodes(tree).first { if case let .button(buttonID, _, _, _, _, _, _, _, _) = $0.kind { buttonID == id } else { false } }
+}
+
+private func tilePreview() -> ShelfTrees.Tile {
+    ShelfTrees.Tile(id: "stack:1", title: "a.png", preview: ShelfTrees.missingFile, count: 2, hasFiles: true,
+                    drag: ViewNode.ItemDrag([.file(path: "/tmp/a.png")]), isStack: true)
+}
+
+@Test func headerLinesUpOnTheFirstBaselineWithTooltips() throws {
+    let state = ShelfTrees.State(itemCount: 2, isDropTarget: false, isReceiving: true, shownStackCount: 2, tiles: [tilePreview()])
+    let root = ShelfTrees.expanded(state)
+    // Padding 18 at the sides, 6 at the top, 14 at the bottom, and not moved.
+    guard case let .vstack(children, _, _, padding, offset) = root.kind else {
+        Issue.record("not a vstack")
+        return
+    }
+    #expect(padding == .init(horizontal: 18, top: 6, bottom: 14))
+    #expect(offset == nil)
+    let header = try #require(children.first)
+    guard case let .hstack(_, spacing, alignment, _, _) = header.kind else {
+        Issue.record("header is not an hstack")
+        return
+    }
+    #expect(spacing == 8 && alignment == .firstTextBaseline)
+    #expect(node(root, button: "back")?.help == "Back to the shelf")
+    #expect(node(root, button: "clear")?.help == "Remove everything from the shelf")
+    #expect(nodes(root).first { if case .spinner = $0.kind { true } else { false } }?.help == "Waiting for dropped files")
+}
+
+@Test func removeButtonIsSixteenPointBlackOnWhiteAndFollowsTheTileHover() throws {
+    let tile = ShelfTrees.tile(tilePreview())
+    let item = try #require(items(tile).first)
+    let overlay = try #require(item.overlay)
+    let remove = try #require(node(overlay, button: "remove:stack:1"))
+    #expect(remove.help == "Remove from the shelf")
+    guard case let .button(_, title, style, symbol, _, _, restOpacity, _, label) = remove.kind else {
+        Issue.record("not a button")
+        return
+    }
+    #expect(title == "Remove from the shelf" && style == .plain && symbol == nil && restOpacity == 0.6)
+    #expect(label == .symbol("xmark.circle.fill", size: 16, color: WireColor("#000000"), secondaryColor: WireColor("#FFFFFF")))
+    // Top trailing, moved 2 right and 2 up, as the in-app overlay.
+    guard case let .frame(child, _, _, fill, alignment) = overlay.kind,
+          case let .hstack(_, _, _, _, offset) = child.kind else {
+        Issue.record("overlay is not a frame around an hstack")
+        return
+    }
+    #expect(fill == .both && alignment == .topTrailing && offset == .init(x: 2, y: -2))
+}
+
+@Test func linkHostIsCentred() {
+    let link = ShelfTrees.link(URL(string: "https://example.com/a")!)
+    let attributes = nodes(link).compactMap { if case let .styledText(_, attributes) = $0.kind { attributes } else { nil } }
+    #expect(attributes.map(\.alignment) == [.center])
 }
