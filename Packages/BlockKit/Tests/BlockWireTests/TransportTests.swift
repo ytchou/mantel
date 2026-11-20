@@ -53,7 +53,10 @@ struct TransportTests {
         defer { peer.close() }
 
         // Nobody reads `host.frames` while the peer sends.
-        for _ in 0..<50 { try peer.send(Data(count: 100)) }
+        // The host may close on overflow before the loop ends; a send failing then is expected.
+        for _ in 0..<50 {
+            do { try peer.send(Data(count: 100)) } catch { break }
+        }
         try await Task.sleep(for: .milliseconds(200))
 
         var count = 0
