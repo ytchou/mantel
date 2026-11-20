@@ -272,3 +272,22 @@ not check a block's signature: Phase 6 installs only the owner's own blocks
 (design decision D1), and signature checks and Gatekeeper are Phase 7 work.
 The hand check of real-pointer feel (hover and click through a block process,
 next to an in-app block) is still waiting for the owner.
+
+# One tier of blocks: the sandbox probe
+
+Probed on this Mac (macOS 26, 2026-11-20) with a command-line process under
+`/usr/bin/sandbox-exec` and the deny-list profile `SandboxProfile` now builds
+(allow by default; deny network, Apple events, writes outside the data and
+temporary folders, and reads in the home folder).
+
+- Under the profile, a read and a write in the home folder, a network request
+  and an Apple event were refused. A write in the data folder worked.
+- FoundationModels needs `file-read-metadata` on the home folder. Without it
+  the on-device model reports "Apple Intelligence not enabled"; with it the
+  model answered in 7.6 s. The line is in every profile.
+- File descriptor 3 survives `sandbox-exec`: the block gets its socket and
+  says `hello` (process test from the test runner). No launcher with
+  `sandbox_init_with_parameters` was needed. The same from the signed app is
+  part of the owner's check at `make run`.
+- Limit: a deny list stops the plain cases, not a determined attacker; system
+  services stay reachable.
