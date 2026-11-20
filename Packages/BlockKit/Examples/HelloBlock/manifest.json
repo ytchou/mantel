@@ -1,0 +1,13 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "contract": 1,
+  "executable": "HelloBlock",
+  "summary": "The kit's example. Says hello when the pointer enters the notch.",
+  "symbol": "hand.wave",
+  "trigger": "Pointer hover",
+  "permissions": [],
+  "events": ["pointerHover"],
+  "settings": []
+}

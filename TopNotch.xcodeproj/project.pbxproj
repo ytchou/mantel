@@ -70,6 +70,7 @@
 				A10000000000000000000009 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
 				A1000000000000000000000A /* Resources */,
+				A1000000000000000000000D /* Build bundled blocks */,
 				A1000000000000000000000C /* Build now-playing helper */,
 			);
 			buildRules = (
@@ -135,6 +136,27 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		A1000000000000000000000D /* Build bundled blocks */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build bundled blocks";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Blocks/NowPlaying.topblock/NowPlaying",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Blocks/NowPlaying.topblock/manifest.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n# Blocks/NowPlaying: the now-playing block, run by BlockHost as its own process.\n# Built for this Mac, Debug, by a nested swift build with a cleared environment,\n# so Xcode's build settings do not leak into it. Its scratch folder sits in the\n# derived data folder, outside the source tree. The phase always runs; swift\n# build itself skips the work when nothing changed.\nblocks=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Blocks\"\nscratch=\"$BUILD_DIR/../../blocks-scratch\"\nswift_build() {\n\tenv -i PATH=\"$PATH\" HOME=\"$HOME\" ${DEVELOPER_DIR:+DEVELOPER_DIR=\"$DEVELOPER_DIR\"} \\\n\t\tswift build -c debug --package-path \"$SRCROOT/Blocks/NowPlaying\" --scratch-path \"$scratch\" --product NowPlaying \"$@\"\n}\nswift_build\nbin=$(swift_build --show-bin-path)\n# Package and sign only when the executable or manifest changed: a new\n# signature on every build would break the app's seal when Xcode does not\n# sign the app again.\nmanifest=\"$SRCROOT/Blocks/NowPlaying/manifest.json\"\npackaged=\"$blocks/NowPlaying.topblock\"\n# The stamp is per configuration, beside its package's build: one shared\n# stamp let a Release build make a later Debug build skip a changed block.\nstamp=\"$TARGET_TEMP_DIR/NowPlaying.packaged\"\nif [ -x \"$packaged/NowPlaying\" ] && cmp -s \"$bin/NowPlaying\" \"$stamp\" && cmp -s \"$manifest\" \"$packaged/manifest.json\"; then\n\techo \"NowPlaying.topblock is up to date\"\n\texit 0\nfi\n\"$SRCROOT/Packages/BlockKit/Scripts/package-block.sh\" \"$bin/NowPlaying\" \"$manifest\" \"$blocks\"\ncodesign --force --timestamp=none --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$packaged/NowPlaying\"\nmkdir -p \"$TARGET_TEMP_DIR\"\ncp \"$bin/NowPlaying\" \"$stamp\"\n";
+		};
 		A1000000000000000000000C /* Build now-playing helper */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;

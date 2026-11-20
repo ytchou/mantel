@@ -1,9 +1,9 @@
 import AppKit
+import BlockHost
 import DemoBlock
 import EventSources
 import NotchCore
 import NotchShell
-import NowPlayingBlock
 import PlatformServices
 import RenameBlock
 import ShelfBlock
@@ -26,9 +26,25 @@ struct TopNotchApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = NotchRuntime()
     let settings = BlockSettings()
-    private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings)
+    private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
     private let onboarding = OnboardingController()
+    private lazy var blockStore = BlockStore(
+        owner: { [runtime] in runtime.state.owner },
+        blocksRoot: BlockStore.defaultBlocksRoot,
+        dataRoot: BlockStore.defaultDataRoot,
+        // Built into Contents/Resources/Blocks by the "Build bundled blocks" phase.
+        bundledRoot: Bundle.main.resourceURL?.appending(path: "Blocks"),
+        defaults: .standard,
+        // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
+        turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
+        // A block installed from the Blocks page joins like one found at launch.
+        register: { [settings, runtime] block in runtime.register(block, enabled: settings.isEnabled(block.id)) },
+        unregister: { [runtime] id in runtime.unregister(id) },
+        clearKeys: { [settings] id in settings.clear(id) },
+        // A package whose id the runtime already has is refused, as the runtime would drop it.
+        isRegistered: { [runtime] id in runtime.blocks.contains { $0.id == id } }
+    )
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
     private var screenshotWatcher: ScreenshotWatcher?
@@ -38,7 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock(), NowPlayingBlock()]
+        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
+        // The bundled blocks (now-playing), the installed blocks, then, with
+        // `-devBlock <path to .topblock>`, one block run from where it is.
+        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         // `-demoBlock YES` adds the demo block, to try hover, click and drop.
         if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
         for block in blocks {
@@ -74,5 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.systemNowPlayingWatcher = systemNowPlayingWatcher
 
         onboarding.showIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        blockStore.stopAll()
     }
 }

@@ -224,6 +224,72 @@ struct NotchRuntimeTests {
         #expect(changed.fired)
     }
 
+    // Unregister
+    @Test func unregisterRemovesBlockAndDismisses() {
+        let runtime = NotchRuntime()
+        let a = FakeBlock("a")
+        let b = FakeBlock("b")
+        var received = 0
+        a.onActivate = { context in
+            context.subscribe(to: Ping.self) { _ in received += 1 }
+        }
+        runtime.register(a)
+        runtime.register(b)
+        a.context?.present(peekPresentation())
+        #expect(runtime.state.owner == "a")
+
+        runtime.unregister("a")
+        runtime.publish(Ping(n: 1))
+
+        #expect(runtime.blocks.map { $0.id } == ["b"])
+        #expect(runtime.state.owner == nil)
+        #expect(runtime.state.presentation == nil)
+        #expect(a.deactivations == 1)
+        #expect(received == 0)
+        #expect(!runtime.isEnabled("a"))
+    }
+
+    @Test func unregisterUnknownIdIsNoOp() {
+        let runtime = NotchRuntime()
+        let a = FakeBlock("a")
+        runtime.register(a)
+        a.context?.present(peekPresentation())
+
+        runtime.unregister("missing")
+
+        #expect(runtime.blocks.map { $0.id } == ["a"])
+        #expect(runtime.isEnabled("a"))
+        #expect(runtime.state.owner == "a")
+        #expect(a.deactivations == 0)
+    }
+
+    @Test func registerAfterUnregisterWorks() {
+        let runtime = NotchRuntime()
+        let first = FakeBlock("a")
+        let off = FakeBlock("off")
+        runtime.register(first)
+        runtime.register(off, enabled: false)
+
+        runtime.unregister("off")
+        #expect(off.deactivations == 0)
+
+        runtime.unregister("a")
+        let second = FakeBlock("a")
+        runtime.register(second)
+
+        #expect(second.activations == 1 && second.context != nil)
+        #expect(runtime.isEnabled("a"))
+        #expect(runtime.blocks.map { $0.id } == ["a"])
+        #expect(first.deactivations == 1)
+    }
+
+    @Test func defaultsKeepOldBlocksCompiling() {
+        let block = FakeBlock("a")
+        #expect(block.health == .ok)
+        #expect(block.info.source == .builtIn)
+        #expect(block.info.version == nil)
+    }
+
     private func observeState(of runtime: NotchRuntime) -> ChangeFlag {
         let flag = ChangeFlag()
         withObservationTracking {
