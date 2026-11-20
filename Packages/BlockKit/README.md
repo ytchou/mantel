@@ -8,10 +8,14 @@ path of your TopNotch checkout.
 ## 1. Make a package, anywhere
 
 ```sh
-mkdir -p ~/dev/hello-block/Sources/HelloBlock && cd ~/dev/hello-block
-cp "$TOPNOTCH/Packages/BlockKit/Examples/HelloBlock/Hello.swift" Sources/HelloBlock/
+mkdir -p ~/dev/hello-block/Sources/MyHello && cd ~/dev/hello-block
+cp "$TOPNOTCH/Packages/BlockKit/Examples/HelloBlock/Hello.swift" Sources/MyHello/
 cp "$TOPNOTCH/Packages/BlockKit/Examples/HelloBlock/manifest.json" .
 ```
+
+In `manifest.json`, set `"id": "my-hello"`, `"name": "My Hello"` and
+`"executable": "MyHello"`. The target must not be named `HelloBlock`: the kit
+already has a target with that name, and SwiftPM refuses the duplicate.
 
 `Package.swift` depends on the kit by path, absolute or relative:
 
@@ -20,13 +24,13 @@ cp "$TOPNOTCH/Packages/BlockKit/Examples/HelloBlock/manifest.json" .
 import PackageDescription
 
 let package = Package(
-    name: "HelloBlock",
+    name: "MyHello",
     platforms: [.macOS(.v26)],
     dependencies: [
         .package(path: "/Users/you/project/topnotch/Packages/BlockKit"),
     ],
     targets: [
-        .executableTarget(name: "HelloBlock", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
+        .executableTarget(name: "MyHello", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
     ]
 )
 ```
@@ -50,16 +54,16 @@ update.
 
 ```sh
 swift build -c debug
-"$TOPNOTCH/Packages/BlockKit/Scripts/package-block.sh" .build/debug/HelloBlock manifest.json build
+"$TOPNOTCH/Packages/BlockKit/Scripts/package-block.sh" .build/debug/MyHello manifest.json build
 ```
 
-This prints `build/Hello.topblock`: `manifest.json` and the executable.
+This prints `build/MyHello.topblock`: `manifest.json` and the executable.
 
 ## 4. Run it without installing
 
 ```sh
 cd "$TOPNOTCH" && make build
-open build/Build/Products/Debug/TopNotch.app --args -devBlock ~/dev/hello-block/build/Hello.topblock
+open build/Build/Products/Debug/TopNotch.app --args -devBlock ~/dev/hello-block/build/MyHello.topblock
 ```
 The block runs from where it is. Rebuild, package and relaunch to try a change.
 
