@@ -48,18 +48,48 @@ public struct BlockInfo: Sendable, Equatable {
     public var trigger: String
     /// What the block needs from the system, in the user's words. Empty when it needs nothing.
     public var permissions: [String]
+    /// The block's version, such as "1.2.0". `nil` for blocks built into the app.
+    public var version: String?
+    /// Where the block comes from.
+    public var source: BlockSource
 
     public init(
         summary: String = "",
         symbol: String = "square.grid.2x2",
         trigger: String = "",
-        permissions: [String] = []
+        permissions: [String] = [],
+        version: String? = nil,
+        source: BlockSource = .builtIn
     ) {
         self.summary = summary
         self.symbol = symbol
         self.trigger = trigger
         self.permissions = permissions
+        self.version = version
+        self.source = source
     }
+}
+
+/// Where a block comes from. Decides whether the user can remove it.
+public enum BlockSource: Sendable, Equatable {
+    /// Compiled into the app.
+    case builtIn
+    /// A package shipped inside the app bundle.
+    case bundled
+    /// A package the user installed, from the given path.
+    case installed(from: String)
+    /// A package run from where it is, without installing, for block authors.
+    case development(path: String)
+}
+
+/// Whether a block is running as it should. Shown on the Blocks page.
+public enum BlockHealth: Sendable, Equatable {
+    /// Running normally.
+    case ok
+    /// Stopped unexpectedly and is being started again; `count` is the number of restarts.
+    case restarting(count: Int)
+    /// Turned off by the app after repeated failures, with the reason in the user's words.
+    case turnedOff(reason: String)
 }
 
 /// What the runtime gives a block. It is the block's only way to reach the notch.
@@ -105,10 +135,14 @@ public protocol NotchBlock: AnyObject {
 
     /// The block's pane in the settings window, if it has one.
     var settingsPane: AnyView? { get }
+
+    /// Whether the block is running as it should. Blocks in the app process are always `.ok`.
+    var health: BlockHealth { get }
 }
 
 public extension NotchBlock {
     var info: BlockInfo { BlockInfo() }
+    var health: BlockHealth { .ok }
     func deactivate() {}
     func handle(_ input: NotchInput) {}
     var actions: [BlockAction] { [] }

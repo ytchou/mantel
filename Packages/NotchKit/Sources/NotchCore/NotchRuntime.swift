@@ -64,6 +64,14 @@ public final class NotchRuntime {
         }
     }
 
+    /// Remove a block, the reverse of `register`. An enabled block is turned
+    /// off first, as by `setEnabled(_:false)`. An unknown id does nothing.
+    public func unregister(_ id: BlockID) {
+        guard blocks.contains(where: { $0.id == id }) else { return }
+        setEnabled(id, false)
+        blocks.removeAll { $0.id == id }
+    }
+
     private func activate(_ block: any NotchBlock) {
         let context = RuntimeContext(block: block.id, runtime: self)
         contexts[block.id] = context
