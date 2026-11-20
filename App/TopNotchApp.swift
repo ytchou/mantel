@@ -1,4 +1,5 @@
 import AppKit
+import BlockHost
 import DemoBlock
 import EventSources
 import NotchCore
@@ -29,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
     private let onboarding = OnboardingController()
+    private lazy var blockStore = BlockStore(owner: { [runtime] in runtime.state.owner })
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
     private var screenshotWatcher: ScreenshotWatcher?
@@ -41,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock(), NowPlayingBlock()]
         // `-demoBlock YES` adds the demo block, to try hover, click and drop.
         if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
+        // `-devBlock <path to .topblock>` runs one block from where it is, without installing.
+        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock")) as [any NotchBlock]
         for block in blocks {
             runtime.register(block, enabled: settings.isEnabled(block.id))
         }
@@ -74,5 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.systemNowPlayingWatcher = systemNowPlayingWatcher
 
         onboarding.showIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        blockStore.stopAll()
     }
 }
