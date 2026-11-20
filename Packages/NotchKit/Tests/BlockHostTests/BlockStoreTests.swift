@@ -14,8 +14,24 @@ struct BlockStoreTests {
         )
     }
 
-    @Test func developmentPathGivesOneStandIn() throws {
+    /// `Fixture.package()` with options on its `command` choice, so the
+    /// package passes `PackageValidator` (a choice needs options).
+    private func validFixturePackage() throws -> URL {
         let package = try Fixture.package()
+        var manifest = Fixture.manifest
+        manifest.settings = manifest.settings.map { setting in
+            var setting = setting
+            if setting.type == .choice, setting.options?.isEmpty ?? true {
+                setting.options = [.init(value: "none", title: "None")]
+            }
+            return setting
+        }
+        try Framing.encoder().encode(manifest).write(to: package.appending(path: "manifest.json"))
+        return package
+    }
+
+    @Test func developmentPathGivesOneStandIn() throws {
+        let package = try validFixturePackage()
         let standIns = store(NotchRuntime()).standIns(developmentPath: package.path)
 
         #expect(standIns.count == 1)
@@ -45,7 +61,7 @@ struct BlockStoreTests {
     }
 
     @Test func stopAllEndsEveryProcess() async throws {
-        let package = try Fixture.package()
+        let package = try validFixturePackage()
         let runtime = NotchRuntime()
         let store = store(runtime)
         let blocks = store.standIns(developmentPath: package.path)

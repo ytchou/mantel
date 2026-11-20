@@ -11,6 +11,23 @@ public enum BlockProcessError: Error, Equatable, Sendable {
     case spawnFailed(Int32)
 }
 
+/// The clock a stand-in times its heartbeat and failures on, read as time
+/// since the clock was made. The app uses `suspending`; tests pass a clock
+/// they move by hand.
+public struct BlockClock: Sendable {
+    let now: @Sendable () -> Duration
+    let sleep: @Sendable (Duration) async throws -> Void
+
+    public init<C: Clock>(_ clock: C) where C.Duration == Duration {
+        let origin = clock.now
+        now = { origin.duration(to: clock.now) }
+        sleep = { try await clock.sleep(until: clock.now.advanced(by: $0), tolerance: nil) }
+    }
+
+    /// Stops while the Mac sleeps, so the time asleep is never read as a hang.
+    public static var suspending: BlockClock { BlockClock(SuspendingClock()) }
+}
+
 /// One running block process and the socket to it.
 ///
 /// The block gets one end of a socket pair as fd 3, `/dev/null` as stdin and
@@ -174,6 +191,29 @@ public final class BlockProcess: Transport, @unchecked Sendable {
         source.resume()
         // It may have exited before the source was watching.
         if reap() { lock.withLock { exitSource?.cancel() } }
+    }
+
+    // MARK: Heartbeat
+
+    /// Time between pings.
+    static let pingInterval: Duration = .seconds(1)
+    /// No pong for this long is a hang.
+    static let hangAfter: Duration = .seconds(3)
+
+    /// Calls `tick` on the main actor every `pingInterval` of `clock` until
+    /// `tick` returns false or the task is cancelled. `tick` sends the ping
+    /// and judges the hang; this loop only keeps time.
+    static func heartbeat(clock: BlockClock, tick: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                do {
+                    try await clock.sleep(pingInterval)
+                } catch {
+                    return
+                }
+                if Task.isCancelled || !tick() { return }
+            }
+        }
     }
 
     // MARK: Reading

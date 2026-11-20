@@ -35,9 +35,20 @@ public final class RemoteBlock: NotchBlock {
     public let packageURL: URL
     public let source: BlockSource
 
+    /// Whether the block runs as it should. Observed, so the Blocks page redraws.
+    public private(set) var health: BlockHealth
+    /// The menu actions the current process offered last. Empty until it
+    /// offers some, and after it fails.
+    public private(set) var actions: [BlockAction] = []
+    /// Each declared setting's current value: stored, or the manifest default.
+    public private(set) var settings: [String: SettingValue] = [:]
+
     @ObservationIgnored private let dataFolder: URL
     @ObservationIgnored private let owner: @MainActor () -> BlockID?
     @ObservationIgnored private let launcher: BlockLauncher
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let clock: BlockClock
+    @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -58,8 +69,19 @@ public final class RemoteBlock: NotchBlock {
     /// True while an owner observation is armed, so re-activation never arms two.
     @ObservationIgnored private var observingOwner = false
 
-    /// Called by `handleFailure(reason:)`. Supervision attaches here.
+    /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
+
+    // Supervision.
+    @ObservationIgnored private var supervisor = Supervisor()
+    /// Restarts since the user last turned the block on, in this app run.
+    @ObservationIgnored private var restarts = 0
+    @ObservationIgnored private var heartbeat: Task<Void, Never>?
+    @ObservationIgnored private var pingSeq = 0
+    /// The `seq` of the latest pong from the current process.
+    @ObservationIgnored private(set) var lastPong = 0
+    /// When the current process last answered, or started, on `clock`.
+    @ObservationIgnored private var lastAnswer: Duration = .zero
 
     /// - Parameters:
     ///   - manifest: the package's manifest, already checked.
@@ -68,22 +90,40 @@ public final class RemoteBlock: NotchBlock {
     ///   - owner: who owns the notch now, read inside observation tracking so
     ///     changes are pushed to the block. Pass `{ runtime.state.owner }`.
     ///   - launcher: starts the process.
+    ///   - defaults: where the block's settings (`<id>.<key>`) and the reason
+    ///     it was turned off (`block.<id>.failure`) are stored.
+    ///   - clock: times the heartbeat and failures. Must stop while the Mac sleeps.
+    ///   - turnOff: turns the block off after repeated failures. The app
+    ///     passes a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
     public init(
         manifest: Manifest,
         packageURL: URL,
         source: BlockSource,
         dataFolder: URL,
         owner: @escaping @MainActor () -> BlockID?,
-        launcher: @escaping BlockLauncher
+        launcher: @escaping BlockLauncher,
+        defaults: UserDefaults = .standard,
+        clock: BlockClock = .suspending,
+        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in }
     ) {
-        self.id = BlockID(rawValue: manifest.id)
+        let id = BlockID(rawValue: manifest.id)
+        self.id = id
         self.manifest = manifest
         self.packageURL = packageURL
         self.source = source
         self.dataFolder = dataFolder
         self.owner = owner
         self.launcher = launcher
+        self.defaults = defaults
+        self.clock = clock
+        self.turnOff = turnOff
+        // Turned off after failures, and not yet turned on again.
+        health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
+        settings = readSettings()
     }
+
+    /// Where the reason for the last turn-off is stored.
+    static func failureKey(_ id: BlockID) -> String { "block.\(id.rawValue).failure" }
 
     /// The executable the manifest names, inside the package.
     public var executableURL: URL { packageURL.appending(path: manifest.executable) }
@@ -99,6 +139,11 @@ public final class RemoteBlock: NotchBlock {
 
     public func activate(_ context: any BlockContext) {
         self.context = context
+        // Turned on, by the user or at launch: earlier failures no longer count.
+        defaults.removeObject(forKey: Self.failureKey(id))
+        supervisor.reset()
+        restarts = 0
+        health = .ok
         for name in manifest.events {
             guard let event = try? EventCodec.wireEvent(named: name) else {
                 log.error("\(self.id.rawValue, privacy: .public): unknown event \(name, privacy: .public) ignored")
@@ -114,7 +159,19 @@ public final class RemoteBlock: NotchBlock {
         context = nil
         endProcess(wait: false)
         latest = [:]
+        actions = []
         model.clear()
+    }
+
+    /// Forwards a click while this block owns the notch. Drops are not forwarded.
+    public func handle(_ input: NotchInput) {
+        guard case .click = input, context?.ownsNotch == true, isWelcomed else { return }
+        send(.input(input: .click))
+    }
+
+    /// The block's settings drawn from its manifest, or nil when it declares none.
+    public var settingsPane: AnyView? {
+        manifest.settings.isEmpty ? nil : AnyView(SettingsForm(block: self))
     }
 
     /// Ends the process now and waits for it to exit. For app quit.
@@ -137,6 +194,9 @@ public final class RemoteBlock: NotchBlock {
         toldOwns = false
         pending = latest.values.sorted { $0.order < $1.order }.map(\.payload)
         launchedAt = .now
+        pingSeq = 0
+        lastPong = 0
+        lastAnswer = clock.now()
         let transport: any Transport
         do {
             transport = try launcher(executableURL, generation)
@@ -150,6 +210,22 @@ public final class RemoteBlock: NotchBlock {
             deliver: { [weak self] envelope in self?.receive(envelope, from: generation) },
             ended: { [weak self] error in self?.transportEnded(error, generation: generation) }
         )
+        heartbeat = BlockProcess.heartbeat(clock: clock) { [weak self] in
+            self?.heartbeatTick(generation: generation) ?? false
+        }
+    }
+
+    /// One heartbeat step: a hang when the process has not answered for
+    /// `hangAfter`, otherwise the next ping. False ends the heartbeat.
+    private func heartbeatTick(generation: Int) -> Bool {
+        guard generation == self.generation, transport != nil else { return false }
+        if clock.now() - lastAnswer >= BlockProcess.hangAfter {
+            handleFailure(reason: "\(manifest.name) stopped answering")
+            return false
+        }
+        pingSeq += 1
+        send(.ping(seq: pingSeq))
+        return true
     }
 
     /// Sends `quit` and closes the transport. Frames still in flight from
@@ -157,6 +233,8 @@ public final class RemoteBlock: NotchBlock {
     private func endProcess(wait: Bool) {
         reader?.cancel()
         reader = nil
+        heartbeat?.cancel()
+        heartbeat = nil
         isWelcomed = false
         pending = []
         guard let transport else { return }
@@ -179,15 +257,38 @@ public final class RemoteBlock: NotchBlock {
     }
 
     /// Every failure of the block process comes through here: it did not
-    /// start, ended, sent a bad frame or tree, or speaks an unsupported
-    /// contract. The presentation is withdrawn and the process ended.
-    /// Restarting and turning off are decided by supervision, which attaches
-    /// through `onFailure`.
+    /// start, ended, sent a bad frame or tree, stopped answering pings, or
+    /// speaks an unsupported contract. The presentation is withdrawn, the
+    /// actions cleared and the process ended; then `Supervisor` decides
+    /// between a new process at once and turning the block off.
     func handleFailure(reason: String) {
         log.error("\(self.id.rawValue, privacy: .public) failed: \(reason, privacy: .public)")
         context?.dismiss()
+        actions = []
         endProcess(wait: false)
         onFailure?(reason)
+        // Turned off meanwhile: nothing to restart.
+        guard context != nil else { return }
+
+        switch supervisor.failed(at: clock.now()) {
+        case .restart:
+            restarts += 1
+            health = .restarting(count: restarts)
+            log.info("\(self.id.rawValue, privacy: .public) restart \(self.restarts)")
+            launch()
+        case .turnOff:
+            supervisor.reset()
+            let sentence = "It stopped \(Supervisor.limit) times in a minute. Last reason: \(Self.sentenceEnd(reason))"
+            defaults.set(sentence, forKey: Self.failureKey(id))
+            health = .turnedOff(reason: sentence)
+            log.error("\(self.id.rawValue, privacy: .public) turned off: \(sentence, privacy: .public)")
+            turnOff(id)
+        }
+    }
+
+    /// `reason` as the end of a sentence: one full stop.
+    private static func sentenceEnd(_ reason: String) -> String {
+        reason.hasSuffix(".") ? reason : reason + "."
     }
 
     // MARK: Frames from the block
@@ -211,10 +312,31 @@ public final class RemoteBlock: NotchBlock {
             model.storeAsset(id: assetID, bytes: bytes)
         case let .log(text):
             log.info("\(self.id.rawValue, privacy: .public): \(text, privacy: .public)")
-        case .pong, .actions:
-            // Heartbeat and menu actions come with supervision and actions.
-            break
+        case let .pong(seq):
+            guard seq > 0, seq <= pingSeq else { return }
+            lastPong = max(lastPong, seq)
+            lastAnswer = clock.now()
+        case let .actions(items):
+            guard isWelcomed else { return }
+            let generation = self.generation
+            actions = items.map { item in
+                BlockAction(id: item.id, title: item.title, isEnabled: item.enabled) { [weak self] in
+                    self?.perform(item.id, offeredBy: generation)
+                }
+            }
         }
+    }
+
+    /// Sends a menu action, only to the process that offered it.
+    private func perform(_ actionID: String, offeredBy generation: Int) {
+        guard generation == self.generation, isWelcomed else { return }
+        send(.action(id: actionID))
+    }
+
+    /// A `button` node in the block's view was clicked.
+    func buttonTapped(_ buttonID: String) {
+        guard isWelcomed else { return }
+        send(.input(input: .button(id: buttonID)))
     }
 
     private func hello(contract: Int, blockID: String, version: String) {
@@ -230,7 +352,8 @@ public final class RemoteBlock: NotchBlock {
             log.info("\(self.id.rawValue, privacy: .public) \(version, privacy: .public) said hello after \(elapsed, privacy: .public), generation \(self.generation)")
         }
         try? FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
-        send(.welcome(contract: Contract.current, settings: defaultSettings(), dataFolder: dataFolder.path))
+        settings = readSettings()
+        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
         isWelcomed = true
         for payload in pending {
             send(.event(payload: payload, replay: true))
@@ -251,11 +374,11 @@ public final class RemoteBlock: NotchBlock {
         model.setTrees(peek: peek?.root, wing: wing?.root, expanded: expanded?.root)
 
         let model = self.model
+        let onButton: @MainActor (String) -> Void = { [weak self] buttonID in self?.buttonTapped(buttonID) }
         func content(_ slot: ViewSlot?, _ which: RemoteSlot) -> NotchContent? {
             slot.map { slot in
                 NotchContent(size: CGSize(width: slot.width, height: slot.height)) {
-                    // Button input reaches the block with input forwarding.
-                    RemoteSlotView(model: model, slot: which)
+                    RemoteSlotView(model: model, slot: which, onButton: onButton)
                 }
             }
         }
@@ -310,18 +433,45 @@ public final class RemoteBlock: NotchBlock {
         }
     }
 
-    /// Each declared setting's default. Toggles with no default are on.
-    // Manifest defaults only; stored values arrive with the settings form.
-    private func defaultSettings() -> [String: SettingValue] {
+    // MARK: Settings
+
+    /// Where a setting is stored: `<id>.<key>`.
+    func settingKey(_ key: String) -> String { "\(id.rawValue).\(key)" }
+
+    /// Each declared setting's value: the stored one, or the manifest default.
+    /// A toggle with neither is on. A stored toggle is read with
+    /// `bool(forKey:)`, so a launch argument such as "NO" counts as off.
+    private func readSettings() -> [String: SettingValue] {
         var values: [String: SettingValue] = [:]
         for spec in manifest.settings {
+            let stored = settingKey(spec.key)
             switch spec.type {
-            case .toggle: values[spec.key] = spec.default ?? .bool(true)
-            case .choice: if let value = spec.default { values[spec.key] = value }
-            case .note: break
+            case .toggle:
+                values[spec.key] = defaults.object(forKey: stored) == nil
+                    ? spec.default ?? .bool(true)
+                    : .bool(defaults.bool(forKey: stored))
+            case .choice:
+                if let value = defaults.string(forKey: stored) {
+                    values[spec.key] = .string(value)
+                } else if let value = spec.default {
+                    values[spec.key] = value
+                }
+            case .note:
+                break
             }
         }
         return values
+    }
+
+    /// Stores a setting the user changed and tells the running block.
+    func setSetting(_ key: String, to value: SettingValue) {
+        guard manifest.settings.contains(where: { $0.key == key }), settings[key] != value else { return }
+        switch value {
+        case let .bool(on): defaults.set(on, forKey: settingKey(key))
+        case let .string(text): defaults.set(text, forKey: settingKey(key))
+        }
+        settings[key] = value
+        if isWelcomed { send(.setting(key: key, value: value)) }
     }
 
     // MARK: Ownership

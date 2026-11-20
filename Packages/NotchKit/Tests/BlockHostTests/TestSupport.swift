@@ -14,11 +14,14 @@ final class FakeProcess: @unchecked Sendable {
     let generation: Int
     let executable: URL
     private let transport: MemoryTransport
+    /// The app's end, to deliver bytes the block never could have framed.
+    private let appEnd: MemoryTransport?
     private let lock = NSLock()
     private var frames: [Envelope<HostToBlock>] = []
 
-    init(transport: MemoryTransport, executable: URL, generation: Int) {
+    init(transport: MemoryTransport, executable: URL, generation: Int, appEnd: MemoryTransport? = nil) {
         self.transport = transport
+        self.appEnd = appEnd
         self.executable = executable
         self.generation = generation
         let stream = transport.envelopes(of: HostToBlock.self)
@@ -49,6 +52,15 @@ final class FakeProcess: @unchecked Sendable {
 
     func close() { transport.close() }
 
+    /// Bytes that are not a frame, as a broken block would send.
+    func sendGarbage() { appEnd?.injectReceived(Data("not json".utf8)) }
+
+    /// Answers the latest `ping` received.
+    func answerLatestPing() throws {
+        let seq = received.compactMap { if case let .ping(seq) = $0 { seq } else { nil } }.last
+        if let seq { try send(.pong(seq: seq)) }
+    }
+
     func waitFor(timeout: Duration = .seconds(2), _ match: @Sendable (HostToBlock) -> Bool) async -> HostToBlock? {
         let clock = ContinuousClock()
         let deadline = clock.now + timeout
@@ -73,7 +85,7 @@ final class FakeLauncher {
     var launcher: BlockLauncher {
         { [unowned self] executable, generation in
             let (app, block) = MemoryTransport.pair()
-            processes.append(FakeProcess(transport: block, executable: executable, generation: generation))
+            processes.append(FakeProcess(transport: block, executable: executable, generation: generation, appEnd: app))
             return app
         }
     }
@@ -100,28 +112,70 @@ let helloManifest = Manifest(
     ]
 )
 
-/// A stand-in registered in `runtime`, with its launcher, after its first
-/// process said hello and was welcomed.
+/// The ids the turn-off closure was called with.
+@MainActor
+final class TurnOffs {
+    var ids: [BlockID] = []
+}
+
+/// A fresh, empty settings store for one test.
+func testDefaults() -> UserDefaults {
+    UserDefaults(suiteName: "BlockHostTests.\(UUID().uuidString)")!
+}
+
+/// A stand-in registered in `runtime`, with its launcher. Its settings live
+/// in `defaults`, and its heartbeat and failure times on `heartbeat`, which
+/// moves only when a test advances it (as a suspending clock does not move
+/// while the Mac sleeps). Turning off is recorded in `turnOffs` and applied
+/// to the runtime, as the app's closure does through `BlockSettings`.
 @MainActor
 struct Rig {
     let runtime: NotchRuntime
     let block: RemoteBlock
     let launcher: FakeLauncher
+    let defaults: UserDefaults
+    let heartbeat: ManualClock
+    let turnOffs = TurnOffs()
     var process: FakeProcess { launcher.last! }
 
-    init(clock: ManualClock = ManualClock(), manifest: Manifest = helloManifest) {
+    init(clock: ManualClock = ManualClock(), manifest: Manifest = helloManifest, defaults: UserDefaults = testDefaults()) {
         runtime = NotchRuntime(clock: clock)
         launcher = FakeLauncher()
-        let runtime = self.runtime
-        block = RemoteBlock(
+        self.defaults = defaults
+        heartbeat = ManualClock()
+        block = Self.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: defaults,
+                             heartbeat: heartbeat, turnOffs: turnOffs)
+        runtime.register(block)
+    }
+
+    /// A stand-in wired like the rig's, not registered.
+    static func standIn(
+        manifest: Manifest = helloManifest, runtime: NotchRuntime, launcher: FakeLauncher,
+        defaults: UserDefaults, heartbeat: ManualClock = ManualClock(), turnOffs: TurnOffs = TurnOffs()
+    ) -> RemoteBlock {
+        RemoteBlock(
             manifest: manifest,
             packageURL: URL(fileURLWithPath: "/tmp/Hello.topblock"),
             source: .development(path: "/tmp/Hello.topblock"),
             dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-tests-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
-            launcher: launcher.launcher
+            launcher: launcher.launcher,
+            defaults: defaults,
+            clock: BlockClock(heartbeat),
+            turnOff: { id in
+                turnOffs.ids.append(id)
+                runtime.setEnabled(id, false)
+            }
         )
-        runtime.register(block)
+    }
+
+    /// Lets the heartbeat take `count` steps of one second each.
+    func beat(_ count: Int = 1) async {
+        for _ in 0..<count {
+            await waitUntil { heartbeat.sleeperCount > 0 }
+            heartbeat.advance(by: .seconds(1))
+            await settle()
+        }
     }
 }
 

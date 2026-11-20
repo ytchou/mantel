@@ -14,6 +14,8 @@ public final class BlockStore {
     private let owner: @MainActor () -> BlockID?
     private let dataRoot: URL
     private let launcher: BlockLauncher
+    private let defaults: UserDefaults
+    private let turnOff: @MainActor (BlockID) -> Void
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
     /// Every stand-in this store made, so `stopAll` can end their processes.
     private var made: [RemoteBlock] = []
@@ -22,14 +24,21 @@ public final class BlockStore {
     ///   - owner: who owns the notch now; pass `{ runtime.state.owner }`.
     ///     Each stand-in observes it to tell its block when it wins or loses the notch.
     ///   - dataRoot: the folder holding one data folder per block.
+    ///   - defaults: where block settings and turn-off reasons are stored.
+    ///   - turnOff: turns a block off after repeated failures; the app passes
+    ///     a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
     public init(
         owner: @escaping @MainActor () -> BlockID?,
         dataRoot: URL = BlockStore.defaultDataRoot,
-        launcher: @escaping BlockLauncher = { try BlockProcess.spawn(executable: $0, generation: $1) }
+        launcher: @escaping BlockLauncher = { try BlockProcess.spawn(executable: $0, generation: $1) },
+        defaults: UserDefaults = .standard,
+        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in }
     ) {
         self.owner = owner
         self.dataRoot = dataRoot
         self.launcher = launcher
+        self.defaults = defaults
+        self.turnOff = turnOff
     }
 
     /// `~/Library/Application Support/TopNotch/BlockData`.
@@ -40,8 +49,8 @@ public final class BlockStore {
     }
 
     /// The stand-ins to register, in order. `developmentPath` is a
-    /// `.topblock` folder to run from where it is; a missing or invalid one
-    /// is logged and left out.
+    /// `.topblock` folder to run from where it is; a missing one, or one
+    /// `PackageValidator` refuses, is logged and left out.
     public func standIns(developmentPath: String?) -> [RemoteBlock] {
         guard let developmentPath, let block = developmentBlock(at: developmentPath) else { return [] }
         made.append(block)
@@ -57,15 +66,9 @@ public final class BlockStore {
         let package = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
         let manifest: Manifest
         do {
-            let data = try Data(contentsOf: package.appending(path: "manifest.json"))
-            manifest = try Manifest.decode(data)
+            manifest = try PackageValidator.load(package, source: .development(path: package.path))
         } catch {
-            log.error("development block at \(package.path, privacy: .public) not loaded: manifest.json: \(String(describing: error), privacy: .public)")
-            return nil
-        }
-        let executable = package.appending(path: manifest.executable)
-        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            log.error("development block at \(package.path, privacy: .public) not loaded: no executable at \(executable.path, privacy: .public)")
+            log.error("development block at \(package.path, privacy: .public) not loaded: \(error.errorDescription ?? String(describing: error), privacy: .public)")
             return nil
         }
         log.info("development block \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
@@ -75,7 +78,9 @@ public final class BlockStore {
             source: .development(path: package.path),
             dataFolder: dataRoot.appending(path: manifest.id),
             owner: owner,
-            launcher: launcher
+            launcher: launcher,
+            defaults: defaults,
+            turnOff: turnOff
         )
     }
 }

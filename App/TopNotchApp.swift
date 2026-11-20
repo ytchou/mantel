@@ -30,7 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
     private let onboarding = OnboardingController()
-    private lazy var blockStore = BlockStore(owner: { [runtime] in runtime.state.owner })
+    private lazy var blockStore = BlockStore(
+        owner: { [runtime] in runtime.state.owner },
+        defaults: .standard,
+        // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
+        turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) }
+    )
     private var shell: NotchShellController?
     private var dragMonitor: DragMonitor?
     private var screenshotWatcher: ScreenshotWatcher?
