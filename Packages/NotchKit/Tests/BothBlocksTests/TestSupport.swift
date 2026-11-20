@@ -1,7 +1,8 @@
+import BlockWire
 import Foundation
 import Synchronization
+@testable import BlockHost
 @testable import NotchCore
-@testable import NowPlayingBlock
 @testable import RenameBlock
 @testable import ShelfBlock
 
@@ -64,14 +65,15 @@ struct GatedNamer: ScreenshotNaming {
     }
 }
 
-/// All blocks registered in one runtime, as the app does: shelf first.
+/// All blocks registered in one runtime, as the app does: shelf first, and
+/// now-playing as a stand-in whose process is `ScriptedNowPlaying`.
 @MainActor
 struct Fixture {
     let runtime: NotchRuntime
     let clock: ManualClock
     let shelf: ShelfBlock
     let rename: RenameBlock
-    let nowPlaying: NowPlayingBlock
+    let nowPlaying: RemoteBlock
     let gate: Gate
     let folder: URL
 
@@ -91,9 +93,34 @@ struct Fixture {
             recentsURL: folder.appending(path: "state/recents.json")
         )
         runtime.register(shelf)
-        nowPlaying = NowPlayingBlock(defaults: UserDefaults(suiteName: suite)!)
+        let runtime = self.runtime
+        nowPlaying = RemoteBlock(
+            manifest: ScriptedNowPlaying.manifest,
+            packageURL: URL(fileURLWithPath: "/tmp/NowPlaying.topblock"),
+            source: .bundled,
+            dataFolder: folder.appending(path: "data/nowplaying"),
+            owner: { runtime.state.owner },
+            launcher: { _, generation in
+                let (app, block) = MemoryTransport.pair()
+                ScriptedNowPlaying.run(on: block, generation: generation)
+                return app
+            },
+            defaults: UserDefaults(suiteName: suite)!,
+            // A clock of its own that never moves: no heartbeat, and the
+            // runtime's clock holds only presentation timers.
+            clock: BlockClock(ManualClock())
+        )
         runtime.register(rename)
         runtime.register(nowPlaying)
+    }
+
+    /// Publishes an event the now-playing block listens to, and returns once
+    /// the scripted block has answered it and the stand-in has handled the answer.
+    func publishToNowPlaying<E: NotchEvent>(_ event: E) async {
+        await waitUntil { nowPlaying.isWelcomed }
+        let before = ScriptedNowPlaying.handledCount(in: nowPlaying)
+        runtime.publish(event)
+        await waitUntil { ScriptedNowPlaying.handledCount(in: nowPlaying) > before }
     }
 
     func capture(_ url: URL) {
@@ -103,6 +130,85 @@ struct Fixture {
     /// Where the shelf's file items point now.
     var shelfFileNames: [String] {
         shelf.store.stacks.flatMap(\.items).compactMap { shelf.store.fileURL(of: $0)?.lastPathComponent }
+    }
+}
+
+/// Plays the now-playing block on the block's end of an in-memory
+/// connection, as the real block behaves: a new song or a volume change
+/// while a song plays presents the peek (standard priority, 3 s,
+/// `dismissIfNotShown`); the last player stopping dismisses; replayed events
+/// never present.
+///
+/// After each event it sends an `actions` frame whose one item id counts the
+/// events handled. Frames are handled in order, so once the stand-in shows
+/// that count, every frame the event caused has been handled too.
+enum ScriptedNowPlaying {
+    /// How long its peek stays; the real block's `TrackBlock.seconds`.
+    static let duration: Duration = .seconds(3)
+
+    static let manifest = Manifest(
+        id: "nowplaying",
+        name: "Now Playing",
+        version: "1.0.0",
+        executable: "NowPlaying",
+        symbol: "music.note",
+        events: ["nowPlaying", "outputVolume"],
+        settings: [
+            SettingSpec(key: "showOnVolumeChange", type: .toggle, title: "Show when the volume changes", default: .bool(true)),
+            SettingSpec(key: "showOnTrackChange", type: .toggle, title: "Show when a new track starts", default: .bool(true)),
+        ]
+    )
+
+    private static let handledPrefix = "handled-"
+
+    /// The number of events the script has answered, as the stand-in last heard.
+    @MainActor
+    static func handledCount(in block: RemoteBlock) -> Int {
+        block.actions.first.flatMap { Int($0.id.dropFirst(handledPrefix.count)) } ?? 0
+    }
+
+    static func run(on transport: MemoryTransport, generation: Int) {
+        let stream = transport.envelopes(of: HostToBlock.self)
+        Task {
+            func send(_ message: BlockToHost) { try? transport.send(message, generation: generation) }
+            send(.hello(contract: Contract.current, id: "nowplaying", version: "1.0.0"))
+            var song: String?
+            var handled = 0
+            let peek = ViewSlot(width: 380, height: 52, root: .text("Song", style: .title))
+            let show = BlockToHost.present(priority: .standard, peek: peek, wing: nil, expanded: nil, opensAt: .peek,
+                                           seconds: duration / .seconds(1), dismissIfNotShown: true)
+            do {
+                for try await envelope in stream {
+                    switch envelope.message {
+                    case let .ping(seq):
+                        send(.pong(seq: seq))
+                    case .quit:
+                        return
+                    case let .event(.nowPlaying(change), replay):
+                        if change.state == .playing {
+                            let current = "\(change.player)/\(change.title)/\(change.artist)"
+                            if current != song {
+                                song = current
+                                if !replay { send(show) }
+                            }
+                        } else {
+                            song = nil
+                            send(.dismiss)
+                        }
+                        handled += 1
+                        send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))
+                    case let .event(.outputVolume, replay):
+                        if song != nil, !replay { send(show) }
+                        handled += 1
+                        send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))
+                    default:
+                        break
+                    }
+                }
+            } catch {
+                // The app closed the connection: the block is gone.
+            }
+        }
     }
 }
 

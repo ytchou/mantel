@@ -320,7 +320,8 @@ enum Fixture {
 
     static let manifest = Manifest(id: "fixture", name: "Fixture", version: "1.0.0", executable: "FixtureBlock",
                                    events: ["pointerHover"],
-                                   settings: [SettingSpec(key: "command", type: .choice, title: "Test command", default: .string("none"))])
+                                   settings: [SettingSpec(key: "command", type: .choice, title: "Test command", default: .string("none"),
+                                                          options: ["none", "crash", "hang", "ignorePing"].map { .init(value: $0, title: $0) })])
 
     /// A temporary `Fixture.topblock` whose executable links to the built one.
     static func package() throws -> URL {

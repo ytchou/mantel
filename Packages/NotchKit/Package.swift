@@ -12,7 +12,7 @@ let package = Package(
     products: [
         .library(
             name: "NotchKit",
-            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "NowPlayingBlock", "PlatformServices", "BlockHost"]
+            targets: ["NotchCore", "NotchShell", "EventSources", "DemoBlock", "ShelfBlock", "RenameBlock", "PlatformServices", "BlockHost"]
         )
     ],
     dependencies: [
@@ -25,7 +25,6 @@ let package = Package(
         .target(name: "DemoBlock", dependencies: ["NotchCore"]),
         .target(name: "ShelfBlock", dependencies: ["NotchCore"]),
         .target(name: "RenameBlock", dependencies: ["NotchCore"]),
-        .target(name: "NowPlayingBlock", dependencies: ["NotchCore"]),
         .target(name: "PlatformServices", dependencies: ["NotchCore"]),
         .target(name: "BlockHost", dependencies: ["NotchCore", .product(name: "BlockWire", package: "BlockKit")]),
         // A tiny block process for BlockHostTests. Not part of the product.
@@ -36,10 +35,12 @@ let package = Package(
         .testTarget(name: "DemoBlockTests", dependencies: ["DemoBlock"]),
         .testTarget(name: "ShelfBlockTests", dependencies: ["ShelfBlock"]),
         .testTarget(name: "RenameBlockTests", dependencies: ["RenameBlock"]),
-        .testTarget(name: "NowPlayingBlockTests", dependencies: ["NowPlayingBlock"]),
         .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
         .testTarget(name: "BlockHostTests", dependencies: ["BlockHost", "NotchCore", .product(name: "BlockWire", package: "BlockKit")]),
         // All blocks in one runtime: what happens when they want the notch at once.
-        .testTarget(name: "BothBlocksTests", dependencies: ["NotchCore", "ShelfBlock", "RenameBlock", "NowPlayingBlock"]),
+        // Now-playing runs as a stand-in over an in-memory connection, scripted as the block.
+        .testTarget(name: "BothBlocksTests", dependencies: [
+            "NotchCore", "ShelfBlock", "RenameBlock", "BlockHost", .product(name: "BlockWire", package: "BlockKit"),
+        ]),
     ]
 )

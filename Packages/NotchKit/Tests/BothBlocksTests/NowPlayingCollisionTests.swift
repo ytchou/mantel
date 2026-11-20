@@ -1,25 +1,26 @@
 import Foundation
 import Testing
 @testable import NotchCore
-@testable import NowPlayingBlock
 @testable import RenameBlock
 @testable import ShelfBlock
 
 // A volume change while the shelf or the rename block has the notch.
-// All three blocks run in one runtime, as in the app.
+// All three blocks run in one runtime, as in the app. Now-playing runs as a
+// stand-in for its block process, played by `ScriptedNowPlaying`; each event
+// waits until the block has answered, so a check that nothing changed is real.
 
 @MainActor
-private func spotifyPlays(_ f: Fixture) {
-    f.runtime.publish(NowPlayingChanged(player: "Spotify", state: .playing, title: "Song", artist: "Singer"))
+private func spotifyPlays(_ f: Fixture) async {
+    await f.publishToNowPlaying(NowPlayingChanged(player: "Spotify", state: .playing, title: "Song", artist: "Singer"))
 }
 
 @MainActor
-private func volumeChanges(_ f: Fixture) {
-    f.runtime.publish(OutputVolumeChanged(volume: 0.5, isMuted: false))
+private func volumeChanges(_ f: Fixture) async {
+    await f.publishToNowPlaying(OutputVolumeChanged(volume: 0.5, isMuted: false))
 }
 
 @MainActor
-@Test func aVolumeChangeDoesNotTakeTheNotchFromAShelfInUse() throws {
+@Test func aVolumeChangeDoesNotTakeTheNotchFromAShelfInUse() async throws {
     let f = try Fixture()
     f.runtime.publish(DragSessionStarted(kinds: [.text]))
     f.runtime.send(.drop([.text("held")]))
@@ -28,8 +29,8 @@ private func volumeChanges(_ f: Fixture) {
     #expect(f.runtime.state.owner == "shelf")
     #expect(f.runtime.state.level == .expanded)
 
-    spotifyPlays(f)
-    volumeChanges(f)
+    await spotifyPlays(f)
+    await volumeChanges(f)
     #expect(f.runtime.state.owner == "shelf")
     #expect(f.runtime.state.level == .expanded)
 
@@ -39,13 +40,13 @@ private func volumeChanges(_ f: Fixture) {
 }
 
 @MainActor
-@Test func aVolumeChangeDuringADragLeavesTheDropTarget() throws {
+@Test func aVolumeChangeDuringADragLeavesTheDropTarget() async throws {
     let f = try Fixture()
-    spotifyPlays(f)
+    await spotifyPlays(f)
     f.runtime.publish(DragSessionStarted(kinds: [.file]))
     #expect(f.runtime.state.owner == "shelf")
 
-    volumeChanges(f)
+    await volumeChanges(f)
     #expect(f.runtime.state.owner == "shelf")
     #expect(f.runtime.state.level == .expanded)
 
@@ -55,10 +56,10 @@ private func volumeChanges(_ f: Fixture) {
 }
 
 @MainActor
-@Test func aNewTrackDuringADragIsNotShownLater() throws {
+@Test func aNewTrackDuringADragIsNotShownLater() async throws {
     let f = try Fixture()
     f.runtime.publish(DragSessionStarted(kinds: [.file]))
-    spotifyPlays(f)
+    await spotifyPlays(f)
     #expect(f.runtime.state.owner == "shelf")
     #expect(f.runtime.state.level == .expanded)
 
@@ -69,19 +70,19 @@ private func volumeChanges(_ f: Fixture) {
 @MainActor
 @Test func aVolumeChangeDuringARenameResultShowsAndTheResultReturns() async throws {
     let f = try Fixture()
-    spotifyPlays(f)
+    await spotifyPlays(f)
     f.capture(try makeScreenshot("Screenshot 1.png", in: f.folder))
     await waitUntil { if case .renamed = f.rename.model.phase { true } else { false } }
     #expect(f.runtime.state.owner == "rename")
 
     // Newest wins between two results: the volume change shows.
-    volumeChanges(f)
+    await volumeChanges(f)
     #expect(f.runtime.state.owner == "nowplaying")
-    #expect(f.runtime.state.presentation?.duration == NowPlayingBlock.duration)
+    #expect(f.runtime.state.presentation?.duration == ScriptedNowPlaying.duration)
 
     // Its time runs out: the rename result is back, with its time.
     await waitUntil { f.clock.sleeperCount > 0 }
-    f.clock.advance(by: NowPlayingBlock.duration)
+    f.clock.advance(by: ScriptedNowPlaying.duration)
     await waitUntil { f.runtime.state.owner == "rename" }
     #expect(f.runtime.state.owner == "rename")
     #expect(f.runtime.state.presentation?.duration == RenameBlock.resultDuration)

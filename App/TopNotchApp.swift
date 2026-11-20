@@ -4,7 +4,6 @@ import DemoBlock
 import EventSources
 import NotchCore
 import NotchShell
-import NowPlayingBlock
 import PlatformServices
 import RenameBlock
 import ShelfBlock
@@ -32,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let onboarding = OnboardingController()
     private lazy var blockStore = BlockStore(
         owner: { [runtime] in runtime.state.owner },
+        // Built into Contents/Resources/Blocks by the "Build bundled blocks" phase.
+        bundledRoot: Bundle.main.resourceURL?.appending(path: "Blocks"),
         defaults: .standard,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) }
@@ -45,11 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock(), NowPlayingBlock()]
+        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
+        // The bundled blocks (now-playing), then, with `-devBlock <path to
+        // .topblock>`, one block run from where it is, without installing.
+        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock")) as [any NotchBlock]
         // `-demoBlock YES` adds the demo block, to try hover, click and drop.
         if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
-        // `-devBlock <path to .topblock>` runs one block from where it is, without installing.
-        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock")) as [any NotchBlock]
         for block in blocks {
             runtime.register(block, enabled: settings.isEnabled(block.id))
         }
