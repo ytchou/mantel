@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>DemoBlock</string>
+	<key>CFBundleIdentifier</key>
+	<string>spike.topnotch.block.demo</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>TNBlockID</key>
+	<string>demo</string>
+	<key>TNContractVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>
