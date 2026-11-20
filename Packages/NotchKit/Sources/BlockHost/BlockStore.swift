@@ -302,7 +302,7 @@ public final class BlockStore: BlockInstalling {
                     log.error("installed block at \(package.path, privacy: .public) skipped: its folder name is not a block id")
                     return nil
                 }
-                let decoded = try? Manifest.decode(Data(contentsOf: package.appending(path: "manifest.json")))
+                let decoded = try? Manifest.decode(Data(contentsOf: PackageValidator.manifestURL(in: package)))
                 if let decoded, decoded.id != id {
                     log.error("installed block at \(package.path, privacy: .public) skipped: its manifest id is \(decoded.id, privacy: .public)")
                     return nil

@@ -71,11 +71,15 @@ private func volumeChanges(_ f: Fixture) async {
 @Test func aVolumeChangeDuringARenameResultShowsAndTheResultReturns() async throws {
     let f = try Fixture()
     await spotifyPlays(f)
+    // The track's own peek ranks above the rename block: let it end first.
+    await waitUntil { f.clock.sleeperCount > 0 }
+    f.clock.advance(by: ScriptedNowPlaying.duration)
+    await waitUntil { f.runtime.state.owner == nil }
     f.capture(try makeScreenshot("Screenshot 1.png", in: f.folder))
     await waitUntil { if case .renamed = f.rename.model.phase { true } else { false } }
     #expect(f.runtime.state.owner == "rename")
 
-    // Newest wins between two results: the volume change shows.
+    // Now Playing ranks above Screenshot Names: the volume change shows.
     await volumeChanges(f)
     #expect(f.runtime.state.owner == "nowplaying")
     #expect(f.runtime.state.presentation?.duration == ScriptedNowPlaying.duration)

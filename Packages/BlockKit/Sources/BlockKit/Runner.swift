@@ -32,7 +32,7 @@ public final class Runner: Sendable {
         let generation = self.generation
         let context = await MainActor.run {
             let context = Context(transport: transport, generation: generation)
-            context.send(.hello(contract: Contract.current, id: block.id, version: block.version))
+            context.send(.hello(contract: block.contract, id: block.id, version: block.version))
             return context
         }
 

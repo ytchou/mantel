@@ -38,22 +38,23 @@ public struct NodeView: View {
 
     @ViewBuilder private var content: some View {
         switch node.kind {
-        case let .vstack(children, spacing, alignment, padding):
+        case let .vstack(children, spacing, alignment, padding, _):
             VStack(alignment: horizontal(alignment), spacing: spacing.map { CGFloat($0) } ?? NotchStyle.spacing) {
                 self.children(children)
             }
             .modifier(Inset(padding: padding))
 
-        case let .hstack(children, spacing, alignment, padding):
+        case let .hstack(children, spacing, alignment, padding, _):
             HStack(alignment: vertical(alignment), spacing: spacing.map { CGFloat($0) } ?? NotchStyle.spacing) {
                 self.children(children)
             }
             .modifier(Inset(padding: padding))
 
-        case let .box(child, width, height, cornerRadius, fillOpacity):
+        case let .box(child, width, height, cornerRadius, fillOpacity, _, _):
+            // Version 1 always sends both sizes; nil leaves the axis unfixed.
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.white.opacity(fillOpacity))
-                .frame(width: width, height: height)
+                .frame(width: width.map { CGFloat($0) }, height: height.map { CGFloat($0) })
                 .overlay(AnyView(NodeView(node: child, model: model, onButton: onButton)))
 
         case let .text(text, style):
@@ -67,7 +68,7 @@ public struct NodeView: View {
                     .lineLimit(1).truncationMode(.tail)
             }
 
-        case let .symbol(name, size, opacity, width):
+        case let .symbol(name, size, opacity, width, _, _, _):
             Image(systemName: name)
                 .font(.system(size: size))
                 .opacity(opacity ?? 1)
@@ -89,7 +90,10 @@ public struct NodeView: View {
                     .frame(width: size, height: size)
             }
 
-        case let .progress(value, width):
+        case let .progress(value, wireWidth, _, _):
+            // Version 1 always sends a width. A nil width (version 2, fill the
+            // space given) is drawn at 64 pt until Task 5 draws it properly.
+            let width = wireWidth ?? 64
             let fraction = min(max(value, 0), 1)
             Capsule()
                 .fill(.white.opacity(0.2))
@@ -98,12 +102,16 @@ public struct NodeView: View {
                     Capsule().fill(.white).frame(width: width * fraction, height: 5)
                 }
 
-        case let .button(id, title):
+        case let .button(id, title, _, _, _, _, _):
             Button(title) { onButton(id) }
                 .buttonStyle(.notchCapsule)
 
         case let .spacer(minLength):
             Spacer(minLength: minLength.map { CGFloat($0) })
+
+        // v2 kinds drawn in Task 5
+        case .zstack, .scroll, .styledText, .capsule, .spinner, .sweep, .frame, .item:
+            EmptyView()
         }
     }
 

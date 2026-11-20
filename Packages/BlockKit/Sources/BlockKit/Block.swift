@@ -21,6 +21,10 @@ public protocol Block: Sendable {
     var id: String { get }
     /// The block's version. By default, the `version` in that manifest.
     var version: String { get }
+    /// The contract version the block says in `hello`. By default, the
+    /// `contract` in that manifest, or `Contract.current` without one. A
+    /// block that says 1 gets no version 2 message from the app.
+    var contract: Int { get }
     /// Called once, after the app has answered `hello`. Register handlers
     /// here; settings and the data folder are ready.
     func start(_ ctx: Context)
@@ -29,6 +33,7 @@ public protocol Block: Sendable {
 public extension Block {
     var id: String { PackagedManifest.current?.id ?? ProcessInfo.processInfo.processName }
     var version: String { PackagedManifest.current?.version ?? "0" }
+    var contract: Int { PackagedManifest.current?.contract ?? Contract.current }
 
     /// Runs the block on fd 3 until the app sends `quit` or closes the
     /// socket, then exits.
@@ -43,13 +48,15 @@ public extension Block {
 enum PackagedManifest {
     static let current: Manifest? = {
         guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return nil }
-        // The manifest sits at the package root; the executable may be in a
-        // subfolder named by the manifest.
+        // A bundle keeps it in Contents/Resources, the executable in
+        // Contents/MacOS. A version 1 package keeps it at the package root,
+        // the executable perhaps in a subfolder named by the manifest.
         var folder = executable.deletingLastPathComponent()
         for _ in 0..<3 {
-            let file = folder.appendingPathComponent("manifest.json")
-            if let data = try? Data(contentsOf: file), let manifest = try? Manifest.decode(data) {
-                return manifest
+            for file in [folder.appendingPathComponent("Resources/manifest.json"), folder.appendingPathComponent("manifest.json")] {
+                if let data = try? Data(contentsOf: file), let manifest = try? Manifest.decode(data) {
+                    return manifest
+                }
             }
             folder.deleteLastPathComponent()
         }

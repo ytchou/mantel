@@ -18,12 +18,32 @@ enum PackageValidator {
         "shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns",
     ]
 
-    /// Reads `manifest.json` in `package` and checks it. Returns the manifest
+    /// True when `package` is a bundle: `Contents/Resources/manifest.json`
+    /// and the executable in `Contents/MacOS`.
+    // Stop-gap: the flat layout (manifest.json and the executable at the top)
+    // is still accepted; Task 7 refuses it and drops this check.
+    static func isBundle(_ package: URL) -> Bool {
+        FileManager.default.fileExists(atPath: package.appending(path: "Contents/Resources/manifest.json").path)
+    }
+
+    /// The package's `manifest.json`, in either layout.
+    static func manifestURL(in package: URL) -> URL {
+        isBundle(package)
+            ? package.appending(path: "Contents/Resources/manifest.json")
+            : package.appending(path: "manifest.json")
+    }
+
+    /// The folder the manifest's `executable` is relative to, in either layout.
+    static func executableFolder(in package: URL) -> URL {
+        isBundle(package) ? package.appending(path: "Contents/MacOS", directoryHint: .isDirectory) : package
+    }
+
+    /// Reads the package's `manifest.json` and checks it. Returns the manifest
     /// when the package may run.
     static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
         let manifest: Manifest
         do {
-            let data = try Data(contentsOf: package.appending(path: "manifest.json"))
+            let data = try Data(contentsOf: manifestURL(in: package))
             manifest = try Manifest.decode(data)
         } catch let error as ManifestError {
             throw .unreadableManifest(describe(error))
@@ -65,7 +85,7 @@ enum PackageValidator {
             let root = parent.path
             return child.path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
         }
-        let executable = package.appending(path: path)
+        let executable = executableFolder(in: package).appending(path: path)
         let resolved = executable.standardizedFileURL.path
         // `appending(path:)` treats a leading "/" as relative, so an absolute
         // path is refused on its own. The path is checked as written, then

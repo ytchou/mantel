@@ -54,4 +54,19 @@ struct ManifestTests {
         #expect(throws: ManifestError.invalidField("contract")) { try Manifest.decode(Data(wrongType.utf8)) }
         #expect(throws: ManifestError.notJSON) { try Manifest.decode(Data("{".utf8)) }
     }
+
+    @Test func manifestAccessDecodesKnownTokensAndRefusesUnknown() throws {
+        func manifest(access: String) -> Data {
+            Data(#"{"id":"a","name":"A","version":"1","contract":2,"executable":"A","access":\#(access)}"#.utf8)
+        }
+        let all = try Manifest.decode(manifest(access: #"["network","files.read","files.screenshots"]"#))
+        #expect(all.access == [.network, .filesRead, .filesScreenshots])
+        #expect(all.access.map(\.rawValue) == ["network", "files.read", "files.screenshots"])
+
+        #expect(throws: ManifestError.invalidField("access")) { try Manifest.decode(manifest(access: #"["network","camera"]"#)) }
+        #expect(throws: ManifestError.invalidField("access")) { try Manifest.decode(manifest(access: #""network""#)) }
+
+        // A version 1 manifest has no `access`: an empty list.
+        #expect(try Manifest.decode(Data(valid.utf8)).access.isEmpty)
+    }
 }

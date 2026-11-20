@@ -64,6 +64,8 @@ struct RemoteBlockTests {
         try await rig.process.start()
 
         // A higher-priority block holds the notch: the stand-in withdraws at once.
+        // `interactive` counts only during an interaction, here a drag.
+        rig.runtime.publish(DragSessionStarted(kinds: [.file]))
         other.show(.interactive)
         try rig.process.send(present(dismissIfNotShown: true))
         await settle()
@@ -71,7 +73,7 @@ struct RemoteBlockTests {
         other.context?.dismiss()
         #expect(rig.runtime.state.owner == nil, "the stand-in left nothing queued")
 
-        // An equal-priority block holds it: the newer presentation wins.
+        // An equal-priority block holds it: the higher-ranked stand-in wins.
         other.show(.standard)
         try rig.process.send(present(dismissIfNotShown: true))
         await waitUntil { rig.runtime.state.owner == "hello" }

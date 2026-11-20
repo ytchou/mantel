@@ -55,6 +55,12 @@ public final class Context {
     private var inputHandler: ((WireInput) -> Void)?
     private var ownerHandler: ((Bool) -> Void)?
     private var settingHandler: ((String, SettingValue) -> Void)?
+    private var dropHandler: (([WireDrop]) -> Void)?
+    private var itemHandler: ((String, ItemAction) -> Void)?
+    private var dragBeganHandler: ((String) -> Void)?
+    private var dragEndedHandler: ((String, Bool) -> Void)?
+    /// The `seq` of the event whose handlers are running; nil outside them.
+    private var answering: Int?
 
     init(transport: any Transport, generation: Int) {
         self.transport = transport
@@ -73,7 +79,23 @@ public final class Context {
     public func onAction(_ handler: @escaping (String) -> Void) { actionHandler = handler }
 
     /// Calls `handler` when the user clicks the view or one of its buttons.
+    /// Drops, item actions and drags go to their own handlers instead.
     public func onInput(_ handler: @escaping (WireInput) -> Void) { inputHandler = handler }
+
+    /// Calls `handler` with what was dropped on a presentation that
+    /// `accepts` its kind.
+    public func onDrop(_ handler: @escaping ([WireDrop]) -> Void) { dropHandler = handler }
+
+    /// Calls `handler` with an `item`'s id and what the user did on it.
+    public func onItem(_ handler: @escaping (_ id: String, _ action: ItemAction) -> Void) { itemHandler = handler }
+
+    /// Calls `handler` with an `item`'s id when the app starts dragging it
+    /// out. It comes before the `dragStarted` event the same drag causes.
+    public func onDragBegan(_ handler: @escaping (_ id: String) -> Void) { dragBeganHandler = handler }
+
+    /// Calls `handler` when that drag ends; `succeeded` is false when it
+    /// was cancelled.
+    public func onDragEnded(_ handler: @escaping (_ id: String, _ succeeded: Bool) -> Void) { dragEndedHandler = handler }
 
     /// Calls `handler` when `ownsNotch` changes.
     public func onOwnerChanged(_ handler: @escaping (Bool) -> Void) { ownerHandler = handler }
@@ -103,7 +125,12 @@ public final class Context {
 
     /// Asks for the notch. `seconds` dismisses the presentation after that
     /// long; nil keeps it until `dismiss`. With `dismissIfNotShown`, the app
-    /// withdraws it at once if another block holds the notch.
+    /// withdraws it at once if another block holds the notch. `accepts`
+    /// lists the drop kinds the presentation takes; drops arrive at
+    /// `onDrop`.
+    ///
+    /// Called from an event handler, the present names that event, and the
+    /// app drops it when it comes too late and has `dismissIfNotShown`.
     public func present(
         peek: ViewSlot? = nil,
         wing: ViewSlot? = nil,
@@ -111,14 +138,16 @@ public final class Context {
         priority: Priority = .standard,
         opensAt: Level = .peek,
         for seconds: Double? = nil,
-        dismissIfNotShown: Bool = false
+        dismissIfNotShown: Bool = false,
+        accepts: [DragStarted.Kind]? = nil
     ) {
         let trees = [peek, wing, expanded].compactMap { $0?.root }
         guard !trees.isEmpty else { return log("present: no view given; nothing sent") }
         guard sendAssets(for: trees) else { return }
         send(.present(
             priority: priority, peek: peek, wing: wing, expanded: expanded,
-            opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown
+            opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown,
+            accepts: accepts, answering: answering
         ))
     }
 
@@ -135,6 +164,12 @@ public final class Context {
 
     /// Replaces the block's menu actions.
     public func setActions(_ items: [ActionItem]) { send(.actions(items: items)) }
+
+    /// Asks the app to show these files in Quick Look.
+    public func preview(paths: [String]) { send(.preview(paths: paths)) }
+
+    /// Replaces the text of the `note` setting `key` on the settings page.
+    public func setNote(key: String, text: String) { send(.settingNote(key: key, text: text)) }
 
     /// Writes a line to the app's log. Never use stdout.
     public func log(_ text: String) { send(.log(text: text)) }
@@ -189,15 +224,24 @@ public final class Context {
                 started = true
                 start(self)
             }
-        case let .event(payload, replay):
+        case let .event(payload, replay, seq):
             let event = BlockEvent(payload: payload, replay: replay)
+            // A present made later, outside the handler, answers nothing.
+            answering = seq
+            defer { answering = nil }
             eventHandlers[payload.name]?.forEach { $0(event) }
         case let .owner(owns):
             guard owns != ownsNotch else { return }
             ownsNotch = owns
             ownerHandler?(owns)
         case let .input(input):
-            inputHandler?(input)
+            switch input {
+            case let .drop(items): dropHandler?(items)
+            case let .item(id, action): itemHandler?(id, action)
+            case let .dragBegan(id): dragBeganHandler?(id)
+            case let .dragEnded(id, succeeded): dragEndedHandler?(id, succeeded)
+            case .click, .button: inputHandler?(input)
+            }
         case let .action(id):
             actionHandler?(id)
         case let .setting(key, value):

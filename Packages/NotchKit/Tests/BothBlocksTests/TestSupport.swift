@@ -65,8 +65,9 @@ struct GatedNamer: ScreenshotNaming {
     }
 }
 
-/// All blocks registered in one runtime, as the app does: shelf first, and
-/// now-playing as a stand-in whose process is `ScriptedNowPlaying`.
+/// All blocks registered in one runtime, in the app's default order (Shelf,
+/// Now Playing, Screenshot Names), with now-playing as a stand-in whose
+/// process is `ScriptedNowPlaying`.
 @MainActor
 struct Fixture {
     let runtime: NotchRuntime
@@ -110,8 +111,8 @@ struct Fixture {
             // runtime's clock holds only presentation timers.
             clock: BlockClock(ManualClock())
         )
-        runtime.register(rename)
         runtime.register(nowPlaying)
+        runtime.register(rename)
     }
 
     /// Publishes an event the now-playing block listens to, and returns once
@@ -188,7 +189,7 @@ enum ScriptedNowPlaying {
                         send(.pong(seq: seq))
                     case .quit:
                         return
-                    case let .event(.nowPlaying(change), replay):
+                    case let .event(.nowPlaying(change), replay, _):
                         if change.state == .playing {
                             let current = "\(change.player)/\(change.title)/\(change.artist)"
                             if current != song {
@@ -201,7 +202,7 @@ enum ScriptedNowPlaying {
                         }
                         handled += 1
                         send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))
-                    case let .event(.outputVolume, replay):
+                    case let .event(.outputVolume, replay, _):
                         if song != nil, !replay { send(show) }
                         handled += 1
                         send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))

@@ -73,7 +73,7 @@ final class FakeProcess: @unchecked Sendable {
 
     /// The `event` messages received so far.
     var events: [(payload: EventPayload, replay: Bool)] {
-        received.compactMap { if case let .event(payload, replay) = $0 { (payload, replay) } else { nil } }
+        received.compactMap { if case let .event(payload, replay, _) = $0 { (payload, replay) } else { nil } }
     }
 }
 

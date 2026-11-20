@@ -131,7 +131,7 @@ public final class RemoteBlock: NotchBlock {
     static func failureKey(_ id: BlockID) -> String { "block.\(id.rawValue).failure" }
 
     /// The executable the manifest names, inside the package.
-    public var executableURL: URL { packageURL.appending(path: manifest.executable) }
+    public var executableURL: URL { PackageValidator.executableFolder(in: packageURL).appending(path: manifest.executable) }
 
     /// The running process's id, when the transport is a real process that
     /// has not exited.
@@ -353,7 +353,8 @@ public final class RemoteBlock: NotchBlock {
         switch envelope.message {
         case let .hello(contract, blockID, version):
             hello(contract: contract, blockID: blockID, version: version)
-        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown):
+        // `accepts` and `answering` (contract version 2) are handled in a later task.
+        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown, _, _):
             guard isWelcomed else { return }
             present(priority: priority, peek: peek, wing: wing, expanded: expanded,
                     opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown)
@@ -379,6 +380,9 @@ public final class RemoteBlock: NotchBlock {
                     self?.perform(item.id, offeredBy: generation)
                 }
             }
+        case .preview, .settingNote:
+            // Contract version 2 messages, handled in a later task; ignored until then.
+            break
         }
     }
 

@@ -68,13 +68,33 @@ struct AssetsTests {
         let firstID = assets.register(Data([0]))
         #expect(sent(&assets, [firstID]) == [firstID])
 
-        // Eight other images push the first out of the app's cache.
+        // As many other images as the app keeps push the first out of its cache.
         for n in 1...Contract.assetCacheSize {
             let id = assets.register(Data([UInt8(n)]))
             #expect(sent(&assets, [id]) == [id])
         }
         // Shown again from the node it already has, not registered again.
         #expect(sent(&assets, [firstID]) == [firstID])
+    }
+
+    @Test func assetCacheKeepsSixtyFour() {
+        #expect(Contract.assetCacheSize == 64)
+        var assets = Assets()
+        let firstID = assets.register(Data([0]))
+        #expect(sent(&assets, [firstID]) == [firstID])
+
+        // 63 more fill the app's 64 places.
+        var ids = [firstID]
+        for n in 1...63 {
+            let id = assets.register(Data([UInt8(n)]))
+            ids.append(id)
+            #expect(sent(&assets, [id]) == [id])
+        }
+        // The 65th distinct image pushes out the first, and only the first.
+        let sixtyFifth = assets.register(Data([64]))
+        #expect(sent(&assets, [sixtyFifth]) == [sixtyFifth])
+        #expect(sent(&assets, [ids[1]]).isEmpty, "the second is still held")
+        #expect(sent(&assets, [firstID]) == [firstID], "the first is sent again when used")
     }
 
     @Test func aFailedSendIsNotCountedAsHeld() {

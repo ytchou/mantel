@@ -283,6 +283,98 @@ struct NotchRuntimeTests {
         #expect(first.deactivations == 1)
     }
 
+    // Rank
+    @Test func moveChangesRankAndOwner() {
+        let runtime = NotchRuntime()
+        let a = FakeBlock("a")
+        let b = FakeBlock("b")
+        let c = FakeBlock("c")
+        runtime.register(a)
+        runtime.register(b)
+        runtime.register(c)
+        a.context?.present(peekPresentation(.standard))
+        b.context?.present(peekPresentation(.standard))
+        #expect(runtime.state.owner == "a")
+
+        runtime.move("b", to: 0)
+        #expect(runtime.blocks.map { $0.id } == ["b", "a", "c"])
+        #expect(runtime.state.owner == "b")
+
+        // Past the end goes last; an unknown id does nothing.
+        runtime.move("b", to: 10)
+        #expect(runtime.blocks.map { $0.id } == ["a", "c", "b"])
+        #expect(runtime.state.owner == "a")
+        runtime.move("missing", to: 0)
+        #expect(runtime.blocks.map { $0.id } == ["a", "c", "b"])
+    }
+
+    // Guard, through the runtime's drag events and timer
+    @Test func dragEventsHoldInteractiveForTheWindowOnTheInjectedClock() async {
+        let clock = ManualClock()
+        let runtime = NotchRuntime(clock: clock)
+        let a = FakeBlock("a")
+        let b = FakeBlock("b")
+        b.onActivate = { context in
+            context.subscribe(to: DragSessionStarted.self) { _ in context.present(peekPresentation(.interactive)) }
+        }
+        runtime.register(a)
+        runtime.register(b)
+        a.context?.present(peekPresentation(.standard))
+
+        runtime.publish(DragSessionStarted(kinds: [.file]))
+        #expect(runtime.state.owner == "b")
+        runtime.publish(DragSessionEnded())
+        #expect(runtime.state.owner == "b")
+
+        await waitUntil { clock.sleeperCount == 1 }
+        clock.advance(by: .seconds(19))
+        #expect(runtime.state.owner == "b")
+        clock.advance(by: .seconds(1))
+        await waitUntil { runtime.state.owner == "a" }
+        #expect(runtime.state.owner == "a")
+    }
+
+    // Demand
+    @Test func demandFollowsSubscriptions() {
+        let runtime = NotchRuntime()
+        var changes = 0
+        runtime.onDemandChanged = { changes += 1 }
+        let a = FakeBlock("a")
+        let b = FakeBlock("b")
+        for block in [a, b] {
+            block.onActivate = { context in context.subscribe(to: Ping.self) { _ in } }
+        }
+        #expect(!runtime.hasSubscribers(for: Ping.self))
+
+        runtime.register(a, enabled: false)
+        #expect(!runtime.hasSubscribers(for: Ping.self))
+        #expect(changes == 0)
+
+        runtime.setEnabled("a", true)
+        #expect(runtime.hasSubscribers(for: Ping.self))
+        #expect(!runtime.hasSubscribers(for: Pong.self))
+        #expect(changes == 1)
+
+        // A second subscriber to the same event is no change.
+        runtime.register(b)
+        #expect(changes == 1)
+
+        runtime.setEnabled("a", false)
+        #expect(runtime.hasSubscribers(for: Ping.self))
+        #expect(changes == 1)
+
+        runtime.unregister("b")
+        #expect(!runtime.hasSubscribers(for: Ping.self))
+        #expect(changes == 2)
+
+        runtime.setEnabled("a", true)
+        #expect(runtime.hasSubscribers(for: Ping.self))
+        #expect(changes == 3)
+        runtime.setEnabled("a", false)
+        #expect(!runtime.hasSubscribers(for: Ping.self))
+        #expect(changes == 4)
+    }
+
     @Test func defaultsKeepOldBlocksCompiling() {
         let block = FakeBlock("a")
         #expect(block.health == .ok)
