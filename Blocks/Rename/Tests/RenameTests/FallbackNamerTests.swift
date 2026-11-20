@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import Rename
+@testable import RenameCore
 
 private let utc = TimeZone(identifier: "UTC")!
 private let date = Date(timeIntervalSince1970: 1_794_996_000)

@@ -72,8 +72,12 @@ public final class BlockProcess: Transport, @unchecked Sendable {
 
     /// Starts `executable` with the socket as fd 3 and `generation` in its
     /// environment. With `sandbox`, the block runs under that profile through
-    /// `sandbox-exec`, and its `TMPDIR` is the profile's temporary folder.
-    /// Create the profile's folders before building it.
+    /// `sandbox-exec`, and its `TMPDIR` is the profile's temporary folder,
+    /// the block's own. Create the profile's folders before building it.
+    // Foundation's `NSTemporaryDirectory()` and `FileManager.temporaryDirectory`
+    // ignore `TMPDIR` on macOS 26 (probed 2026-11-20): inside the block they
+    // still name the per-user temporary folder (open, except the app's
+    // `TopNotch` subtree). A block finds its own folder by reading `TMPDIR`.
     static func spawn(executable: URL, generation: Int, sandbox: SandboxProfile?) throws(BlockProcessError) -> BlockProcess {
         var fds: [Int32] = [0, 0]
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0 else { throw .socketFailed(errno) }

@@ -3,7 +3,7 @@ import BlockKitTesting
 import CoreGraphics
 import Foundation
 import Testing
-@testable import Rename
+@testable import RenameCore
 
 // The block's behaviour, ported from the in-app block's tests. Each test runs
 // the block over `FakeHost`, as the app would, and asserts on the messages it

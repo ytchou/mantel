@@ -1,5 +1,6 @@
 import Foundation
 import NotchCore
+import SwiftUI
 import Testing
 @testable import EventSources
 
@@ -18,6 +19,7 @@ private final class ListeningBlock: NotchBlock {
     let id: BlockID
     let title = "Listening"
     private let types: [any NotchEvent.Type]
+    private(set) var context: (any BlockContext)?
 
     init(_ id: BlockID, listensTo types: [any NotchEvent.Type]) {
         self.id = id
@@ -25,6 +27,7 @@ private final class ListeningBlock: NotchBlock {
     }
 
     func activate(_ context: any BlockContext) {
+        self.context = context
         for type in types { subscribe(context, to: type) }
     }
 
@@ -109,6 +112,43 @@ private final class ListeningBlock: NotchBlock {
     #expect(screenshots.starts == 0)
     #expect(nowPlaying.stops == 0)
     #expect(screenshots.stops == 0)
+}
+
+/// With no drag listener, the drag monitor still runs while an interactive
+/// presentation is on screen, so a drag cannot displace it. Other sources
+/// stay on demand.
+@MainActor
+@Test func dragSourceAlsoRunsWhileAnInteractivePresentationShows() {
+    let runtime = NotchRuntime()
+    let coordinator = SourceCoordinator(runtime: runtime)
+    let drag = FakeSource()
+    let screenshots = FakeSource()
+    coordinator.add(drag, for: [DragSessionStarted.self, DragSessionEnded.self], whileInteractiveShows: true)
+    coordinator.add(screenshots, for: [ScreenshotCaptured.self])
+    let block = ListeningBlock("a", listensTo: [])
+    runtime.register(block)
+    func presentation(_ priority: PresentationPriority) -> Presentation {
+        Presentation(priority: priority, peek: NotchContent(size: CGSize(width: 10, height: 10)) { EmptyView() })
+    }
+
+    block.context?.present(presentation(.standard))
+    #expect(drag.starts == 0)
+
+    block.context?.present(presentation(.interactive))
+    #expect(drag.starts == 1)
+    #expect(screenshots.starts == 0)
+
+    block.context?.dismiss()
+    #expect(drag.stops == 1)
+
+    // A drag listener keeps it running when the presentation goes.
+    runtime.register(ListeningBlock("drags", listensTo: [DragSessionStarted.self]))
+    #expect(drag.starts == 2)
+    block.context?.present(presentation(.interactive))
+    block.context?.dismiss()
+    #expect(drag.starts == 2)
+    #expect(drag.stops == 1)
+    #expect(screenshots.starts == 0)
 }
 
 // MARK: Real watchers

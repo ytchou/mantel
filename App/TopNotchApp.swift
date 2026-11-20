@@ -38,10 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
         // A block installed from the Blocks page joins like one found at launch,
-        // then takes its place in the stored order (a new id goes last).
+        // then takes its place in the stored order (a new id goes last), which is stored.
         register: { [settings, runtime] block in
             runtime.register(block, enabled: settings.isEnabled(block.id))
-            settings.applyOrder(to: runtime)
+            settings.applyOrderAfterInstall(to: runtime)
         },
         unregister: { [runtime] id in runtime.unregister(id) },
         clearKeys: { [settings] id in settings.clear(id) },
@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for block in blocks {
             runtime.register(block, enabled: settings.isEnabled(block.id))
         }
-        // The order the owner set on the Blocks page, or the default one.
+        // The order the owner set on the Blocks page; with none, the order found above.
         settings.applyOrder(to: runtime)
 
         // `-forcePill YES` tries the floating pill on a Mac with a notch.
@@ -71,9 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.shell = shell
 
         // Each source runs only while an enabled block listens to its events.
-        // Blocks are registered above, so the ones turned on start here.
+        // Blocks are registered above, so the ones turned on start here. The
+        // drag monitor also runs while an interactive presentation shows: the
+        // arbiter keeps it on screen during a drag only when it hears the drag.
         let sources = SourceCoordinator(runtime: runtime)
-        sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self])
+        sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self],
+                    whileInteractiveShows: true)
         sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self])
         sources.add(OutputVolumeWatcher(runtime: runtime), for: [OutputVolumeChanged.self])
         for player in [PlayerNotificationWatcher.Player.spotify, .music] {

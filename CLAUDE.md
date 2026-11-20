@@ -38,9 +38,9 @@ is, without installing it (sandboxed, no signature check): `make build`, then
 | `Packages/NotchKit/Sources/EventSources` | System event sources that publish to the bus, started only while a turned-on block listens | Draw UI, call a block directly |
 | `Packages/NotchKit/Sources/BlockHost` | Stand-ins for the block processes (`RemoteBlock`), process supervision, the sandbox each block runs under (`SandboxProfile`), drawing a block's view from data (items, drag-out, Quick Look), package validation, the package signature check (`PackageSignature`), install, update and remove (`BlockStore`) | Import `NotchShell`, `PlatformServices`, any block |
 | `Packages/BlockKit` | Separate package: the wire protocol (`BlockWire`, `PROTOCOL.md`), the kit block authors write against (`BlockKit`, `BlockKitTesting`), the `HelloBlock` example (the template for new blocks) and `Scripts/package-block.sh`; see its `README.md` | Depend on `NotchKit`; import anything but Foundation in `BlockWire`, or anything but Foundation, CryptoKit and Dispatch in `BlockKit` |
-| `Blocks/Shelf` | Separate package: the shelf block (drop, hold, drag out, Quick Look), bundled in the app; manifest `access`: `files.read` | Be linked into the app; depend on `NotchKit` |
-| `Blocks/Rename` | Separate package: the screenshot rename block ("Screenshot Names"), bundled in the app; manifest `access`: `files.screenshots` | Be linked into the app; depend on `NotchKit` |
-| `Blocks/NowPlaying` | Separate package: the now-playing block (track on a volume or track change), bundled in the app; no `access` | Be linked into the app; depend on `NotchKit` |
+| `Blocks/Shelf` | Separate package: the shelf block (drop, hold, drag out, Quick Look), bundled in the app; manifest `access`: `files.read`. Library `ShelfCore` holds the block, executable `Shelf` only its entry point | Be linked into the app; depend on `NotchKit` |
+| `Blocks/Rename` | Separate package: the screenshot rename block ("Screenshot Names"), bundled in the app; manifest `access`: `files.screenshots`. Library `RenameCore` holds the block, executable `Rename` only its entry point | Be linked into the app; depend on `NotchKit` |
+| `Blocks/NowPlaying` | Separate package: the now-playing block (track on a volume or track change), bundled in the app; no `access`. Library `NowPlayingCore` holds the block, executable `NowPlaying` only its entry point | Be linked into the app; depend on `NotchKit` |
 | "Build bundled blocks" build phase (`TopNotch.xcodeproj`) | Builds `Blocks/NowPlaying`, `Blocks/Shelf` and `Blocks/Rename` and packages each with `package-block.sh` into `Contents/Resources/Blocks/<name>.topblock`, signed with the app's identity | Be skipped: it always runs |
 | `Helpers/NowPlayingHelper.m` | Library loaded into `/usr/bin/perl` to read macOS Now Playing; built into the app by the "Build now-playing helper" phase | Be linked into the app or the package |
 | `Packages/NotchKit/Sources/PlatformServices` | Menu bar item, settings window (including the Blocks page: install, update, remove through `BlockInstalling`), onboarding, launch at login | Import `NotchShell`, `BlockHost`, any block |
@@ -49,17 +49,22 @@ is, without installing it (sandboxed, no signature check): `make build`, then
 Rules:
 
 - Every block runs as its own process, sandboxed, and talks to the app over the
-  wire protocol. The app links no block code. A block depends on `BlockKit`
-  only. In the app it is represented by a `RemoteBlock` stand-in from
+  wire protocol. The app links no block code; only the `BothBlocksTests`
+  test target in `Packages/NotchKit` links the blocks' libraries, to run the
+  real blocks behind their stand-ins. A block depends on `BlockKit` only. In the app it is represented by a `RemoteBlock` stand-in from
   `BlockHost`, which depends on `NotchCore` and `BlockWire` only.
 - A new block starts from the `HelloBlock` example in `Packages/BlockKit`.
 - A block's sandbox comes from its manifest's `access` list (`network`,
   `files.read`, `files.screenshots`); without a token it gets no network, no
   reads in the home folder and no writes outside its data folder and the
-  temporary folder.
+  temporary folder. The app's `<TMPDIR>/TopNotch/` subtree is closed to reads
+  and writes except the block's own `TopNotch/Blocks/<id>/`; dropped files are
+  moved into that folder before the drop is sent.
 - Between presentations of equal priority, the block higher in the owner's
-  order on the Blocks page gets the notch. Default order: Shelf, Now Playing,
-  Screenshot Names. A new block goes to the end.
+  order on the Blocks page gets the notch. No order is written in code: with
+  none stored, blocks rank in the order they were added, bundled blocks by
+  package name (Now Playing, Screenshot Names, Shelf), then installed blocks
+  in install order, which is stored at each install. A new block goes to the end.
 - There are five Swift packages: `Packages/NotchKit`, `Packages/BlockKit`,
   `Blocks/NowPlaying`, `Blocks/Shelf` and `Blocks/Rename`. Parallel work stays
   inside one module directory. Only one worker at a time edits a

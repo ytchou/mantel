@@ -64,12 +64,12 @@ struct BlockStoreTests {
         #expect((standIns.first as? RemoteBlock)?.packageURL.lastPathComponent == "Alpha.topblock")
     }
 
-    /// The app at launch: the three bundled blocks, registered, then put in
-    /// the default order (`BlockSettings.defaultOrder`, applied here by hand
-    /// so these tests do not depend on the settings module). Shelf and
-    /// Rename ran inside the app before: their old data folders move to
-    /// `BlockData` now that bundled stand-ins have their ids.
-    @Test func bundledBlocksAreShelfNowPlayingRenameInDefaultOrder() throws {
+    /// The app at launch: the three bundled blocks, registered in the order
+    /// found, which is the order with nothing stored on the Blocks page (no
+    /// id is ranked in code). Shelf and Rename ran inside the app before:
+    /// their old data folders move to `BlockData` now that bundled stand-ins
+    /// have their ids.
+    @Test func bundledBlocksRegisterByPackageName() throws {
         let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
         let root = support.appending(path: "Bundled/Blocks")
         for (id, name) in [("shelf", "Shelf"), ("nowplaying", "NowPlaying"), ("rename", "Rename")] {
@@ -88,8 +88,7 @@ struct BlockStoreTests {
         #expect(standIns.allSatisfy { $0.info.source == .bundled })
 
         for block in standIns { runtime.register(block, enabled: false) }
-        runtime.setOrder(["shelf", "nowplaying", "rename"])
-        #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "rename"])
+        #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf"])
 
         #expect(try Data(contentsOf: support.appending(path: "BlockData/shelf/state")) == Data("Shelf".utf8))
         #expect(try Data(contentsOf: support.appending(path: "BlockData/rename/state")) == Data("Rename".utf8))

@@ -1,7 +1,7 @@
 import Foundation
 import FoundationModels
 import Testing
-@testable import Rename
+@testable import RenameCore
 
 // Timing benches for the model step, not tests. They need Apple Intelligence
 // and run only when asked for. Results: `spikes/screenshot-naming/SPEED.md`.

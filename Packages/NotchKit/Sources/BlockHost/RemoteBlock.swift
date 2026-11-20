@@ -51,6 +51,11 @@ public final class RemoteBlock: NotchBlock {
     public private(set) var notes: [String: String] = [:]
 
     @ObservationIgnored private let dataFolder: URL
+    /// The app's temporary folder. The block's sandbox closes its `TopNotch`
+    /// subtree, except for `temporaryFolder` inside it.
+    @ObservationIgnored private let sharedTemporaryFolder: URL
+    /// Where the shell writes promised files of a drop.
+    @ObservationIgnored private let dropFolder: URL
     @ObservationIgnored private let owner: @MainActor () -> BlockID?
     @ObservationIgnored private let launcher: BlockLauncher?
     @ObservationIgnored private let screenshotFolder: @MainActor () -> URL?
@@ -124,6 +129,11 @@ public final class RemoteBlock: NotchBlock {
     ///     passes a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
     ///   - preview: shows files in Quick Look, for the block's `preview`.
     ///     Nil uses the system Quick Look panel.
+    ///   - sharedTemporaryFolder: the app's temporary folder. The block's own
+    ///     temporary folder is `<it>/TopNotch/Blocks/<id>/`. Tests pass their own.
+    ///   - dropFolder: where the shell writes promised files of a drop;
+    ///     dropped files inside it are moved into the block's own temporary
+    ///     folder. Tests pass their own.
     public init(
         manifest: Manifest,
         packageURL: URL,
@@ -135,7 +145,9 @@ public final class RemoteBlock: NotchBlock {
         defaults: UserDefaults = .standard,
         clock: BlockClock = .suspending,
         turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
-        preview: (@MainActor ([URL]) -> Void)? = nil
+        preview: (@MainActor ([URL]) -> Void)? = nil,
+        sharedTemporaryFolder: URL = FileManager.default.temporaryDirectory,
+        dropFolder: URL = DropFolder.root
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -143,6 +155,8 @@ public final class RemoteBlock: NotchBlock {
         self.packageURL = packageURL
         self.source = source
         self.dataFolder = dataFolder
+        self.sharedTemporaryFolder = sharedTemporaryFolder
+        self.dropFolder = dropFolder
         self.owner = owner
         self.launcher = launcher
         self.screenshotFolder = screenshotFolder
@@ -159,6 +173,13 @@ public final class RemoteBlock: NotchBlock {
 
     /// Where the reason for the last turn-off is stored.
     static func failureKey(_ id: BlockID) -> String { "block.\(id.rawValue).failure" }
+
+    /// The block's own temporary folder and `TMPDIR`, inside the app's:
+    /// `<shared>/TopNotch/Blocks/<id>/`. Created at each launch of its
+    /// process. Only this block's sandbox opens it.
+    var temporaryFolder: URL {
+        sharedTemporaryFolder.appending(path: "TopNotch/Blocks/\(id.rawValue)", directoryHint: .isDirectory)
+    }
 
     /// The executable the manifest names, inside the package.
     public var executableURL: URL { PackageValidator.executableFolder(in: packageURL).appending(path: manifest.executable) }
@@ -209,16 +230,45 @@ public final class RemoteBlock: NotchBlock {
 
     /// Forwards a click, and to a version 2 block a drop, while this block
     /// owns the notch. The runtime passes only drops of kinds the
-    /// presentation `accepts`.
+    /// presentation `accepts`. Dropped files in the drop folder are moved
+    /// into the block's own temporary folder first; see `forwardedDrop`.
     public func handle(_ input: NotchInput) {
         guard context?.ownsNotch == true, isWelcomed else { return }
         switch input {
         case .click:
             send(.input(input: .click))
         case let .drop(items):
-            guard contract >= 2, !items.isEmpty else { return }
-            send(.input(input: .drop(items: items.map(Self.wireDrop))))
+            guard contract >= 2 else { return }
+            let forwarded = items.compactMap { forwardedDrop($0) }
+            guard !forwarded.isEmpty else { return }
+            send(.input(input: .drop(items: forwarded)))
         }
+    }
+
+    /// `item` as the block gets it. A file inside the drop folder, which the
+    /// block's sandbox cannot read, is moved to
+    /// `<temporaryFolder>/TopNotch/Drops/<path below the drop folder>` (its
+    /// `<uuid>` folder keeps names apart) and sent with that path. Inside the
+    /// block its own temporary folder is `TMPDIR`. Any other item passes
+    /// unchanged. Nil, with a log line, when the move fails.
+    // Moves on the main actor: a rename inside one volume, so it is quick.
+    // If drops ever cross volumes, move off the main actor before sending.
+    private func forwardedDrop(_ item: DroppedItem) -> WireDrop? {
+        guard case let .file(url) = item else { return Self.wireDrop(item) }
+        let root = Self.resolvedPath(dropFolder)
+        let source = Self.resolvedPath(url)
+        guard source.hasPrefix(root + "/") else { return Self.wireDrop(item) }
+        let relative = String(source.dropFirst(root.count + 1))
+        let target = temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+            .appending(path: relative, directoryHint: .notDirectory)
+        do {
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: url, to: target)
+        } catch {
+            log.error("\(self.id.rawValue, privacy: .public): dropped file \(source, privacy: .private) not moved, left out: \(error, privacy: .public)")
+            return nil
+        }
+        return .file(path: target.path)
     }
 
     static func wireDrop(_ item: DroppedItem) -> WireDrop {
@@ -319,8 +369,10 @@ public final class RemoteBlock: NotchBlock {
         let transport: any Transport
         do {
             // Before the process starts, for both paths: the sandbox profile
-            // names real paths, and the block is told this folder at `welcome`.
+            // names real paths, the block is told the data folder at
+            // `welcome`, and drops are moved into the temporary folder.
             try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: temporaryFolder, withIntermediateDirectories: true)
             if let launcher {
                 transport = try launcher(executableURL, self.generation)
             } else {
@@ -342,9 +394,11 @@ public final class RemoteBlock: NotchBlock {
     }
 
     /// Starts the block under the sandbox profile its manifest asks for.
-    /// `launch` has created the data folder: the profile names real paths.
-    /// The temporary folder is the app's, where the shell writes dropped
-    /// files, so every block can read them.
+    /// `launch` has created the data and temporary folders: the profile
+    /// names real paths. The temporary folder is the block's own, inside the
+    /// app's `TopNotch` subtree, which the profile closes: other blocks'
+    /// temporary files and dropped files stay out of reach. Dropped files
+    /// reach the block by `forwardedDrop`.
     private func spawnSandboxed() throws -> any Transport {
         let profile = SandboxProfile(
             network: manifest.access.contains(.network),
@@ -352,7 +406,8 @@ public final class RemoteBlock: NotchBlock {
             screenshotFolder: launchedScreenshotFolder,
             package: packageURL,
             dataFolder: dataFolder,
-            temporaryFolder: FileManager.default.temporaryDirectory,
+            temporaryFolder: temporaryFolder,
+            sharedTemporaryFolder: sharedTemporaryFolder,
             home: FileManager.default.homeDirectoryForCurrentUser
         )
         return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
@@ -670,23 +725,28 @@ public final class RemoteBlock: NotchBlock {
     // MARK: Paths the block may show
 
     /// The paths of `paths` the block's sandbox could read, for `preview`
-    /// and for the files of an item drag-out: any absolute path with
-    /// `files.read`; otherwise only inside its data folder, the temporary
-    /// folder, its package, or, with `files.screenshots`, the screenshot
-    /// folder its process started with. Compared with symbolic links
-    /// followed. Dropped paths are logged.
+    /// and for the files of an item drag-out, as `SandboxProfile` sets it:
+    /// inside its data folder, its own temporary folder, its package, or,
+    /// with `files.screenshots`, the screenshot folder its process started
+    /// with; never elsewhere in the app's `TopNotch` temporary subtree (other
+    /// blocks' files, dropped files); otherwise inside the app's temporary
+    /// folder, or any absolute path with `files.read`. Compared with symbolic
+    /// links followed. Dropped paths are logged.
     func readablePaths(_ paths: [String]) -> [String] {
         let readsAll = manifest.access.contains(.filesRead)
-        let roots = readsAll ? [] : ([dataFolder, FileManager.default.temporaryDirectory, packageURL]
+        let own = ([dataFolder, temporaryFolder, packageURL]
             + [launchedScreenshotFolder].compactMap { $0 }).map(Self.resolvedPath)
+        let closed = Self.resolvedPath(SandboxProfile.appTemporaryFolder(in: sharedTemporaryFolder))
+        let shared = Self.resolvedPath(sharedTemporaryFolder)
+        func isInside(_ target: String, _ root: String) -> Bool { target == root || target.hasPrefix(root + "/") }
         return paths.filter { path in
             guard path.hasPrefix("/") else {
                 log.error("\(self.id.rawValue, privacy: .public): relative path dropped: \(path, privacy: .private)")
                 return false
             }
-            if readsAll { return true }
             let target = Self.resolvedPath(URL(fileURLWithPath: path))
-            let allowed = roots.contains { root in target == root || target.hasPrefix(root + "/") }
+            let allowed = own.contains { isInside(target, $0) }
+                || (!isInside(target, closed) && (readsAll || isInside(target, shared)))
             if !allowed {
                 log.error("\(self.id.rawValue, privacy: .public): path outside what its sandbox reads dropped: \(path, privacy: .private)")
             }

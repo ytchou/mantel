@@ -2,7 +2,7 @@ import BlockKit
 import BlockKitTesting
 import Foundation
 import Testing
-@testable import Shelf
+@testable import ShelfCore
 
 // The block's behaviour, ported from the in-app block's tests. Each test runs
 // the block over `FakeHost`, as the app would, and checks the messages it
@@ -274,6 +274,19 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 
     _ = await run.host.waitFor { $0 == .dismiss }
     #expect(shown(run.host) == nil)
+}
+
+/// The late-drop wait keeps an `interactive` presentation, and the app's
+/// arbiter (`Arbiter.interactionWindow` in NotchCore, 20 s for every block)
+/// lets an interactive presentation keep the notch only that long. The wait
+/// must end first, and stay above the app's 15 s limit for promised files.
+/// This package cannot import NotchCore, so the window is written out here.
+@MainActor
+@Test func theLateDropWaitEndsBeforeTheArbiterInteractionWindow() {
+    let arbiterInteractionWindow: Duration = .seconds(20) // Arbiter.interactionWindow
+    #expect(ShelfBlock.defaultLateDropGrace < arbiterInteractionWindow)
+    #expect(ShelfBlock.defaultLateDropGrace > .seconds(15))
+    #expect(ShelfBlock().lateDropGrace == ShelfBlock.defaultLateDropGrace)
 }
 
 @MainActor

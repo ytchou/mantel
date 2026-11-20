@@ -1,6 +1,6 @@
 import Foundation
 import Synchronization
-@testable import Rename
+@testable import RenameCore
 
 /// A new empty folder under the system temporary folder.
 func makeTempFolder() throws -> URL {

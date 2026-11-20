@@ -427,6 +427,9 @@ public final class BlockStore: BlockInstalling {
                     let manifest = try read.get()
                     try PackageValidator.validate(manifest, package: package, source: source)
                     // Checked again at every launch: a package changed on disk does not run.
+                    // Synchronous on the main actor: milliseconds for a few blocks. Move
+                    // the checks off the main actor, in parallel, once installed blocks
+                    // number in the dozens.
                     if let signer = try checkSignature(package, id: id) {
                         defaults.set(signer, forKey: Self.signerKey(id))
                     }

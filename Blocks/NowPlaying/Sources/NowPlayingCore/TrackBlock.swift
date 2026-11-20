@@ -5,17 +5,18 @@ import Foundation
 /// track starts: the track, the artist, the artwork when there is one, and
 /// the volume. Runs in its own process; the app sends it `nowPlaying` and
 /// `outputVolume` events and draws the peek it sends back.
-@main
-struct TrackBlock: Block {
+public struct TrackBlock: Block {
     /// Setting keys, as in `manifest.json`. The app stores them as `nowplaying.<key>`.
     nonisolated static let showOnVolumeChange = "showOnVolumeChange"
     nonisolated static let showOnTrackChange = "showOnTrackChange"
     /// How long a peek stays.
     nonisolated static let seconds = 3.0
 
-    var id: String { "nowplaying" }
+    public var id: String { "nowplaying" }
 
-    func start(_ ctx: Context) {
+    nonisolated public init() {}
+
+    public func start(_ ctx: Context) {
         let session = Session(ctx)
         ctx.on(.nowPlaying) { event in
             guard let change = event.nowPlaying else { return }

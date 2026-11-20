@@ -30,8 +30,10 @@ the messages between the app and a block. `BlockWire` implements it;
   <executable>`. The sandbox keeps file descriptor 3 open. See "Sandbox".
 - Stdin and stdout are not used. A stray `print` cannot break the protocol.
 - When the app closes its end, the block must exit.
-- The environment holds `PATH`, `HOME`, `TMPDIR` (the app's temporary
-  folder) and `TOPNOTCH_BLOCK_GENERATION`, the process generation.
+- The environment holds `PATH`, `HOME`, `TMPDIR` (the block's own
+  temporary folder, `<app temporary folder>/TopNotch/Blocks/<block id>/`) and `TOPNOTCH_BLOCK_GENERATION`, the process generation.
+  Foundation's `NSTemporaryDirectory()` and `FileManager.temporaryDirectory`
+  do not read `TMPDIR` on macOS 26: read the variable to find the folder.
 
 ## Frames
 
@@ -134,8 +136,9 @@ Inputs:
 
 - A drop is `{"file": {"path"}}`, `{"link": {"url"}}` or
   `{"text": {"string"}}`. A file path is absolute. Files the app wrote for a
-  drop (a dragged image without a file, for example) are in the temporary
-  folder, which every block may read and write.
+  drop (a dragged image without a file, for example) are moved into the
+  block's own temporary folder, under `TopNotch/Drops/<uuid>/`, before the
+  drop is sent. Only that block may read and write them.
 - An item `action` is `{"click": {}}`, `{"doubleClick": {}}` or
   `{"menu": {"id": <menu entry id>}}`.
 - The app sends `dragBegan` before the `dragStarted` event that the same drag
@@ -352,6 +355,11 @@ manifest. The profile allows everything by default, then denies:
 - Apple events;
 - file writes, except in the block's data folder, the temporary folder and
   `/dev`;
+- file reads and writes in the app's `TopNotch` folder inside the temporary
+  folder, where dropped files and every block's temporary folder are, except
+  in the block's own temporary folder. The rest of the per-user temporary
+  folder stays open, so a block can still see other apps' files there:
+  Foundation ignores `TMPDIR`, and frameworks write temporary files there;
 - file reads inside the home folder, unless `files.read`. The block's data
   folder and its own package stay readable.
 

@@ -401,6 +401,40 @@ struct NotchRuntimeTests {
         #expect(changes == 4)
     }
 
+    /// An interactive presentation on screen is reported like demand: the
+    /// drag monitor must run to keep it from being displaced during a drag.
+    @Test func interactiveOnScreenIsReportedThroughOnDemandChanged() {
+        let runtime = NotchRuntime()
+        var changes = 0
+        runtime.onDemandChanged = { changes += 1 }
+        let a = FakeBlock("a")
+        runtime.register(a)
+        #expect(!runtime.isShowingInteractive)
+
+        a.context?.present(peekPresentation(.standard))
+        #expect(!runtime.isShowingInteractive)
+        #expect(changes == 0)
+
+        a.context?.present(peekPresentation(.interactive))
+        #expect(runtime.isShowingInteractive)
+        #expect(changes == 1)
+
+        // Another interactive presentation is no change.
+        a.context?.present(peekPresentation(.interactive))
+        #expect(changes == 1)
+
+        a.context?.dismiss()
+        #expect(!runtime.isShowingInteractive)
+        #expect(changes == 2)
+
+        // Turning the block off withdraws it too.
+        a.context?.present(peekPresentation(.interactive))
+        #expect(changes == 3)
+        runtime.setEnabled("a", false)
+        #expect(!runtime.isShowingInteractive)
+        #expect(changes == 4)
+    }
+
     @Test func setOrderPutsListedBlocksFirstAndKeepsTheRest() {
         let runtime = NotchRuntime()
         for id: BlockID in ["a", "b", "c", "d"] { runtime.register(FakeBlock(id)) }

@@ -3,11 +3,19 @@ import Foundation
 /// The sandbox profile a block process runs under, for
 /// `/usr/bin/sandbox-exec -p <text>`. A deny list on top of `(allow default)`:
 /// no network, no Apple events, no writes outside the block's own folders, no
-/// reads inside the home folder. Each access token lifts only its own rule.
+/// reads inside the home folder, and no reads or writes in the app's
+/// `TopNotch` subtree of the temporary folder (dropped files and every
+/// block's temporary folder are there) except in the block's own temporary
+/// folder inside it. Each access token lifts only its own rule. In SBPL the
+/// later rule wins, so each allow follows the deny it narrows.
 ///
 /// Limit: this stops the plain cases (send a file away, write over a
 /// document). It is not a guarantee against a determined attacker; system
-/// services stay reachable.
+/// services stay reachable. The rest of the per-user temporary folder stays
+/// readable and writable, because Foundation ignores `TMPDIR` and frameworks
+/// (FoundationModels, Quick Look thumbnails) write there; so a block can
+/// still see other apps' files in it. Closing that needs Foundation to
+/// honour `TMPDIR`, or a launcher that sets the per-user folder itself.
 struct SandboxProfile: Sendable, Equatable {
     /// `network`: drop the network deny.
     var network: Bool
@@ -19,8 +27,21 @@ struct SandboxProfile: Sendable, Equatable {
     var package: URL
     /// The block's data folder, readable and writable.
     var dataFolder: URL
-    /// The block's `TMPDIR`, writable.
+    /// The block's own temporary folder and `TMPDIR`, readable and writable.
+    /// `<sharedTemporaryFolder>/TopNotch/Blocks/<block id>/`.
     var temporaryFolder: URL
+    /// The app's temporary folder, the per-user one. Writable, like the
+    /// data folder; its `TopNotch` subtree (`appTemporaryFolder`) is closed
+    /// outside `temporaryFolder`.
+    var sharedTemporaryFolder: URL
+
+    /// `<sharedTemporaryFolder>/TopNotch`: the drop folder and every block's
+    /// temporary folder. No reads, no writes, except in `temporaryFolder`.
+    var appTemporaryFolder: URL { Self.appTemporaryFolder(in: sharedTemporaryFolder) }
+
+    static func appTemporaryFolder(in shared: URL) -> URL {
+        shared.appending(path: "TopNotch", directoryHint: .isDirectory)
+    }
     /// The owner's home folder.
     var home: URL
 
@@ -31,7 +52,10 @@ struct SandboxProfile: Sendable, Equatable {
         if !network { lines.append("(deny network*)") }
         lines.append("(deny appleevent-send)")
         lines.append("(deny file-write*)")
-        lines.append("(allow file-write* (subpath \(data)) (subpath \(Self.literal(temporaryFolder))) (subpath \"/dev\"))")
+        lines.append("(allow file-write* (subpath \(data)) (subpath \(Self.literal(sharedTemporaryFolder))) (subpath \"/dev\"))")
+        // After the write allow above, which covers the shared folder.
+        lines.append("(deny file-read* file-write* (subpath \(Self.literal(appTemporaryFolder))))")
+        lines.append("(allow file-read* file-write* (subpath \(Self.literal(temporaryFolder))))")
         if !readsHome { lines.append("(deny file-read* (subpath \(home)))") }
         lines.append("(allow file-read* (subpath \(data)) (subpath \(Self.literal(package))))")
         if let screenshotFolder {

@@ -14,19 +14,25 @@ import Foundation
 /// - it holds items: nothing at rest (or the count beside the notch),
 ///   expanding on hover; while the pointer is on it, it keeps the notch;
 /// - otherwise nothing.
-struct ShelfBlock: Block {
+public struct ShelfBlock: Block {
     /// Setting keys, as in `manifest.json`. The app stores them as `shelf.<key>`.
     nonisolated static let showCount = "showCount"
     nonisolated static let collectScreenshots = "collectScreenshots"
     nonisolated static let clearAction = "shelf.clear"
 
-    var id: String { "shelf" }
+    /// How long a late drop is waited for (see `ShelfSession.lateDropGrace`).
+    /// It must stay below the app's `Arbiter.interactionWindow` (20 s, in
+    /// NotchCore): the wait keeps an `interactive` presentation, which the
+    /// arbiter lets hold the notch only that long. A test checks it.
+    nonisolated static let defaultLateDropGrace: Duration = .seconds(16)
+
+    public var id: String { "shelf" }
 
     let lateDropGrace: Duration
     let thumbnailer: Thumbnailer
 
-    init() {
-        self.init(lateDropGrace: .seconds(16), thumbnailer: .system)
+    public init() {
+        self.init(lateDropGrace: Self.defaultLateDropGrace, thumbnailer: .system)
     }
 
     init(lateDropGrace: Duration, thumbnailer: Thumbnailer) {
@@ -34,7 +40,7 @@ struct ShelfBlock: Block {
         self.thumbnailer = thumbnailer
     }
 
-    func start(_ ctx: Context) {
+    public func start(_ ctx: Context) {
         let session = ShelfSession(ctx, lateDropGrace: lateDropGrace, thumbnailer: thumbnailer)
         // Replayed events (after a crash or an update) are history: a drag
         // they report is over, so they present nothing and start no grace.
@@ -97,7 +103,9 @@ final class ShelfSession {
     /// drop only to the block that owns the notch. So when a drag ends with
     /// the pointer over the notch and no drop has arrived yet, the shelf
     /// keeps an interactive presentation that takes drops for this long, a
-    /// little over the app's 15 s limit, or until the drop arrives.
+    /// little over the app's 15 s limit, or until the drop arrives. Below
+    /// the app's `Arbiter.interactionWindow` (20 s), which bounds how long an
+    /// interactive presentation keeps the notch: `ShelfBlock.defaultLateDropGrace`.
     private let lateDropGrace: Duration
 
     private var pointerInside = false

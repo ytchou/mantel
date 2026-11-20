@@ -104,6 +104,35 @@ struct InputTests {
         #expect(old.process.inputs.isEmpty)
     }
 
+    /// A file the shell wrote into the drop folder is moved into the block's
+    /// own temporary folder, under the same `<uuid>` folder, and the block is
+    /// told the new path. Other blocks cannot read it there. A file outside
+    /// the drop folder (from Finder) passes unchanged; a file that cannot be
+    /// moved is left out.
+    @Test func droppedFileInTheDropFolderMovesIntoTheBlocksTemporaryFolder() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(accepts: [.file, .text]))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+
+        let promised = rig.dropFolder.appending(path: "UUID-1/shot.png")
+        try FileManager.default.createDirectory(at: promised.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("png".utf8).write(to: promised)
+        let missing = rig.dropFolder.appending(path: "UUID-2/gone.png")
+        let finder = FileManager.default.temporaryDirectory.appending(path: "topnotch-finder-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: finder)
+        defer { try? FileManager.default.removeItem(at: finder) }
+
+        rig.block.handle(.drop([.file(promised), .file(missing), .file(finder), .text("hi")]))
+        _ = await rig.process.waitFor { if case .input = $0 { true } else { false } }
+
+        let moved = rig.block.temporaryFolder.appending(path: "TopNotch/Drops/UUID-1/shot.png")
+        #expect(rig.process.inputs == [.drop(items: [.file(path: moved.path), .file(path: finder.path), .text(string: "hi")])])
+        #expect(FileManager.default.contents(atPath: moved.path) == Data("png".utf8))
+        #expect(!FileManager.default.fileExists(atPath: promised.path))
+        #expect(FileManager.default.fileExists(atPath: finder.path))
+    }
+
     @Test func itemActionAndDragMessagesReachTheBlock() async throws {
         var manifest = helloManifest
         manifest.events = ["dragStarted", "dragEnded"]

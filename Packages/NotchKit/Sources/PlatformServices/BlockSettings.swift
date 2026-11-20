@@ -63,16 +63,13 @@ public final class BlockSettings {
 
     static let orderKey = "block.order"
 
-    /// The order with nothing stored: Shelf, Now Playing, Screenshot Names.
-    /// A track change during a rename result then still shows.
-    public static let defaultOrder: [BlockID] = ["shelf", "nowplaying", "rename"]
-
     /// The blocks' rank, highest first, as stored in "block.order". Ids of
     /// blocks that are not registered may appear; registered blocks missing
-    /// from it rank last.
+    /// from it rank last. Empty with nothing stored: no id is ranked in code,
+    /// so the blocks keep the order they were added in (bundled blocks by
+    /// package name, then installed blocks in install order).
     public var order: [BlockID] {
-        guard let stored = defaults.stringArray(forKey: Self.orderKey) else { return Self.defaultOrder }
-        return stored.map { BlockID(rawValue: $0) }
+        (defaults.stringArray(forKey: Self.orderKey) ?? []).map { BlockID(rawValue: $0) }
     }
 
     public func setOrder(_ ids: [BlockID]) {
@@ -81,18 +78,33 @@ public final class BlockSettings {
 
     /// Puts the runtime's blocks in the stored order. Blocks not in it keep
     /// their registration order after the others. Call once all blocks are
-    /// registered, and again after each later registration.
+    /// registered at launch; it stores nothing. After an install, call
+    /// `applyOrderAfterInstall(to:)` instead.
     public func applyOrder(to runtime: NotchRuntime) {
         runtime.setOrder(order)
     }
 
+    /// After a block installed from the Blocks page is registered: puts the
+    /// runtime's blocks in the stored order (the new block, not in it, goes
+    /// last) and stores the result. At launch installed blocks are found
+    /// sorted by id, so storing here is what keeps the install order.
+    public func applyOrderAfterInstall(to runtime: NotchRuntime) {
+        applyOrder(to: runtime)
+        storeOrder(of: runtime)
+    }
+
     /// Moves a block to `index` in the runtime and stores the new order.
-    /// Stored ids of blocks not registered now are kept, after the others.
     public func move(_ id: BlockID, to index: Int, in runtime: NotchRuntime) {
         runtime.move(id, to: index)
+        storeOrder(of: runtime)
+        Log.platform.info("Block \(id.rawValue, privacy: .public) moved to \(index, privacy: .public)")
+    }
+
+    /// Stores the runtime's order. Stored ids of blocks not registered now
+    /// are kept, after the others.
+    private func storeOrder(of runtime: NotchRuntime) {
         let ranked = runtime.blocks.map(\.id)
         setOrder(ranked + order.filter { !ranked.contains($0) })
-        Log.platform.info("Block \(id.rawValue, privacy: .public) moved to \(index, privacy: .public)")
     }
 
     // MARK: Unsigned blocks

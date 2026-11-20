@@ -2,7 +2,7 @@ import BlockKit
 import BlockKitTesting
 import Foundation
 import Testing
-@testable import NowPlaying
+@testable import NowPlayingCore
 
 // The block's behaviour, ported from the in-app block's tests. Each test runs
 // the block over `FakeHost`, as the app would, and some also check

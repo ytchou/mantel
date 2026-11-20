@@ -4,6 +4,9 @@ import Synchronization
 @testable import BlockHost
 @testable import NotchCore
 
+// The fixture: the three real blocks behind their stand-ins in one runtime.
+// The blocks themselves are started in `RealBlocks.swift`.
+
 /// A new empty folder under the system temporary folder.
 func makeFolder() throws -> URL {
     let url = FileManager.default.temporaryDirectory
@@ -19,80 +22,50 @@ func makeScreenshot(_ name: String, in folder: URL) throws -> URL {
     return url
 }
 
-/// Holds every naming request until `open()` is called, then answers at once.
-final class Gate: Sendable {
-    private struct State {
-        var isOpen = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
-    }
-    private let state = Mutex(State())
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let resumeNow = state.withLock { s -> Bool in
-                if s.isOpen { return true }
-                s.waiters.append(continuation)
-                return false
-            }
-            if resumeNow { continuation.resume() }
-        }
-    }
-
-    func open() {
-        let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
-            s.isOpen = true
-            defer { s.waiters = [] }
-            return s.waiters
-        }
-        waiters.forEach { $0.resume() }
-    }
-}
-
-/// All three blocks registered in one runtime, in the app's default order
-/// (Shelf, Now Playing, Screenshot Names). Each is a stand-in, as in the app,
-/// whose process is a script over an in-memory connection: `ScriptedShelf`,
-/// `ScriptedNowPlaying` and `ScriptedRename`.
+/// All three blocks registered in one runtime, in the app's order with
+/// nothing stored on the Blocks page: bundled blocks by package name (Now
+/// Playing, Screenshot Names, Shelf). Each is a stand-in, as in the app,
+/// whose process is the real block run in this process over an in-memory
+/// connection (`InProcessBlock`).
 ///
 /// A block answers in its own time, so every call that reaches a block
 /// (`publish`, `drop`, `hover`, `setEnabled`) returns only once the blocks
-/// that heard it answered and the stand-ins handled the answer.
+/// handled it and the stand-ins handled their answers (`settle`).
 @MainActor
 struct Fixture {
     let runtime: NotchRuntime
     let clock: ManualClock
-    let shelf: ScriptedShelf
-    let nowPlaying: ScriptedNowPlaying
-    let rename: ScriptedRename
     let gate: Gate
     /// Where the screenshots are taken.
     let folder: URL
-    /// The stand-ins, in registration order, by id.
+    /// The blocks' data folders, one per id.
+    let data: URL
+    /// The stand-ins, by id.
     let standIns: [BlockID: RemoteBlock]
+    /// The block processes, in registration order.
+    private let blocks: [InProcessBlock]
 
-    private var scripts: [ScriptedBlock] { [shelf, nowPlaying, rename] }
-
-    /// `gateOpen: false` holds naming until `gate.open()`.
+    /// `gateOpen: false` holds the reading of screenshots until `gate.open()`.
     init(gateOpen: Bool = true) throws {
         folder = try makeFolder()
         let data = try makeFolder()
+        self.data = data
         clock = ManualClock()
         runtime = NotchRuntime(clock: clock)
         gate = Gate()
         if gateOpen { gate.open() }
-        shelf = ScriptedShelf()
-        nowPlaying = ScriptedNowPlaying()
-        rename = ScriptedRename(gate: gate)
+        blocks = [.nowPlaying(), .rename(gate: gate), .shelf()]
         let suite = "BothBlocksTests-\(UUID().uuidString)"
         let runtime = self.runtime
         var standIns: [BlockID: RemoteBlock] = [:]
-        for script in [shelf, nowPlaying, rename] as [ScriptedBlock] {
+        for process in blocks {
             let block = RemoteBlock(
-                manifest: script.manifest,
-                packageURL: URL(fileURLWithPath: "/tmp/\(script.manifest.executable).topblock"),
+                manifest: process.manifest,
+                packageURL: URL(fileURLWithPath: "/tmp/\(process.manifest.executable).topblock"),
                 source: .bundled,
-                dataFolder: data.appending(path: script.manifest.id),
+                dataFolder: data.appending(path: process.manifest.id),
                 owner: { runtime.state.owner },
-                launcher: { _, generation in script.launch(generation: generation) },
+                launcher: { _, generation in process.launch(generation: generation) },
                 defaults: UserDefaults(suiteName: suite)!,
                 // A clock of its own that never moves: no heartbeat, and the
                 // runtime's clock holds only presentation timers.
@@ -104,15 +77,14 @@ struct Fixture {
         self.standIns = standIns
     }
 
-    /// Publishes an event, and returns once every enabled block that listens
-    /// to it has taken it and everything it caused is handled. A drag event
-    /// also sets the runtime's drag state first, as the drag monitor does.
+    /// Publishes an event, and returns once everything it caused is handled.
+    /// A drag event also sets the runtime's drag state first, as the drag
+    /// monitor does.
     func publish<E: NotchEvent>(_ event: E) async {
-        await reach(EventCodec.payload(for: event)?.name) {
-            if event is DragSessionStarted { runtime.dragSessionChanged(active: true) }
-            if event is DragSessionEnded { runtime.dragSessionChanged(active: false) }
-            runtime.publish(event)
-        }
+        if event is DragSessionStarted { runtime.dragSessionChanged(active: true) }
+        if event is DragSessionEnded { runtime.dragSessionChanged(active: false) }
+        runtime.publish(event)
+        await settle()
     }
 
     func capture(_ url: URL) async {
@@ -121,49 +93,38 @@ struct Fixture {
 
     /// The pointer enters or leaves the notch; the shelf hears it.
     func hover(_ isInside: Bool) async {
-        await reach(.pointerHover) { runtime.pointerHoverChanged(isInside: isInside) }
+        runtime.pointerHoverChanged(isInside: isInside)
+        await settle()
     }
 
     /// Items dropped on the notch; the owner takes those its presentation accepts.
     func drop(_ items: [DroppedItem]) async {
-        let owner = runtime.state.owner.flatMap { id in scripts.first { $0.manifest.id == id.rawValue } }
-        let before = owner?.taken ?? 0
         runtime.send(.drop(items))
-        if let owner { await waitUntil { owner.taken > before } }
         await settle()
     }
 
     /// Turns a block on or off; off returns once its process has ended.
     func setEnabled(_ id: BlockID, _ enabled: Bool) async {
         runtime.setEnabled(id, enabled)
-        if !enabled, let script = scripts.first(where: { $0.manifest.id == id.rawValue }) {
-            await waitUntil { !script.isRunning(script.generation) }
+        if !enabled, let process = blocks.first(where: { $0.manifest.id == id.rawValue }) {
+            await waitUntil { !process.isRunning }
         }
         await settle()
     }
 
-    /// Runs `body`, then waits until each enabled block listening to `event`
-    /// took one more message, and everything settled.
-    private func reach(_ event: WireEvent?, _ body: () -> Void) async {
-        let listeners = scripts.filter { script in
-            guard let event else { return false }
-            return runtime.isEnabled(BlockID(rawValue: script.manifest.id)) && script.manifest.events.contains(event.rawValue)
-        }
-        let before = listeners.map(\.taken)
-        body()
-        await waitUntil { zip(listeners, before).allSatisfy { pair in pair.0.taken > pair.1 } }
-        await settle()
-    }
-
-    /// Waits until each enabled stand-in is welcomed and has handled every
-    /// frame its script sent so far.
+    /// Waits until each enabled stand-in is welcomed, then until a round of
+    /// syncs (see `SyncedTransport`) passes in which the app sent no block
+    /// anything else: every block handled every message, and every stand-in
+    /// every answer.
     func settle() async {
-        await waitUntil {
-            scripts.allSatisfy { script in
-                let id = BlockID(rawValue: script.manifest.id)
-                guard runtime.isEnabled(id), let block = standIns[id] else { return true }
-                return block.isWelcomed && ScriptedBlock.step(shownBy: block) == script.step
-            }
+        for _ in 0..<100 {
+            let live = blocks.filter { runtime.isEnabled(BlockID(rawValue: $0.manifest.id)) }
+            await waitUntil { live.allSatisfy { standIns[BlockID(rawValue: $0.manifest.id)]?.isWelcomed == true } }
+            let links = live.compactMap { $0.isRunning ? $0.link : nil }
+            let before = links.map(\.sentCount)
+            links.forEach { $0.sync() }
+            await waitUntil { links.allSatisfy(\.isSynced) }
+            if links.map(\.sentCount) == before { return }
         }
     }
 
@@ -177,332 +138,18 @@ struct Fixture {
     var screenshotNames: [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
     }
-}
 
-// MARK: - Scripted blocks
+    /// The items the shelf holds, as it stored them.
+    var shelfItemCount: Int { BlockState.shelfItemCount(dataFolder: data.appending(path: "shelf")) }
 
-/// Plays a block on the block's end of an in-memory connection: says hello,
-/// answers pings and hands every other message to the subclass.
-///
-/// After each message it handles, and after each change it makes on its own,
-/// it sends an `actions` frame whose one item id is its `step`. Frames are
-/// handled in order, so once the stand-in shows that step, every frame the
-/// script sent before is handled too.
-@MainActor
-class ScriptedBlock {
-    let manifest: Manifest
-    /// The number of changes made, as last sent in `actions`.
-    private(set) var step = 0
-    /// The events and inputs taken, over every process.
-    private(set) var taken = 0
-    /// Whether the app last said this block owns the notch.
-    private(set) var owns = false
-    /// The generation of the running process; its transport is nil once it ended.
-    private(set) var generation = 0
-    private var transport: MemoryTransport?
+    /// The rename block's new names, newest first, as it stored them.
+    var renamedNames: [String] { BlockState.renamedNames(dataFolder: data.appending(path: "rename")) }
 
-    private static let stepPrefix = "step-"
-
-    /// - Parameter folder: the block's folder under `Blocks/`, whose
-    ///   `manifest.json` is read, so these tests follow it when it changes.
-    init(folder: String) {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // BothBlocksTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // NotchKit
-            .deletingLastPathComponent() // Packages
-            .deletingLastPathComponent() // repository root
-            .appending(path: "Blocks/\(folder)/manifest.json")
-        do {
-            manifest = try Manifest.decode(Data(contentsOf: url))
-        } catch {
-            fatalError("Could not read the manifest at \(url.path): \(error)")
-        }
-    }
-
-    /// The step the stand-in last heard from its script.
-    static func step(shownBy block: RemoteBlock) -> Int {
-        block.actions.first.flatMap { Int($0.id.dropFirst(stepPrefix.count)) } ?? 0
-    }
-
-    /// The launcher: a new process, with the state kept across processes.
-    func launch(generation: Int) -> any Transport {
-        let (app, block) = MemoryTransport.pair()
-        self.generation = generation
-        transport = block
-        owns = false
-        let stream = block.envelopes(of: HostToBlock.self)
-        Task {
-            send(.hello(contract: Contract.current, id: manifest.id, version: manifest.version))
-            do {
-                for try await envelope in stream {
-                    guard self.isRunning(generation) else { return }
-                    switch envelope.message {
-                    case let .ping(seq):
-                        send(.pong(seq: seq))
-                        continue
-                    case .quit:
-                        end(generation)
-                        return
-                    case .welcome:
-                        started()
-                    case let .owner(owns):
-                        self.owns = owns
-                        ownerChanged(owns)
-                    case let .event(payload, replay, _):
-                        taken += 1
-                        // A replay is from before this process; the blocks ignore those.
-                        if !replay { event(payload) }
-                    case let .input(input):
-                        taken += 1
-                        self.input(input)
-                    default:
-                        break
-                    }
-                    changed()
-                }
-            } catch {
-                // The app closed the connection.
-            }
-            end(generation)
-        }
-        return app
-    }
-
-    /// True while the process of `generation` runs.
-    func isRunning(_ generation: Int) -> Bool {
-        transport != nil && generation == self.generation
-    }
-
-    func send(_ message: BlockToHost) {
-        try? transport?.send(message, generation: generation)
-    }
-
-    /// Sends the next step. Call after a change made outside a message.
-    func changed() {
-        step += 1
-        send(.actions(items: [ActionItem(id: "\(Self.stepPrefix)\(step)", title: "Step", enabled: false)]))
-    }
-
-    private func end(_ generation: Int) {
-        guard isRunning(generation) else { return }
-        transport = nil
-        stopped()
-    }
-
-    func present(_ priority: Priority, peek: ViewSlot? = nil, wing: ViewSlot? = nil, expanded: ViewSlot? = nil,
-                 opensAt: Level = .peek, seconds: Double? = nil, dismissIfNotShown: Bool = false,
-                 accepts: [DragStarted.Kind]? = nil) {
-        send(.present(priority: priority, peek: peek, wing: wing, expanded: expanded, opensAt: opensAt,
-                      seconds: seconds, dismissIfNotShown: dismissIfNotShown, accepts: accepts))
-    }
-
-    // What the subclass plays.
-    func started() {}
-    func stopped() {}
-    func ownerChanged(_ owns: Bool) {}
-    func event(_ payload: EventPayload) {}
-    func input(_ input: WireInput) {}
-}
-
-/// Plays the shelf block (`Blocks/Shelf`) as far as these tests need: a drag
-/// presents the drop target (interactive, expanded, taking drops); held items
-/// rest as an ambient wing; the pointer on the shelf it shows makes it
-/// interactive until the pointer leaves; dropped items and new screenshots
-/// are held. Items are kept across processes, as the real block stores them.
-/// Not played: the late-drop grace and drag-out.
-final class ScriptedShelf: ScriptedBlock {
-    enum Mode { case none, dropTarget, browsing, ambient }
-
-    private(set) var items: [String] = []
-    var itemCount: Int { items.count }
-
-    private var mode = Mode.none
-    private var pointerInside = false
-    private var isBrowsing = false
-    private var isDragActive = false
-
-    private static let accepted: [DragStarted.Kind] = [.file, .link, .text]
-    private static let expanded = ViewSlot(width: 520, height: 180, root: .text("Shelf", style: .title))
-    private static let wing = ViewSlot(width: 40, height: 32, root: .text("Items", style: .secondary))
-
-    init() { super.init(folder: "Shelf") }
-
-    override func started() {
-        mode = .none
-        pointerInside = false
-        isBrowsing = false
-        isDragActive = false
-        refresh()
-    }
-
-    override func ownerChanged(_ owns: Bool) {
-        guard owns, pointerInside, !isBrowsing else { return }
-        isBrowsing = true
-        refresh()
-    }
-
-    override func event(_ payload: EventPayload) {
-        switch payload {
-        case .dragStarted:
-            isDragActive = true
-        case .dragEnded:
-            isDragActive = false
-        case let .pointerHover(hover):
-            pointerInside = hover.isInside
-            // In use only when the pointer landed on the shelf, not on another block.
-            isBrowsing = hover.isInside && owns
-        case let .screenshotCaptured(shot):
-            items.append(shot.path)
-        default:
-            return
-        }
-        refresh()
-    }
-
-    override func input(_ input: WireInput) {
-        guard case let .drop(dropped) = input else { return }
-        items += dropped.map { "\($0)" }
-        refresh()
-    }
-
-    private func refresh() {
-        let next: Mode = isDragActive ? .dropTarget : items.isEmpty ? .none : isBrowsing ? .browsing : .ambient
-        guard next != mode else { return }
-        mode = next
-        switch next {
-        case .none:
-            send(.dismiss)
-        case .dropTarget:
-            present(.interactive, expanded: Self.expanded, opensAt: .expanded, accepts: Self.accepted)
-        case .browsing:
-            present(.interactive, wing: Self.wing, expanded: Self.expanded, accepts: Self.accepted)
-        case .ambient:
-            present(.ambient, wing: Self.wing, expanded: Self.expanded, accepts: Self.accepted)
-        }
-    }
-}
-
-/// Plays the rename block (`Blocks/Rename`): each new screenshot is queued;
-/// the one being named shows in the peek (standard priority, until
-/// dismissed); once `gate` opens it is renamed in place to
-/// `payment-failed-dialog.png` (a number added when taken), and after the
-/// last one the result shows for `resultDuration`. Turned off mid-job, the
-/// file keeps its name. The recent renames are kept across processes.
-final class ScriptedRename: ScriptedBlock {
-    /// The real block's `RenameBlock.resultDuration`.
-    static let resultDuration: Duration = .seconds(6)
-
-    enum Phase: Equatable { case idle, naming, renamed(String) }
-
-    let gate: Gate
-    private(set) var phase = Phase.idle
-    /// New names, newest first.
-    private(set) var recents: [String] = []
-    /// Screenshots queued behind the one being named.
-    private(set) var waiting = 0
-    private var queue: [URL] = []
-    private var current: URL?
-
-    private static let peek = ViewSlot(width: 380, height: 52, root: .text("Naming", style: .title))
-
-    init(gate: Gate) {
-        self.gate = gate
-        super.init(folder: "Rename")
-    }
-
-    override func stopped() {
-        queue = []
-        current = nil
-        waiting = 0
-        phase = .idle
-    }
-
-    override func event(_ payload: EventPayload) {
-        guard case let .screenshotCaptured(shot) = payload else { return }
-        let url = URL(fileURLWithPath: shot.path).standardizedFileURL
-        guard current != url, !queue.contains(url) else { return }
-        queue.append(url)
-        startNextIfIdle()
-    }
-
-    private func startNextIfIdle() {
-        waiting = queue.count
-        guard current == nil, !queue.isEmpty else { return }
-        let url = queue.removeFirst()
-        current = url
-        waiting = queue.count
-        phase = .naming
-        present(.standard, peek: Self.peek)
-        let generation = self.generation
-        Task {
-            await gate.wait()
-            guard isRunning(generation), current == url else { return }
-            finish(url)
-            changed()
-        }
-    }
-
-    private func finish(_ url: URL) {
-        current = nil
-        let folder = url.deletingLastPathComponent()
-        var name = "payment-failed-dialog.\(url.pathExtension)"
-        var number = 2
-        while FileManager.default.fileExists(atPath: folder.appending(path: name).path) {
-            name = "payment-failed-dialog-\(number).\(url.pathExtension)"
-            number += 1
-        }
-        if (try? FileManager.default.moveItem(at: url, to: folder.appending(path: name))) != nil {
-            recents.insert(name, at: 0)
-            if queue.isEmpty {
-                phase = .renamed(name)
-                present(.standard, peek: Self.peek, seconds: Self.resultDuration / .seconds(1))
-            }
-        } else if queue.isEmpty {
-            phase = .idle
-            send(.dismiss)
-        }
-        startNextIfIdle()
-    }
-}
-
-/// Plays the now-playing block (`Blocks/NowPlaying`): a new song or a volume
-/// change while a song plays presents the peek (standard priority, 3 s,
-/// `dismissIfNotShown`); the last player stopping dismisses; replayed events
-/// never present.
-final class ScriptedNowPlaying: ScriptedBlock {
-    /// How long its peek stays; the real block's `TrackBlock.seconds`.
-    static let duration: Duration = .seconds(3)
-
-    private var song: String?
-
-    private static let peek = ViewSlot(width: 380, height: 52, root: .text("Song", style: .title))
-
-    init() { super.init(folder: "NowPlaying") }
-
-    override func stopped() { song = nil }
-
-    override func event(_ payload: EventPayload) {
-        switch payload {
-        case let .nowPlaying(change):
-            if change.state == .playing {
-                let current = "\(change.player)/\(change.title)/\(change.artist)"
-                guard current != song else { return }
-                song = current
-                show()
-            } else {
-                song = nil
-                send(.dismiss)
-            }
-        case .outputVolume:
-            if song != nil { show() }
-        default:
-            break
-        }
-    }
-
-    private func show() {
-        present(.standard, peek: Self.peek, seconds: Self.duration / .seconds(1), dismissIfNotShown: true)
+    /// The rename block's peek, as its stand-in holds it, encoded as JSON
+    /// so a test can look for a text in it.
+    var renamePeek: String {
+        guard let peek = standIns["rename"]?.model.peek, let json = try? JSONEncoder().encode(peek) else { return "" }
+        return String(decoding: json, as: UTF8.self)
     }
 }
 

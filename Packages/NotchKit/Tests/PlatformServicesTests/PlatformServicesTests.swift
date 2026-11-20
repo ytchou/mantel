@@ -431,22 +431,83 @@ private final class FakeInstaller: BlockInstalling {
     #expect(runtime.blocks.map(\.id) == ["hello", "shelf", "nowplaying"])
 }
 
+/// No id is ranked by name in code: with nothing stored, the blocks keep the
+/// order they were registered in (bundled by package name, then installed).
 @MainActor
-@Test func defaultOrderIsShelfNowPlayingRename() {
+@Test func withNothingStoredTheRegistrationOrderIsKept() {
     let (defaults, name) = makeDefaults()
     defer { cleanUp(defaults, name) }
     let settings = BlockSettings(defaults: defaults, domain: name)
-    #expect(settings.order == ["shelf", "nowplaying", "rename"])
+    #expect(settings.order.isEmpty)
 
     let runtime = NotchRuntime()
-    for id: BlockID in ["rename", "hello", "nowplaying", "shelf"] { runtime.register(FakeBlock(id)) }
+    for id: BlockID in ["nowplaying", "rename", "shelf", "hello"] { runtime.register(FakeBlock(id)) }
     settings.applyOrder(to: runtime)
 
-    #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "rename", "hello"])
-    #expect(defaults.object(forKey: "block.order") == nil, "applying the default stores nothing")
+    #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "hello"])
+    #expect(defaults.object(forKey: "block.order") == nil, "applying the order at launch stores nothing")
+}
 
+@MainActor
+@Test func aStoredOrderWinsOverTheRegistrationOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
     settings.setOrder(["rename", "shelf"])
     #expect(settings.order == ["rename", "shelf"])
+
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying"])
+}
+
+/// The app's register closure for a block installed from the Blocks page:
+/// the new block goes last and the order is stored, so the install order
+/// survives a relaunch, where installed blocks are found sorted by id.
+@MainActor
+@Test func anInstallAppendsTheBlockAndStoresTheOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("zeta"))
+    settings.applyOrderAfterInstall(to: runtime)
+    runtime.register(FakeBlock("alpha"))
+    settings.applyOrderAfterInstall(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+
+    // At the next launch the installed blocks register sorted by id.
+    let relaunched = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf", "alpha", "zeta"] { relaunched.register(FakeBlock(id)) }
+    BlockSettings(defaults: defaults, domain: name).applyOrder(to: relaunched)
+
+    #expect(relaunched.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+}
+
+/// An install keeps the owner's order: the new block goes after it, and
+/// stored ids of blocks not registered now are kept.
+@MainActor
+@Test func anInstallKeepsTheStoredOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["rename", "gone", "shelf", "nowplaying"])
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("hello"))
+    settings.applyOrderAfterInstall(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying", "hello"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["rename", "shelf", "nowplaying", "hello", "gone"])
 }
 
 @Test func installSheetListsAccessAndSigner() {

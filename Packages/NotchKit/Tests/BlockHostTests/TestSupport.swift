@@ -149,6 +149,10 @@ struct Rig {
     let defaults: UserDefaults
     let heartbeat: ManualClock
     let turnOffs = TurnOffs()
+    /// Stands in for the app's temporary folder, one per rig: the block's own
+    /// temporary folder and the drop folder are inside it.
+    let sharedTemporaryFolder: URL
+    var dropFolder: URL { sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory) }
     var process: FakeProcess { launcher.last! }
 
     init(
@@ -159,8 +163,10 @@ struct Rig {
         launcher = FakeLauncher()
         self.defaults = defaults
         heartbeat = ManualClock()
+        let shared = Self.newSharedTemporaryFolder()
+        sharedTemporaryFolder = shared
         block = Self.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: defaults,
-                             heartbeat: heartbeat, turnOffs: turnOffs, preview: preview)
+                             heartbeat: heartbeat, turnOffs: turnOffs, preview: preview, sharedTemporaryFolder: shared)
         runtime.register(block)
     }
 
@@ -169,7 +175,8 @@ struct Rig {
         manifest: Manifest = helloManifest, runtime: NotchRuntime, launcher: FakeLauncher,
         defaults: UserDefaults, heartbeat: ManualClock = ManualClock(), turnOffs: TurnOffs = TurnOffs(),
         screenshotFolder: @escaping @MainActor () -> URL? = { nil },
-        preview: @escaping @MainActor ([URL]) -> Void = { _ in }
+        preview: @escaping @MainActor ([URL]) -> Void = { _ in },
+        sharedTemporaryFolder: URL = Rig.newSharedTemporaryFolder()
     ) -> RemoteBlock {
         RemoteBlock(
             manifest: manifest,
@@ -185,8 +192,15 @@ struct Rig {
                 turnOffs.ids.append(id)
                 runtime.setEnabled(id, false)
             },
-            preview: preview
+            preview: preview,
+            sharedTemporaryFolder: sharedTemporaryFolder,
+            dropFolder: sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
         )
+    }
+
+    /// A new, unique folder in the real temporary folder.
+    nonisolated static func newSharedTemporaryFolder() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "topnotch-shared-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
     /// Lets the heartbeat take `count` steps of one second each.

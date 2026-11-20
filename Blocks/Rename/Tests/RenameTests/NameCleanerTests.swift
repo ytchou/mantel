@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Rename
+@testable import RenameCore
 
 private let utc = TimeZone(identifier: "UTC")!
 /// 2026-11-18 10:00:00 UTC.

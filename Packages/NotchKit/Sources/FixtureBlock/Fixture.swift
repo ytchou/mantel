@@ -15,6 +15,8 @@ import Foundation
 ///   log `connect ok` or `connect failed`, for the sandbox tests.
 /// - `write:<path>`: create a file at that path and log `write ok` or
 ///   `write failed`, for the sandbox tests.
+/// - `read:<path>`: open that file for reading and log `read ok` or
+///   `read failed`, for the sandbox tests.
 /// On a pointer hover it presents a small peek, so tests can see a present.
 @main
 struct Fixture: Block {
@@ -50,6 +52,10 @@ struct Fixture: Block {
                 let fd = open(path, O_CREAT | O_WRONLY, 0o644)
                 if fd >= 0 { close(fd) }
                 ctx.log(fd >= 0 ? "write ok" : "write failed")
+            } else if command.hasPrefix("read:") {
+                let fd = open(String(command.dropFirst("read:".count)), O_RDONLY)
+                if fd >= 0 { close(fd) }
+                ctx.log(fd >= 0 ? "read ok" : "read failed")
             }
         }
     }

@@ -105,8 +105,12 @@ A package built for another contract is refused with the version TopNotch suppor
 
 The app starts every block under a sandbox profile built from its manifest:
 no network, no Apple events, no reads in the home folder, and no writes
-outside the block's data folder and the temporary folder, unless an `access`
-token lifts that rule. This is a deny list, and it has a limit: it stops the
+outside the block's data folder and the temporary folder, unless an
+`access` token lifts that rule. The app's `TopNotch` folder inside the
+temporary folder, where dropped files and other blocks' temporary folders
+are, is closed to reads and writes whatever the tokens, except the block's
+own temporary folder in it.
+This is a deny list, and it has a limit: it stops the
 plain cases, such as sending a file away or writing over a document, but it
 is not a guarantee against a determined attacker, because system services
 stay reachable. The signature answers a different question: who made the

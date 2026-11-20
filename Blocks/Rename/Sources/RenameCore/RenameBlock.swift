@@ -10,7 +10,7 @@ import os
 /// (fallback: a tidy dated name), renames the file in place and shows the new
 /// name with Undo. Screenshots that arrive together are handled one at a
 /// time, in order. Runs in its own process; the app draws the trees it sends.
-struct RenameBlock: Block {
+public struct RenameBlock: Block {
     nonisolated static let undoLastActionID = "undo-last-rename"
     nonisolated static let resultDuration = 6.0
     nonisolated static let failureDuration = 4.0
@@ -21,7 +21,7 @@ struct RenameBlock: Block {
     let frontmostAppName: @Sendable @MainActor () -> String?
     let timeZone: TimeZone
 
-    init() {
+    public init() {
         self.init(reader: VisionTextReader(), namer: ModelNamer(), frontmostAppName: { RenameBlock.currentFrontmostAppName() })
     }
 
@@ -42,9 +42,9 @@ struct RenameBlock: Block {
         self.timeZone = timeZone
     }
 
-    var id: String { "rename" }
+    public var id: String { "rename" }
 
-    func start(_ ctx: Context) {
+    public func start(_ ctx: Context) {
         let pipeline = RenamePipeline(reader: reader, namer: namer, renamer: Renamer(), timeLimit: timeLimit, timeZone: timeZone)
         let session = RenameSession(ctx, pipeline: pipeline, frontmostAppName: frontmostAppName)
         ctx.on(.screenshotCaptured) { event in

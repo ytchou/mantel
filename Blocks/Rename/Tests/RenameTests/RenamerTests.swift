@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Rename
+@testable import RenameCore
 
 /// Whole seconds, so the comparison does not depend on sub-second storage.
 private let created = Date(timeIntervalSince1970: 1_700_000_000)

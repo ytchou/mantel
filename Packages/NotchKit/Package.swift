@@ -16,6 +16,11 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../BlockKit"),
+        // The bundled blocks, for BothBlocksTests only: no product above
+        // depends on them, so none is linked into the app.
+        .package(path: "../../Blocks/NowPlaying"),
+        .package(path: "../../Blocks/Rename"),
+        .package(path: "../../Blocks/Shelf"),
     ],
     targets: [
         .target(name: "NotchCore"),
@@ -33,9 +38,15 @@ let package = Package(
             "BlockHost", "NotchCore", .product(name: "BlockWire", package: "BlockKit"),
         ]),
         // All blocks in one runtime: what happens when they want the notch at once.
-        // Each runs as a stand-in over an in-memory connection, scripted as the block.
+        // Each runs as a stand-in, as in the app, over an in-memory connection
+        // to the real block's code, run in this process by the BlockKit runner.
         .testTarget(name: "BothBlocksTests", dependencies: [
-            "NotchCore", "BlockHost", .product(name: "BlockWire", package: "BlockKit"),
+            "NotchCore", "BlockHost",
+            .product(name: "BlockWire", package: "BlockKit"),
+            .product(name: "BlockKit", package: "BlockKit"),
+            .product(name: "NowPlayingCore", package: "NowPlaying"),
+            .product(name: "RenameCore", package: "Rename"),
+            .product(name: "ShelfCore", package: "Shelf"),
         ]),
     ]
 )

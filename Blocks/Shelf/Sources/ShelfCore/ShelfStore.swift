@@ -17,11 +17,20 @@ final class ShelfStore {
     let directory: URL
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "shelf")
 
-    /// Where the shell writes files from a promise. That folder is emptied at
-    /// the next launch, so such files are moved into storage. Same path as
-    /// the shell's drop folder; the shelf must not import the shell.
-    static let defaultDropRoot = FileManager.default.temporaryDirectory
-        .appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+    /// Where the app puts dropped files from a promise, in this block's own
+    /// temporary folder. That folder is emptied at the next launch, so such
+    /// files are moved into storage. The shelf must not import the shell.
+    static let defaultDropRoot = dropFolder(environment: ProcessInfo.processInfo.environment)
+
+    /// `<TMPDIR>/TopNotch/Drops`. The app starts each block with its own
+    /// TMPDIR and moves dropped files there before sending the drop.
+    /// Foundation's temporary folder ignores TMPDIR, so the variable is read
+    /// here; without it (or empty), the temporary folder is used.
+    nonisolated static func dropFolder(environment: [String: String]) -> URL {
+        let temporary = environment["TMPDIR"].flatMap { $0.isEmpty ? nil : URL(filePath: $0, directoryHint: .isDirectory) }
+            ?? FileManager.default.temporaryDirectory
+        return temporary.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+    }
 
     /// Tests point this at their own folder.
     var dropRoot = ShelfStore.defaultDropRoot

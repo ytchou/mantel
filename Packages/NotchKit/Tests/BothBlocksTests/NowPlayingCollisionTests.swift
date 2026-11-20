@@ -3,9 +3,9 @@ import Testing
 @testable import NotchCore
 
 // A volume change while the shelf or the rename block has the notch.
-// All three blocks run in one runtime as stand-ins, as in the app; each block
-// process is played by a script. Each event waits until the blocks have
-// answered, so a check that nothing changed is real.
+// All three blocks run in one runtime as stand-ins, as in the app; behind
+// each stand-in runs the real block's code. Each event waits until the
+// blocks have answered, so a check that nothing changed is real.
 
 @MainActor
 private func spotifyPlays(_ f: Fixture) async {
@@ -71,21 +71,21 @@ private func volumeChanges(_ f: Fixture) async {
     await spotifyPlays(f)
     // The track's own peek ranks above the rename block: let it end first.
     await waitUntil { f.clock.sleeperCount > 0 }
-    f.clock.advance(by: ScriptedNowPlaying.duration)
+    f.clock.advance(by: BlockState.nowPlayingDuration)
     await waitUntil { f.runtime.state.owner == nil }
     await f.capture(try makeScreenshot("Screenshot 1.png", in: f.folder))
-    await f.waitFor { if case .renamed = f.rename.phase { true } else { false } }
+    await f.waitFor { !f.renamedNames.isEmpty }
     #expect(f.runtime.state.owner == "rename")
 
     // Now Playing ranks above Screenshot Names: the volume change shows.
     await volumeChanges(f)
     #expect(f.runtime.state.owner == "nowplaying")
-    #expect(f.runtime.state.presentation?.duration == ScriptedNowPlaying.duration)
+    #expect(f.runtime.state.presentation?.duration == BlockState.nowPlayingDuration)
 
     // Its time runs out: the rename result is back, with its time.
     await waitUntil { f.clock.sleeperCount > 0 }
-    f.clock.advance(by: ScriptedNowPlaying.duration)
+    f.clock.advance(by: BlockState.nowPlayingDuration)
     await waitUntil { f.runtime.state.owner == "rename" }
     #expect(f.runtime.state.owner == "rename")
-    #expect(f.runtime.state.presentation?.duration == ScriptedRename.resultDuration)
+    #expect(f.runtime.state.presentation?.duration == BlockState.renameResultDuration)
 }

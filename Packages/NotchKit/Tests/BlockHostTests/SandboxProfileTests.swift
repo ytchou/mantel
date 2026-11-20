@@ -12,7 +12,8 @@ struct SandboxProfileTests {
             screenshotFolder: screenshotFolder,
             package: URL(fileURLWithPath: "/topnotch-test/blocks/Hello.topblock"),
             dataFolder: URL(fileURLWithPath: "/topnotch-test/data/hello"),
-            temporaryFolder: URL(fileURLWithPath: "/topnotch-test/tmp"),
+            temporaryFolder: URL(fileURLWithPath: "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"),
+            sharedTemporaryFolder: URL(fileURLWithPath: "/topnotch-test/shared-tmp"),
             home: URL(fileURLWithPath: "/topnotch-test/home")
         )
     }
@@ -31,11 +32,36 @@ struct SandboxProfileTests {
             "(deny network*)",
             "(deny appleevent-send)",
             "(deny file-write*)",
-            #"(allow file-write* (subpath "/topnotch-test/data/hello") (subpath "/topnotch-test/tmp") (subpath "/dev"))"#,
+            #"(allow file-write* (subpath "/topnotch-test/data/hello") (subpath "/topnotch-test/shared-tmp") (subpath "/dev"))"#,
+            #"(deny file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch"))"#,
+            #"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#,
             #"(deny file-read* (subpath "/topnotch-test/home"))"#,
             #"(allow file-read* (subpath "/topnotch-test/data/hello") (subpath "/topnotch-test/blocks/Hello.topblock"))"#,
             metadataLine,
         ])
+    }
+
+    /// The app's `TopNotch` subtree of the temporary folder is closed; each
+    /// block reads and writes only its own folder inside it. SBPL: the later
+    /// rule wins, so the own folder's allow comes after the subtree's deny,
+    /// which comes after the write allow of the whole temporary folder.
+    @Test func appTemporarySubtreeIsDeniedAndTheBlocksOwnIsAllowedAfter() {
+        let text = lines(profile())
+        let write = text.firstIndex { $0.hasPrefix("(allow file-write*") && $0.contains(#"(subpath "/topnotch-test/shared-tmp")"#) }
+        let deny = text.firstIndex(of: #"(deny file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch"))"#)
+        let allow = text.firstIndex(of: #"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#)
+        #expect(write != nil)
+        #expect(deny != nil)
+        #expect(allow != nil)
+        if let write, let deny, let allow {
+            #expect(write < deny)
+            #expect(deny < allow)
+        }
+        // Every token keeps both rules.
+        for changed in [profile(network: true), profile(readsHome: true),
+                        profile(screenshotFolder: URL(fileURLWithPath: "/topnotch-test/home/Desktop"))] {
+            #expect(lines(changed).filter { $0.contains("shared-tmp") } == text.filter { $0.contains("shared-tmp") })
+        }
     }
 
     @Test func networkTokenRemovesTheNetworkDeny() {
@@ -67,7 +93,8 @@ struct SandboxProfileTests {
         let folders = try makeFolders(in: root, data: "data")
         let profile = SandboxProfile(network: false, readsHome: false, screenshotFolder: nil,
                                      package: folders.package, dataFolder: folders.data,
-                                     temporaryFolder: folders.temporary, home: folders.home)
+                                     temporaryFolder: folders.temporary, sharedTemporaryFolder: folders.shared,
+                                     home: folders.home)
 
         let allowed = folders.data.appending(path: "allowed")
         let refused = folders.home.appending(path: "refused")
@@ -75,6 +102,22 @@ struct SandboxProfileTests {
         #expect(FileManager.default.fileExists(atPath: allowed.path))
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", refused.path]) != 0)
         #expect(!FileManager.default.fileExists(atPath: refused.path))
+
+        // The app's subtree of the temporary folder is closed; the block's own
+        // folder in it is open; the rest of the temporary folder stays open.
+        let drops = folders.shared.appending(path: "TopNotch/Drops")
+        try FileManager.default.createDirectory(at: drops, withIntermediateDirectories: true)
+        let dropped = drops.appending(path: "dropped")
+        try Data("x".utf8).write(to: dropped)
+        let otherApp = folders.shared.appending(path: "other-app")
+        try Data("x".utf8).write(to: otherApp)
+        let own = folders.temporary.appending(path: "own")
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", dropped.path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", drops.appending(path: "new").path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", otherApp.path]) == 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", folders.shared.appending(path: "new").path]) == 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", own.path]) == 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", own.path]) == 0)
     }
 
     @Test func pathsWithQuotesAreEscaped() throws {
@@ -83,7 +126,8 @@ struct SandboxProfileTests {
         let folders = try makeFolders(in: root, data: #"da"ta\folder"#)
         let profile = SandboxProfile(network: false, readsHome: false, screenshotFolder: nil,
                                      package: folders.package, dataFolder: folders.data,
-                                     temporaryFolder: folders.temporary, home: folders.home)
+                                     temporaryFolder: folders.temporary, sharedTemporaryFolder: folders.shared,
+                                     home: folders.home)
         #expect(profile.text.contains(#"da\"ta\\folder"#))
 
         let file = folders.data.appending(path: "written")
@@ -97,6 +141,7 @@ struct SandboxProfileTests {
         let home: URL
         let data: URL
         let temporary: URL
+        let shared: URL
         let package: URL
     }
 
@@ -106,10 +151,14 @@ struct SandboxProfileTests {
         return root
     }
 
-    /// Four sibling folders, so the data folder is not inside the "home" folder.
+    /// Sibling folders, so the data folder is not inside the "home" folder;
+    /// the block's temporary folder is inside the shared one's `TopNotch`
+    /// subtree, as in the app.
     private func makeFolders(in root: URL, data: String) throws -> Folders {
+        let shared = root.appending(path: "shared-tmp")
         let folders = Folders(home: root.appending(path: "home"), data: root.appending(path: data),
-                              temporary: root.appending(path: "tmp"), package: root.appending(path: "Probe.topblock"))
+                              temporary: shared.appending(path: "TopNotch/Blocks/probe"), shared: shared,
+                              package: root.appending(path: "Probe.topblock"))
         for folder in [folders.home, folders.data, folders.temporary, folders.package] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         }

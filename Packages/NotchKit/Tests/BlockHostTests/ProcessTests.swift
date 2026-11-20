@@ -82,24 +82,48 @@ struct ProcessTests {
         #expect(!FileManager.default.fileExists(atPath: outside.path))
         #expect(FileManager.default.fileExists(atPath: inside.path))
     }
+
+    /// Other blocks' files and dropped files sit in the app's `TopNotch`
+    /// temporary subtree: closed. The block's own temporary folder inside it is open.
+    @Test func fixtureCannotReadTheAppTemporarySubtreeButUsesItsOwn() async throws {
+        let rig = try SandboxRig()
+        defer { rig.remove() }
+        let other = rig.shared.appending(path: "TopNotch/Blocks/other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let shared = other.appending(path: "other-block-file")
+        try Data("x".utf8).write(to: shared)
+        let own = rig.temporary.appending(path: "own")
+        let process = try BlockProcess.spawn(executable: Fixture.executable(in: rig.package), generation: 1,
+                                             sandbox: rig.profile())
+        defer { process.terminate() }
+
+        let replies = try await rig.talk(to: process, generation: 1,
+                                         commands: ["read:\(shared.path)", "write:\(own.path)", "read:\(own.path)"])
+        #expect(replies.logs == ["read failed", "write ok", "read ok"])
+        #expect(FileManager.default.fileExists(atPath: own.path))
+    }
 }
 
 // MARK: - Helpers
 
-/// A fixture package and sibling "home", data and temporary folders in one
-/// temporary root, so the data folder is not inside the "home" folder.
+/// A fixture package and sibling "home", data and shared temporary folders
+/// in one temporary root, so the data folder is not inside the "home"
+/// folder. The block's temporary folder is inside the shared one's `TopNotch`
+/// subtree, as in the app.
 private struct SandboxRig {
     let root: URL
     let package: URL
     let home: URL
     let data: URL
+    let shared: URL
     let temporary: URL
 
     init() throws {
         root = FileManager.default.temporaryDirectory.appending(path: "topnotch-sandboxed-\(UUID().uuidString)")
         home = root.appending(path: "home")
         data = root.appending(path: "data")
-        temporary = root.appending(path: "tmp")
+        shared = root.appending(path: "shared-tmp")
+        temporary = shared.appending(path: "TopNotch/Blocks/fixture")
         for folder in [home, data, temporary] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         }
@@ -108,7 +132,7 @@ private struct SandboxRig {
 
     func profile(network: Bool = false) -> SandboxProfile {
         SandboxProfile(network: network, readsHome: false, screenshotFolder: nil, package: package,
-                       dataFolder: data, temporaryFolder: temporary, home: home)
+                       dataFolder: data, temporaryFolder: temporary, sharedTemporaryFolder: shared, home: home)
     }
 
     func remove() {

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Shelf
+@testable import ShelfCore
 
 /// A fresh, empty directory under the temporary folder.
 func makeTemporaryDirectory(_ label: String = "ShelfBlockTests") throws -> URL {
@@ -22,6 +22,20 @@ func exists(_ url: URL) -> Bool {
 }
 
 let exampleLink = URL(string: "https://example.com/page")!
+
+/// The app gives each block process its own TMPDIR and moves dropped files
+/// into `<TMPDIR>/TopNotch/Drops` there. Foundation's temporary folder does
+/// not follow TMPDIR, so the drop folder is read from the variable.
+@Test func theDropFolderIsUnderTheProcessTMPDIR() {
+    let root = ShelfStore.dropFolder(environment: ["TMPDIR": "/private/tmp/app/TopNotch/Blocks/shelf/"])
+    #expect(root.path(percentEncoded: false) == "/private/tmp/app/TopNotch/Blocks/shelf/TopNotch/Drops/")
+}
+
+@Test func withoutTMPDIRTheDropFolderIsUnderTheTemporaryFolder() {
+    let fallback = FileManager.default.temporaryDirectory.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+    #expect(ShelfStore.dropFolder(environment: [:]) == fallback)
+    #expect(ShelfStore.dropFolder(environment: ["TMPDIR": ""]) == fallback)
+}
 
 @MainActor
 @Test func oneDropBecomesOneStack() throws {

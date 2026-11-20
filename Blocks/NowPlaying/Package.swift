@@ -10,14 +10,25 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .executable(name: "NowPlaying", targets: ["NowPlaying"]),
+        // The block's code, for this package's tests and for the collision
+        // tests in ../../Packages/NotchKit (BothBlocksTests), which run it
+        // in process. Never linked into the app.
+        .library(name: "NowPlayingCore", targets: ["NowPlayingCore"]),
     ],
     dependencies: [
         .package(path: "../../Packages/BlockKit"),
     ],
     targets: [
-        .executableTarget(name: "NowPlaying", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
+        // All of the block but its entry point.
+        .target(name: "NowPlayingCore", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
+        // The entry point only: main.swift. The bundled-blocks build phase
+        // builds this product by name.
+        .executableTarget(name: "NowPlaying", dependencies: [
+            "NowPlayingCore",
+            .product(name: "BlockKit", package: "BlockKit"),
+        ]),
         .testTarget(name: "NowPlayingTests", dependencies: [
-            "NowPlaying",
+            "NowPlayingCore",
             .product(name: "BlockKit", package: "BlockKit"),
             .product(name: "BlockKitTesting", package: "BlockKit"),
         ]),

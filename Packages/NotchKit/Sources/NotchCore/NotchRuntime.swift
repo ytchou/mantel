@@ -18,9 +18,15 @@ public final class NotchRuntime {
     public private(set) var blocks: [any NotchBlock] = []
 
     /// Called once each time the set of event types with at least one
-    /// subscriber among enabled blocks changes. Read `hasSubscribers(for:)`
-    /// to see the new set.
+    /// subscriber among enabled blocks changes, and each time
+    /// `isShowingInteractive` changes. Read `hasSubscribers(for:)` and
+    /// `isShowingInteractive` to see the new state.
     @ObservationIgnored public var onDemandChanged: (@MainActor () -> Void)?
+
+    /// True while the notch shows an `interactive` presentation. The arbiter
+    /// keeps it from being displaced during a drag only while the drag
+    /// monitor runs, so the monitor also runs while this is true.
+    public var isShowingInteractive: Bool { showedInteractive }
 
     /// Contexts of enabled blocks.
     @ObservationIgnored private var contexts: [BlockID: RuntimeContext] = [:]
@@ -28,6 +34,8 @@ public final class NotchRuntime {
     @ObservationIgnored private var isPointerInside = false
     /// Event types with at least one subscriber, as last reported.
     @ObservationIgnored private var demand: Set<ObjectIdentifier> = []
+    /// Whether an interactive presentation was on screen, as last reported.
+    @ObservationIgnored private var showedInteractive = false
 
     /// Time since the runtime was created, on the injected clock.
     private let now: @Sendable () -> Duration
@@ -213,6 +221,11 @@ public final class NotchRuntime {
             state = next
         }
         scheduleTimer()
+        let interactive = state.presentation?.priority == .interactive
+        if interactive != showedInteractive {
+            showedInteractive = interactive
+            onDemandChanged?()
+        }
     }
 
     private func scheduleTimer() {

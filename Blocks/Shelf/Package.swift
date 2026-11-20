@@ -10,14 +10,25 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .executable(name: "Shelf", targets: ["Shelf"]),
+        // The block's code, for this package's tests and for the collision
+        // tests in ../../Packages/NotchKit (BothBlocksTests), which run it
+        // in process. Never linked into the app.
+        .library(name: "ShelfCore", targets: ["ShelfCore"]),
     ],
     dependencies: [
         .package(path: "../../Packages/BlockKit"),
     ],
     targets: [
-        .executableTarget(name: "Shelf", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
+        // All of the block but its entry point.
+        .target(name: "ShelfCore", dependencies: [.product(name: "BlockKit", package: "BlockKit")]),
+        // The entry point only: main.swift. The bundled-blocks build phase
+        // builds this product by name.
+        .executableTarget(name: "Shelf", dependencies: [
+            "ShelfCore",
+            .product(name: "BlockKit", package: "BlockKit"),
+        ]),
         .testTarget(name: "ShelfTests", dependencies: [
-            "Shelf",
+            "ShelfCore",
             .product(name: "BlockKit", package: "BlockKit"),
             .product(name: "BlockKitTesting", package: "BlockKit"),
         ]),

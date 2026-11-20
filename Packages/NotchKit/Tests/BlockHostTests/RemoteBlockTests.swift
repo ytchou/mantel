@@ -286,19 +286,47 @@ struct RemoteBlockTests {
         #expect(rig.runtime.state.owner == "hello", "without dismissIfNotShown a late answer is shown")
     }
 
-    /// A real file in the temporary folder, which every block's sandbox reads.
-    private func temporaryFile(_ name: String) throws -> String {
-        let url = FileManager.default.temporaryDirectory.appending(path: "topnotch-paths-\(UUID().uuidString)-\(name)")
+    /// A real file in the block's own temporary folder, which its sandbox reads.
+    private func temporaryFile(_ name: String, in rig: Rig) throws -> String {
+        let url = rig.block.temporaryFolder.appending(path: "topnotch-paths-\(UUID().uuidString)-\(name)")
         try Data("x".utf8).write(to: url)
         return url.path
+    }
+
+    /// The app's `TopNotch` temporary subtree holds other blocks' files and
+    /// the drop folder: closed. The block's own temporary folder inside it is
+    /// open, and so is the rest of the temporary folder, as before.
+    @Test func readablePathsTakeTheBlocksOwnTemporaryFolderNotOtherBlocks() throws {
+        let rig = Rig()
+        let own = try temporaryFile("own.png", in: rig)
+        let otherBlock = rig.sharedTemporaryFolder.appending(path: "TopNotch/Blocks/other")
+        try FileManager.default.createDirectory(at: otherBlock, withIntermediateDirectories: true)
+        let shared = otherBlock.appending(path: "other-block.png")
+        try Data("x".utf8).write(to: shared)
+        let otherApp = rig.sharedTemporaryFolder.appending(path: "other-app.png")
+        try Data("x".utf8).write(to: otherApp)
+        let dropped = rig.dropFolder.appending(path: "UUID-1/drop.png")
+        try FileManager.default.createDirectory(at: dropped.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dropped)
+
+        #expect(rig.block.temporaryFolder.path.hasPrefix(rig.sharedTemporaryFolder.appending(path: "TopNotch/Blocks/hello").path))
+        #expect(rig.block.readablePaths([shared.path, dropped.path, own, otherApp.path]) == [own, otherApp.path])
+
+        // `files.read` opens the home folder, not the app's temporary subtree.
+        var reading = helloManifest
+        reading.access = [.filesRead]
+        let readingRig = Rig(manifest: reading)
+        let readingShared = readingRig.sharedTemporaryFolder.appending(path: "TopNotch/Drops/UUID-1/drop.png")
+        let readingOwn = try temporaryFile("own.png", in: readingRig)
+        #expect(readingRig.block.readablePaths([readingShared.path, "/etc/hosts", readingOwn]) == ["/etc/hosts", readingOwn])
     }
 
     @Test func previewAsksTheHostPreview() async throws {
         var shown: [[URL]] = []
         let rig = Rig(preview: { shown.append($0) })
         try await rig.process.start()
-        let a = try temporaryFile("a.png")
-        let b = try temporaryFile("b.pdf")
+        let a = try temporaryFile("a.png", in: rig)
+        let b = try temporaryFile("b.pdf", in: rig)
 
         try rig.process.send(.preview(paths: [a, b]))
         await waitUntil { !shown.isEmpty }
@@ -312,7 +340,7 @@ struct RemoteBlockTests {
         var shown: [[URL]] = []
         let rig = Rig(preview: { shown.append($0) })
         try await rig.process.start()
-        let allowed = try temporaryFile("a.png")
+        let allowed = try temporaryFile("a.png", in: rig)
         let home = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh/id_rsa").path
 
         try rig.process.send(.preview(paths: ["/etc/hosts", home, "relative.png", allowed]))
@@ -340,7 +368,7 @@ struct RemoteBlockTests {
     @Test func dragOutLeavesOutFilesTheSandboxCannotRead() async throws {
         let rig = Rig()
         try await rig.process.start()
-        let allowed = try temporaryFile("a.png")
+        let allowed = try temporaryFile("a.png", in: rig)
         let drag = ViewNode.ItemDrag([.file(path: "/etc/hosts"), .file(path: allowed), .text(string: "hi")])
 
         let payloads = rig.block.model.dragPayloads(for: drag)
