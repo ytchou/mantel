@@ -235,7 +235,12 @@ Side finding: `isFloatingPanel = true` resets an `NSPanel`'s level to 3. The
 phase 1 `notch-window` spike sets the level first, so its "level 25" row above
 is doubtful. The app sets the level afterwards since PR #7.
 
-## pd-3: the plugin format. A recommendation; the owner decides
+## pd-3: the plugin format
+
+**Decided on 20 Nov by the owner: B, a separate process with the view sent as
+data.** The reasons given: a broken block must not break other blocks or the
+app, and people must be able to download blocks without changing the app.
+The table and recommendation below are what the decision was made from.
 
 | Choice | What you get | What it costs |
 |---|---|---|
