@@ -11,11 +11,15 @@ import SwiftUI
 public final class SettingsWindowController {
     private let runtime: NotchRuntime
     private let settings: BlockSettings
+    private let installer: (any BlockInstalling)?
     private var window: NSWindow?
 
-    public init(runtime: NotchRuntime, settings: BlockSettings) {
+    /// - Parameter installer: installs, updates and removes blocks from the
+    ///   Blocks page. Nil hides those buttons.
+    public init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil) {
         self.runtime = runtime
         self.settings = settings
+        self.installer = installer
     }
 
     public func show() {
@@ -31,7 +35,7 @@ public final class SettingsWindowController {
             backing: .buffered,
             defer: false
         )
-        let hosting = NSHostingView(rootView: SettingsRootView(runtime: runtime, settings: settings))
+        let hosting = NSHostingView(rootView: SettingsRootView(runtime: runtime, settings: settings, installer: installer))
         // The window keeps the size it is given; see OnboardingController.show.
         hosting.sizingOptions = []
         window.contentView = hosting

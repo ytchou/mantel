@@ -10,6 +10,7 @@ struct BlockStoreTests {
     private func store(_ runtime: NotchRuntime, bundledRoot: URL? = nil) -> BlockStore {
         BlockStore(
             owner: { runtime.state.owner },
+            blocksRoot: FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)"),
             dataRoot: FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
             bundledRoot: bundledRoot
         )

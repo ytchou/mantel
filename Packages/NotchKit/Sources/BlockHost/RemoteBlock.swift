@@ -31,9 +31,10 @@ public final class RemoteBlock: NotchBlock {
     /// The trees the block process sent; `NodeView` draws from it.
     public let model = RemoteModel()
 
-    public let manifest: Manifest
+    /// Changes only when an update swaps the package in place.
+    public private(set) var manifest: Manifest
     public let packageURL: URL
-    public let source: BlockSource
+    public private(set) var source: BlockSource
 
     /// Whether the block runs as it should. Observed, so the Blocks page redraws.
     public private(set) var health: BlockHealth
@@ -68,6 +69,8 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var toldOwns = false
     /// True while an owner observation is armed, so re-activation never arms two.
     @ObservationIgnored private var observingOwner = false
+    /// Events subscribed to in the current context; an update adds new ones.
+    @ObservationIgnored private var subscribed: Set<WireEvent> = []
 
     /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
@@ -144,15 +147,23 @@ public final class RemoteBlock: NotchBlock {
         supervisor.reset()
         restarts = 0
         health = .ok
+        subscribed = []
+        subscribeToManifestEvents()
+        if !observingOwner { observeOwner() }
+        launch()
+    }
+
+    /// Subscribes to each manifest event not yet subscribed in this context.
+    private func subscribeToManifestEvents() {
+        guard let context else { return }
         for name in manifest.events {
             guard let event = try? EventCodec.wireEvent(named: name) else {
                 log.error("\(self.id.rawValue, privacy: .public): unknown event \(name, privacy: .public) ignored")
                 continue
             }
+            guard subscribed.insert(event).inserted else { continue }
             EventCodec.subscribe(event, in: context) { [weak self] payload in self?.received(payload) }
         }
-        if !observingOwner { observeOwner() }
-        launch()
     }
 
     public func deactivate() {
@@ -179,6 +190,21 @@ public final class RemoteBlock: NotchBlock {
         endProcess(wait: true)
     }
 
+    /// Takes the manifest of the package now at `packageURL`, after an update
+    /// replaced the folder, and starts the block again if it is on. The
+    /// stand-in keeps its place in the runtime; settings are read again.
+    /// Call `stop()` before replacing the folder. Also used with the old
+    /// manifest to start the old version again when the replacement failed.
+    func replacePackage(manifest: Manifest, source: BlockSource) {
+        endProcess(wait: true)
+        self.manifest = manifest
+        self.source = source
+        settings = readSettings()
+        guard context != nil else { return }
+        subscribeToManifestEvents()
+        launch()
+    }
+
     // MARK: Process
 
     /// Ends the current process and starts a new one, which gets the latest
@@ -192,7 +218,9 @@ public final class RemoteBlock: NotchBlock {
         generation += 1
         isWelcomed = false
         toldOwns = false
+        // Only events this version listens to; an update may drop some.
         pending = latest.values.sorted { $0.order < $1.order }.map(\.payload)
+            .filter { manifest.events.contains($0.name.rawValue) }
         launchedAt = .now
         pingSeq = 0
         lastPong = 0
@@ -424,6 +452,8 @@ public final class RemoteBlock: NotchBlock {
     }
 
     private func received(_ payload: EventPayload) {
+        // A subscription kept from before an update that dropped this event.
+        guard manifest.events.contains(payload.name.rawValue) else { return }
         eventCount += 1
         latest[payload.name] = (eventCount, payload)
         if isWelcomed {

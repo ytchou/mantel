@@ -263,3 +263,12 @@ write look like the shelf (custom views, dragging) and not like now-playing
 (a line of status and a button). Then B is too small and C is the honest
 answer. The hand check of real-pointer feel in `separate-process/NOTES.md`
 should also be done before building on B.
+
+**Note, 20 Nov (Phase 6 build).** Two differences from the spike are
+deliberate for Phase 6. The heartbeat pings every 1 s and calls a block hung
+after 3 s without an answer, timed on a clock that stops while the Mac sleeps;
+the spike's 50 ms ping was for measuring, not for running all day. The app does
+not check a block's signature: Phase 6 installs only the owner's own blocks
+(design decision D1), and signature checks and Gatekeeper are Phase 7 work.
+The hand check of real-pointer feel (hover and click through a block process,
+next to an in-app block) is still waiting for the owner.

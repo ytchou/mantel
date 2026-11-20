@@ -1,0 +1,272 @@
+import BlockWire
+import Foundation
+import Testing
+@testable import BlockHost
+import NotchCore
+
+/// Install, update and remove, in temporary folders with in-memory block
+/// processes. The real Application Support folder is never touched.
+@MainActor
+@Suite(.serialized)
+struct InstallTests {
+    /// A store over temporary roots, wired to `runtime` the way the app wires it.
+    @MainActor
+    final class Setup {
+        let runtime = NotchRuntime()
+        let launcher = FakeLauncher()
+        let defaults = testDefaults()
+        let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-install-\(UUID().uuidString)")
+        var cleared: [BlockID] = []
+        var blocksRoot: URL { root.appending(path: "Blocks") }
+        var dataRoot: URL { root.appending(path: "BlockData") }
+        lazy var store = makeStore()
+
+        func makeStore(bundledRoot: URL? = nil) -> BlockStore {
+            BlockStore(
+                owner: { [runtime] in runtime.state.owner },
+                blocksRoot: blocksRoot,
+                dataRoot: dataRoot,
+                bundledRoot: bundledRoot,
+                launcher: launcher.launcher,
+                defaults: defaults,
+                register: { [runtime] block in runtime.register(block) },
+                unregister: { [runtime] id in runtime.unregister(id) },
+                clearKeys: { [weak self, defaults] id in
+                    self?.cleared.append(id)
+                    // As `BlockSettings.clear` does.
+                    for key in defaults.dictionaryRepresentation().keys
+                    where key.hasPrefix("\(id.rawValue).") || key.hasPrefix("block.\(id.rawValue).") {
+                        defaults.removeObject(forKey: key)
+                    }
+                }
+            )
+        }
+
+        /// A `<folder>/<Name>.topblock` outside the store, with an executable script.
+        func package(
+            id: String = "hello", version: String = "0.2", events: [String] = ["pointerHover"],
+            contract: Int = Contract.current, folder: String = "hello-block"
+        ) throws -> URL {
+            let url = root.appending(path: "source-\(UUID().uuidString)").appending(path: folder)
+                .appending(path: "Hello.topblock")
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let manifest = Manifest(id: id, name: "Hello", version: version, contract: contract, executable: "HelloBlock",
+                                    summary: "Says hello.", trigger: "Pointer hover",
+                                    permissions: ["Nothing special"], events: events,
+                                    settings: [SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .bool(false))])
+            try Framing.encoder().encode(manifest).write(to: url.appending(path: "manifest.json"))
+            let executable = url.appending(path: "HelloBlock")
+            try Data("#!/bin/sh\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+            return url
+        }
+
+        func installedPackages() -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: blocksRoot.path)) ?? []).sorted()
+        }
+
+        func block(_ id: BlockID) -> RemoteBlock? {
+            runtime.blocks.first { $0.id == id } as? RemoteBlock
+        }
+    }
+
+    @Test func inspectReturnsSummaryWithoutCopying() throws {
+        let setup = Setup()
+        let package = try setup.package(events: ["pointerHover", "outputVolume"])
+
+        let summary = try setup.store.inspect(package)
+
+        #expect(summary.id == "hello")
+        #expect(summary.name == "Hello")
+        #expect(summary.version == "0.2")
+        #expect(summary.contract == Contract.current)
+        #expect(summary.events == [BlockStore.eventText(.pointerHover), BlockStore.eventText(.outputVolume)])
+        #expect(summary.newEvents.isEmpty)
+        #expect(summary.permissions == ["Nothing special"])
+        #expect(summary.sourcePath == package.path)
+        #expect(summary.installedVersion == nil)
+        #expect(setup.installedPackages().isEmpty)
+        #expect(setup.runtime.blocks.isEmpty)
+    }
+
+    @Test func installCopiesRegistersAndTurnsOn() throws {
+        let setup = Setup()
+        let package = try setup.package()
+
+        try setup.store.install(package)
+
+        #expect(setup.installedPackages() == ["hello.topblock"])
+        let block = try #require(setup.block("hello"))
+        #expect(block.packageURL.path == setup.blocksRoot.appending(path: "hello.topblock").path)
+        #expect(setup.runtime.isEnabled("hello"))
+        #expect(setup.launcher.processes.count == 1, "the block process was started")
+        #expect(block.info.source == .installed(from: package.path))
+        #expect(setup.store.canRemove("hello"))
+
+        // A new store over the same folder finds it, with the original path.
+        let again = setup.makeStore().standIns(developmentPath: nil)
+        #expect(again.map(\.id) == ["hello"])
+        #expect(again.first?.info.source == .installed(from: package.path))
+    }
+
+    @Test func installOfInvalidPackageLeavesNothing() throws {
+        let setup = Setup()
+        let package = try setup.package(contract: 99)
+
+        #expect(throws: BlockInstallError.unsupportedContract(found: 99, supported: Contract.supported)) {
+            try setup.store.install(package)
+        }
+        let reserved = try setup.package(id: "shelf")
+        #expect(throws: BlockInstallError.reservedID("shelf")) { try setup.store.install(reserved) }
+
+        #expect(setup.installedPackages().isEmpty)
+        #expect(setup.runtime.blocks.isEmpty)
+        #expect(setup.launcher.processes.isEmpty)
+    }
+
+    @Test func updateKeepsPlaceSettingsAndData() async throws {
+        let setup = Setup()
+        let other = OtherBlock()
+        setup.runtime.register(other)
+        try setup.store.install(try setup.package(version: "0.2", events: ["pointerHover"]))
+        setup.runtime.register(OtherBlockAfter())
+        let block = try #require(setup.block("hello"))
+        try await setup.launcher.last!.start()
+        let first = try #require(setup.launcher.last)
+        setup.defaults.set(true, forKey: "hello.loud")
+        setup.defaults.set(true, forKey: "block.hello.enabled")
+        let data = setup.dataRoot.appending(path: "hello")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        try Data("kept".utf8).write(to: data.appending(path: "state"))
+
+        let newer = try setup.package(version: "0.3", events: ["pointerHover", "outputVolume"])
+        let summary = try setup.store.inspect(newer)
+        #expect(summary.installedVersion == "0.2")
+        #expect(summary.newEvents == [BlockStore.eventText(.outputVolume)])
+
+        try setup.store.install(newer)
+
+        #expect(setup.runtime.blocks.map(\.id) == ["other", "hello", "after"])
+        #expect(setup.block("hello") === block, "the same stand-in, swapped in place")
+        #expect(block.manifest.version == "0.3")
+        #expect(block.info.version == "0.3")
+        #expect(block.info.source == .installed(from: newer.path))
+        #expect(setup.installedPackages() == ["hello.topblock"])
+        let installed = try Manifest.decode(Data(contentsOf: setup.blocksRoot.appending(path: "hello.topblock/manifest.json")))
+        #expect(installed.version == "0.3")
+        #expect(setup.defaults.bool(forKey: "hello.loud"))
+        #expect(setup.defaults.object(forKey: "block.hello.enabled") != nil)
+        #expect(try Data(contentsOf: data.appending(path: "state")) == Data("kept".utf8))
+        #expect(setup.cleared.isEmpty)
+
+        // Restarted: the old process was told to stop, a new one started.
+        #expect(await first.waitFor { $0 == .quit } != nil)
+        #expect(setup.launcher.processes.count == 2)
+        #expect(setup.runtime.isEnabled("hello"))
+        // The new event reaches the new process.
+        try await setup.launcher.last!.start()
+        setup.runtime.publish(OutputVolumeChanged(volume: 0.5, isMuted: false))
+        await waitUntil { setup.launcher.last!.events.count == 1 }
+        #expect(setup.launcher.last!.events.first?.payload.name == .outputVolume)
+    }
+
+    @Test func failedCopyKeepsOldPackage() async throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(version: "0.2"))
+        let block = try #require(setup.block("hello"))
+        try await setup.launcher.last!.start()
+        let first = try #require(setup.launcher.last)
+
+        // A file that cannot be read makes the copy fail.
+        let newer = try setup.package(version: "0.3")
+        let locked = newer.appending(path: "locked")
+        try Data("x".utf8).write(to: locked)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+
+        #expect {
+            try setup.store.install(newer)
+        } throws: { error in
+            if case .copyFailed = error as? BlockInstallError { true } else { false }
+        }
+
+        #expect(block.manifest.version == "0.2")
+        let installed = try Manifest.decode(Data(contentsOf: setup.blocksRoot.appending(path: "hello.topblock/manifest.json")))
+        #expect(installed.version == "0.2")
+        #expect(setup.installedPackages() == ["hello.topblock"], "no temporary copy is left")
+        #expect(setup.launcher.processes.count == 1)
+        #expect(block.isWelcomed, "the old version keeps running")
+        #expect(!first.received.contains(.quit))
+    }
+
+    @Test func removeDeletesEverything() async throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package())
+        let first = try #require(setup.launcher.last)
+        try await first.start()
+        setup.defaults.set(true, forKey: "hello.loud")
+        setup.defaults.set(true, forKey: "block.hello.enabled")
+        setup.defaults.set("Stopped.", forKey: "block.hello.failure")
+        setup.defaults.set(true, forKey: "shelf.keep")
+        let data = setup.dataRoot.appending(path: "hello")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+
+        try setup.store.remove("hello")
+
+        #expect(setup.installedPackages().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: data.path))
+        #expect(setup.defaults.object(forKey: "hello.loud") == nil)
+        #expect(setup.defaults.object(forKey: "block.hello.enabled") == nil)
+        #expect(setup.defaults.object(forKey: "block.hello.failure") == nil)
+        #expect(setup.defaults.object(forKey: "block.hello.installedFrom") == nil)
+        #expect(setup.defaults.bool(forKey: "shelf.keep"))
+        #expect(setup.cleared == ["hello"])
+        #expect(setup.runtime.blocks.isEmpty)
+        #expect(!setup.store.canRemove("hello"))
+        #expect(await first.waitFor { $0 == .quit } != nil)
+    }
+
+    @Test func bundledAndBuiltInCannotBeRemoved() throws {
+        let setup = Setup()
+        let bundled = setup.root.appending(path: "Bundled")
+        let nowPlaying = bundled.appending(path: "NowPlaying.topblock")
+        let source = try setup.package(id: "nowplaying")
+        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: source, to: nowPlaying)
+        let store = setup.makeStore(bundledRoot: bundled)
+        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
+
+        for id: BlockID in ["nowplaying", "shelf"] {
+            #expect(!store.canRemove(id))
+            #expect(throws: BlockInstallError.notRemovable(id.rawValue)) { try store.remove(id) }
+        }
+        #expect(FileManager.default.fileExists(atPath: nowPlaying.path))
+        #expect(setup.runtime.blocks.map(\.id) == ["nowplaying"])
+    }
+
+    @Test func scanOrderIsBuiltInBundledInstalled() throws {
+        let setup = Setup()
+        let bundled = setup.root.appending(path: "Bundled")
+        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: try setup.package(id: "nowplaying"), to: bundled.appending(path: "NowPlaying.topblock"))
+        // Installed in an order that is not sorted.
+        try setup.store.install(try setup.package(id: "zeta"))
+        try setup.store.install(try setup.package(id: "alpha"))
+        // Not a package, and a leftover temporary copy: both ignored.
+        try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: "Notes"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: ".alpha.topblock.incoming-1"), withIntermediateDirectories: true)
+
+        let standIns = setup.makeStore(bundledRoot: bundled).standIns(developmentPath: nil)
+
+        #expect(standIns.map(\.id) == ["nowplaying", "alpha", "zeta"])
+        #expect(standIns.map(\.info.source).first == .bundled)
+    }
+}
+
+/// A plain block registered after the installed one, to check its place.
+@MainActor
+private final class OtherBlockAfter: NotchBlock {
+    let id: BlockID = "after"
+    let title = "After"
+    func activate(_ context: any BlockContext) {}
+}

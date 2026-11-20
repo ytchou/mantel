@@ -4,7 +4,9 @@ import Foundation
 /// subscribe to the types they care about.
 ///
 /// An event is a plain value. Add a new event by declaring a new type; the bus
-/// routes by type, so no central list has to change.
+/// routes by type. Blocks that run in their own process receive only the
+/// events that have a wire name, listed in `BlockHost`'s `EventCodec` and in
+/// `BlockWire`'s `WireEvent`; a new event they need is added there too.
 public protocol NotchEvent: Sendable {}
 
 /// The kinds of content a drag can carry and a block can accept.

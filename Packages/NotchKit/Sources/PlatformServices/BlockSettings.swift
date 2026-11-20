@@ -10,11 +10,14 @@ enum Log {
     static let platform = Logger(subsystem: subsystem, category: "platform")
 }
 
-/// Bumped whenever a block is turned on or off through `BlockSettings`.
+/// Bumped whenever a block is turned on or off through `BlockSettings`, or
+/// its keys are cleared.
 ///
 /// `NotchRuntime.isEnabled(_:)` is not observable, so views that show the
 /// enabled state read this value to redraw when it changes. It works because
-/// every on/off change in the app goes through `BlockSettings`.
+/// every on/off change in the app goes through `BlockSettings`: a block turned
+/// off after failures goes through the closure the app gives `BlockStore`, and
+/// Remove clears the block's keys with `clear(_:)`.
 @MainActor
 @Observable
 final class EnablementSignal {
@@ -48,5 +51,16 @@ public final class BlockSettings {
         runtime.setEnabled(id, enabled)
         EnablementSignal.shared.revision += 1
         Log.platform.info("Block \(id.rawValue, privacy: .public) turned \(enabled ? "on" : "off", privacy: .public)")
+    }
+
+    /// Deletes every key of a removed block: its settings, "<id>.*", and the
+    /// app's keys for it, "block.<id>.*". Other blocks' keys are kept.
+    public func clear(_ id: BlockID) {
+        let prefixes = ["\(id.rawValue).", "block.\(id.rawValue)."]
+        for key in defaults.dictionaryRepresentation().keys where prefixes.contains(where: key.hasPrefix) {
+            defaults.removeObject(forKey: key)
+        }
+        EnablementSignal.shared.revision += 1
+        Log.platform.info("Block \(id.rawValue, privacy: .public) settings cleared")
     }
 }
