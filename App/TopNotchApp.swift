@@ -46,11 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRegistered: { [runtime] id in runtime.blocks.contains { $0.id == id } }
     )
     private var shell: NotchShellController?
-    private var dragMonitor: DragMonitor?
-    private var screenshotWatcher: ScreenshotWatcher?
-    private var volumeWatcher: OutputVolumeWatcher?
-    private var playerWatchers: [PlayerNotificationWatcher] = []
-    private var systemNowPlayingWatcher: SystemNowPlayingWatcher?
+    private var sources: SourceCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
@@ -71,26 +67,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shell.start()
         self.shell = shell
 
-        let dragMonitor = DragMonitor(runtime: runtime)
-        dragMonitor.start()
-        self.dragMonitor = dragMonitor
-
-        let screenshotWatcher = ScreenshotWatcher(runtime: runtime)
-        screenshotWatcher.start()
-        self.screenshotWatcher = screenshotWatcher
-
-        let volumeWatcher = OutputVolumeWatcher(runtime: runtime)
-        volumeWatcher.start()
-        self.volumeWatcher = volumeWatcher
-
-        playerWatchers = [.spotify, .music].map { PlayerNotificationWatcher(runtime: runtime, player: $0) }
-        playerWatchers.forEach { $0.start() }
-
+        // Each source runs only while an enabled block listens to its events.
+        // Blocks are registered above, so the ones turned on start here.
+        let sources = SourceCoordinator(runtime: runtime)
+        sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self])
+        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self])
+        sources.add(OutputVolumeWatcher(runtime: runtime), for: [OutputVolumeChanged.self])
+        for player in [PlayerNotificationWatcher.Player.spotify, .music] {
+            sources.add(PlayerNotificationWatcher(runtime: runtime, player: player), for: [NowPlayingChanged.self])
+        }
         // Built into Contents/Frameworks by the "Build now-playing helper" phase.
         let helper = Bundle.main.privateFrameworksURL?.appending(path: "TopNotchNowPlaying.dylib")
-        let systemNowPlayingWatcher = SystemNowPlayingWatcher(runtime: runtime, helperURL: helper)
-        systemNowPlayingWatcher.start()
-        self.systemNowPlayingWatcher = systemNowPlayingWatcher
+        sources.add(SystemNowPlayingWatcher(runtime: runtime, helperURL: helper), for: [NowPlayingChanged.self])
+        self.sources = sources
 
         onboarding.showIfNeeded()
     }

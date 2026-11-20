@@ -387,3 +387,91 @@ private final class FakeInstaller: BlockInstalling {
     #expect(freshText.keeps == nil)
     #expect(freshText.permissions == "Reads the clipboard")
 }
+
+// MARK: - Order, access, signer, the switch
+
+@MainActor
+@Test func orderIsStoredAndRestored() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let runtime = NotchRuntime()
+    for id: BlockID in ["shelf", "nowplaying", "rename"] { runtime.register(FakeBlock(id)) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+
+    settings.move("rename", to: 0, in: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["rename", "shelf", "nowplaying"])
+
+    // At the next launch, blocks register in any order; a new one is not in the stored list.
+    let relaunched = NotchRuntime()
+    for id: BlockID in ["hello", "shelf", "nowplaying", "rename"] { relaunched.register(FakeBlock(id)) }
+    BlockSettings(defaults: defaults, domain: name).applyOrder(to: relaunched)
+
+    #expect(relaunched.blocks.map(\.id) == ["rename", "shelf", "nowplaying", "hello"])
+}
+
+@MainActor
+@Test func defaultOrderIsShelfNowPlayingRename() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    #expect(settings.order == ["shelf", "nowplaying", "rename"])
+
+    let runtime = NotchRuntime()
+    for id: BlockID in ["rename", "hello", "nowplaying", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "rename", "hello"])
+    #expect(defaults.object(forKey: "block.order") == nil, "applying the default stores nothing")
+
+    settings.setOrder(["rename", "shelf"])
+    #expect(settings.order == ["rename", "shelf"])
+}
+
+@Test func installSheetListsAccessAndSigner() {
+    let signed = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
+                                     permissions: ["Old free text"], sourcePath: "/tmp/Hello.topblock",
+                                     access: ["Use the network", "Read files you choose"],
+                                     signer: "Jane Developer", isSigned: true)
+    let signedText = InstallSheetText(signed)
+    #expect(signedText.access == ["Use the network", "Read files you choose"])
+    #expect(signedText.signature == "Signed by Jane Developer")
+    #expect(signedText.signatureWarning == nil)
+
+    let unsigned = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
+                                       sourcePath: "/tmp/Hello.topblock")
+    let unsignedText = InstallSheetText(unsigned)
+    #expect(unsignedText.access.isEmpty)
+    #expect(unsignedText.signature == "Not signed")
+    #expect(unsignedText.signatureWarning == "TopNotch cannot tell who made this block or whether it was changed. Install it only if you built it or trust where it came from.")
+}
+
+@MainActor
+@Test func allowUnsignedSwitchWritesItsKey() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    #expect(!settings.allowsUnsigned)
+
+    settings.setAllowsUnsigned(true)
+    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == true)
+    #expect(BlockSettings(defaults: defaults, domain: name).allowsUnsigned)
+
+    settings.setAllowsUnsigned(false)
+    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == false)
+    #expect(!settings.allowsUnsigned)
+}
+
+@MainActor
+@Test func removingABlockRemovesItFromTheOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["shelf", "hello", "nowplaying", "rename"])
+
+    settings.clear("hello")
+
+    #expect(defaults.stringArray(forKey: "block.order") == ["shelf", "nowplaying", "rename"])
+    #expect(settings.order == ["shelf", "nowplaying", "rename"])
+}

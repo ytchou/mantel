@@ -25,8 +25,9 @@ final class EnablementSignal {
     var revision = 0
 }
 
-/// Remembers which blocks are on. UserDefaults keys "block.<id>.enabled";
-/// a block with no stored value is on.
+/// Remembers which blocks are on, their order, and whether unsigned packages
+/// are allowed. UserDefaults keys "block.<id>.enabled" (a block with no
+/// stored value is on), "block.order" and "block.allowUnsigned".
 @MainActor
 public final class BlockSettings {
     private let defaults: UserDefaults
@@ -58,11 +59,69 @@ public final class BlockSettings {
         Log.platform.info("Block \(id.rawValue, privacy: .public) turned \(enabled ? "on" : "off", privacy: .public)")
     }
 
+    // MARK: Order
+
+    static let orderKey = "block.order"
+    static let allowUnsignedKey = "block.allowUnsigned"
+
+    /// The order with nothing stored: Shelf, Now Playing, Screenshot Names.
+    /// A track change during a rename result then still shows.
+    public static let defaultOrder: [BlockID] = ["shelf", "nowplaying", "rename"]
+
+    /// The blocks' rank, highest first, as stored in "block.order". Ids of
+    /// blocks that are not registered may appear; registered blocks missing
+    /// from it rank last.
+    public var order: [BlockID] {
+        guard let stored = defaults.stringArray(forKey: Self.orderKey) else { return Self.defaultOrder }
+        return stored.map { BlockID(rawValue: $0) }
+    }
+
+    public func setOrder(_ ids: [BlockID]) {
+        defaults.set(ids.map(\.rawValue), forKey: Self.orderKey)
+    }
+
+    /// Puts the runtime's blocks in the stored order. Blocks not in it keep
+    /// their registration order after the others. Call once all blocks are registered.
+    public func applyOrder(to runtime: NotchRuntime) {
+        let registered = runtime.blocks.map(\.id)
+        let stored = order
+        let ranked = stored.filter(registered.contains) + registered.filter { !stored.contains($0) }
+        for (index, id) in ranked.enumerated() {
+            runtime.move(id, to: index)
+        }
+    }
+
+    /// Moves a block to `index` in the runtime and stores the new order.
+    /// Stored ids of blocks not registered now are kept, after the others.
+    public func move(_ id: BlockID, to index: Int, in runtime: NotchRuntime) {
+        runtime.move(id, to: index)
+        let ranked = runtime.blocks.map(\.id)
+        setOrder(ranked + order.filter { !ranked.contains($0) })
+        Log.platform.info("Block \(id.rawValue, privacy: .public) moved to \(index, privacy: .public)")
+    }
+
+    // MARK: Unsigned blocks
+
+    /// True when the owner allows packages without a valid signature.
+    /// "block.allowUnsigned"; off when nothing is stored.
+    public var allowsUnsigned: Bool { defaults.bool(forKey: Self.allowUnsignedKey) }
+
+    public func setAllowsUnsigned(_ allowed: Bool) {
+        defaults.set(allowed, forKey: Self.allowUnsignedKey)
+        Log.platform.info("Blocks without a signature \(allowed ? "allowed" : "refused", privacy: .public)")
+    }
+
+    // MARK: Remove
+
     /// Deletes every key of a removed block: its settings, "<id>.*", and the
-    /// app's keys for it, "block.<id>.*". Other blocks' keys are kept.
+    /// app's keys for it, "block.<id>.*", and takes it out of the stored
+    /// order. Other blocks' keys are kept.
     public func clear(_ id: BlockID) {
         for key in storedKeys(of: id) {
             defaults.removeObject(forKey: key)
+        }
+        if let stored = defaults.stringArray(forKey: Self.orderKey), stored.contains(id.rawValue) {
+            defaults.set(stored.filter { $0 != id.rawValue }, forKey: Self.orderKey)
         }
         EnablementSignal.shared.revision += 1
         Log.platform.info("Block \(id.rawValue, privacy: .public) settings cleared")

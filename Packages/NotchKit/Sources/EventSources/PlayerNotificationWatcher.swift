@@ -32,7 +32,7 @@ public final class PlayerNotificationWatcher {
 
     private let runtime: NotchRuntime
     private let player: Player
-    private var observers: [(center: NotificationCenter, token: any NSObjectProtocol)] = []
+    private(set) var observers: [(center: NotificationCenter, token: any NSObjectProtocol)] = []
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "nowplaying")
 
     public init(runtime: NotchRuntime, player: Player) {

@@ -3,7 +3,7 @@ import NotchCore
 import SwiftUI
 
 /// Root of the Settings window: a sidebar with "General" and "Blocks" first,
-/// then one entry per registered block, in registration order.
+/// then one entry per registered block, in rank order.
 public struct SettingsRootView: View {
     private let runtime: NotchRuntime
     private let settings: BlockSettings
@@ -163,11 +163,21 @@ private struct BlocksPane: View {
     @State private var failure: Failure?
     /// The block waiting for the user to confirm Remove.
     @State private var removing: BlockEntry?
+    /// Mirrors "block.allowUnsigned", which is not observable.
+    @State private var allowUnsigned: Bool
+
+    init(entries: [BlockEntry], runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)?) {
+        self.entries = entries
+        self.runtime = runtime
+        self.settings = settings
+        self.installer = installer
+        _allowUnsigned = State(initialValue: settings.allowsUnsigned)
+    }
 
     var body: some View {
         Form {
             Section {
-                ForEach(entries) { entry in
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                     row(entry)
                     if let reason = entry.turnedOffReason {
                         HStack {
@@ -180,16 +190,27 @@ private struct BlocksPane: View {
                             }
                         }
                     }
-                    if entry.isRemovable, installer != nil {
-                        HStack {
-                            Spacer()
+                    HStack {
+                        // Stock buttons with text, so the order can be changed from the keyboard.
+                        Button("Move Up") { settings.move(entry.id, to: index - 1, in: runtime) }
+                            .disabled(index == 0)
+                        Button("Move Down") { settings.move(entry.id, to: index + 1, in: runtime) }
+                            .disabled(index == entries.count - 1)
+                        Spacer()
+                        if entry.isRemovable, installer != nil {
                             Button("Update\u{2026}") { choosePackage(updating: entry.id) }
                             Button("Remove", role: .destructive) { removing = entry }
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(entry.title)
                 }
             } footer: {
-                Text("A block that is off receives no events and shows nothing in the notch.")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("When two blocks want the notch at once, the higher one gets it.")
+                    Text("A block that is off receives no events and shows nothing in the notch.")
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
             if installer != nil {
                 Section {
@@ -199,6 +220,15 @@ private struct BlocksPane: View {
                         Button("Install Block\u{2026}") { choosePackage() }
                     }
                 }
+            }
+            Section {
+                Toggle("Allow blocks without a signature", isOn: Binding(
+                    get: { allowUnsigned },
+                    set: { allowUnsigned = $0; settings.setAllowsUnsigned($0) }
+                ))
+            } footer: {
+                Text("Nobody vouches for an unsigned block, and it could have been changed by someone else, so turn this on only for blocks you built yourself.")
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
