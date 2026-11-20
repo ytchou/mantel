@@ -62,7 +62,6 @@ public final class BlockSettings {
     // MARK: Order
 
     static let orderKey = "block.order"
-    static let allowUnsignedKey = "block.allowUnsigned"
 
     /// The order with nothing stored: Shelf, Now Playing, Screenshot Names.
     /// A track change during a rename result then still shows.
@@ -81,14 +80,10 @@ public final class BlockSettings {
     }
 
     /// Puts the runtime's blocks in the stored order. Blocks not in it keep
-    /// their registration order after the others. Call once all blocks are registered.
+    /// their registration order after the others. Call once all blocks are
+    /// registered, and again after each later registration.
     public func applyOrder(to runtime: NotchRuntime) {
-        let registered = runtime.blocks.map(\.id)
-        let stored = order
-        let ranked = stored.filter(registered.contains) + registered.filter { !stored.contains($0) }
-        for (index, id) in ranked.enumerated() {
-            runtime.move(id, to: index)
-        }
+        runtime.setOrder(order)
     }
 
     /// Moves a block to `index` in the runtime and stores the new order.
@@ -104,10 +99,10 @@ public final class BlockSettings {
 
     /// True when the owner allows packages without a valid signature.
     /// "block.allowUnsigned"; off when nothing is stored.
-    public var allowsUnsigned: Bool { defaults.bool(forKey: Self.allowUnsignedKey) }
+    public var allowsUnsigned: Bool { defaults.bool(forKey: BlockDefaultsKey.allowUnsigned) }
 
     public func setAllowsUnsigned(_ allowed: Bool) {
-        defaults.set(allowed, forKey: Self.allowUnsignedKey)
+        defaults.set(allowed, forKey: BlockDefaultsKey.allowUnsigned)
         Log.platform.info("Blocks without a signature \(allowed ? "allowed" : "refused", privacy: .public)")
     }
 

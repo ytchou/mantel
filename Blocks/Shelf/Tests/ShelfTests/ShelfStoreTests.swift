@@ -51,7 +51,7 @@ let exampleLink = URL(string: "https://example.com/page")!
 @MainActor
 @Test func removingAnItemKeepsTheRestOfItsStack() throws {
     let store = ShelfStore(directory: try makeTemporaryDirectory())
-    let stack = try #require(store.add([.text("a"), .text("b")]))
+    let stack = try #require(store.add([.text("Ship the release notes by Friday"), .text("Dear Ana,\nThanks for the review.\nSee you Monday.")]))
     let firstItem = try #require(stack.items.first)
 
     store.remove(.item(firstItem.id))
@@ -67,7 +67,7 @@ let exampleLink = URL(string: "https://example.com/page")!
 @Test func removingAStackRemovesAllItsItems() throws {
     let store = ShelfStore(directory: try makeTemporaryDirectory())
     let kept = try #require(store.add([.text("keep")]))
-    let removed = try #require(store.add([.text("a"), .text("b")]))
+    let removed = try #require(store.add([.text("Ship the release notes by Friday"), .text("Dear Ana,\nThanks for the review.\nSee you Monday.")]))
 
     store.remove(.stack(removed.id))
     #expect(store.stacks.map(\.id) == [kept.id])
@@ -76,7 +76,7 @@ let exampleLink = URL(string: "https://example.com/page")!
 @MainActor
 @Test func clearRemovesEverything() throws {
     let store = ShelfStore(directory: try makeTemporaryDirectory())
-    store.add([.text("a")])
+    store.add([.text("Ship the release notes by Friday")])
     store.add([.link(exampleLink)])
     store.clear()
     #expect(store.isEmpty)
@@ -184,4 +184,66 @@ let exampleLink = URL(string: "https://example.com/page")!
     store.remove(.stack(stack.id), deleteOwnedFiles: true)
 
     #expect(exists(file))
+}
+
+// MARK: - Moved from the in-app shelf
+
+/// `<root>/TopNotch/BlockData/shelf`, the data folder, and `<root>/TopNotch/Shelf`,
+/// where the in-app shelf kept its data before the app moved it.
+private func movedLayout() throws -> (data: URL, old: URL) {
+    let topNotch = try makeTemporaryDirectory("ShelfMove").appending(path: "TopNotch", directoryHint: .isDirectory)
+    let data = topNotch.appending(path: "BlockData/shelf", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+    return (data, topNotch.appending(path: "Shelf", directoryHint: .isDirectory))
+}
+
+private func writeIndex(_ stacks: [ShelfStack], in directory: URL) throws {
+    try JSONEncoder().encode(stacks).write(to: directory.appending(path: "index.json"))
+}
+
+@MainActor
+@Test func ownedFilesOfTheInAppShelfAreKeptAfterTheFolderMoved() throws {
+    let (data, old) = try movedLayout()
+    let uuid = UUID().uuidString
+    // On disk where the app moved them; the index still names the old folder.
+    let moved = try makeFile(named: "Meeting notes.pdf", in: data.appending(path: "Files/\(uuid)", directoryHint: .isDirectory))
+    let oldPath = old.appending(path: "Files/\(uuid)/Meeting notes.pdf").path(percentEncoded: false)
+    let userFile = try makeFile(named: "Quarterly report.key", in: try makeTemporaryDirectory("ShelfUserFiles"))
+    let userPath = userFile.path(percentEncoded: false)
+    try writeIndex([ShelfStack(items: [
+        ShelfItem(content: .file(path: oldPath, bookmark: nil, isOwned: true)),
+        ShelfItem(content: .file(path: userPath, bookmark: nil, isOwned: false)),
+    ])], in: data)
+
+    let store = ShelfStore(directory: data)
+
+    #expect(store.itemCount == 2)
+    #expect(exists(moved))
+    let items = try #require(store.stacks.first?.items)
+    let owned = try #require(items.first)
+    #expect(store.fileURL(of: owned)?.standardizedFileURL == moved.standardizedFileURL)
+    guard case let .file(ownedPath, _, true) = owned.content else { Issue.record("not an owned file"); return }
+    #expect(!ownedPath.hasPrefix(old.path(percentEncoded: false)))
+    guard case let .file(keptPath, _, false) = items.last?.content else { Issue.record("not a user file"); return }
+    #expect(keptPath == userPath)
+
+    // Saved: a relaunch finds the new paths and still keeps the file.
+    let reloaded = ShelfStore(directory: data)
+    #expect(reloaded.stacks == store.stacks)
+    #expect(exists(moved))
+}
+
+@MainActor
+@Test func theOldFolderIsMatchedThroughSymlinks() throws {
+    let (data, old) = try movedLayout()
+    let uuid = UUID().uuidString
+    let moved = try makeFile(named: "Screen Recording.mov", in: data.appending(path: "Files/\(uuid)", directoryHint: .isDirectory))
+    let resolvedOld = old.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: "Shelf")
+    let oldPath = resolvedOld.appending(path: "Files/\(uuid)/Screen Recording.mov").path(percentEncoded: false)
+    try writeIndex([ShelfStack(items: [ShelfItem(content: .file(path: oldPath, bookmark: nil, isOwned: true))])], in: data)
+
+    let store = ShelfStore(directory: data)
+
+    #expect(store.itemCount == 1)
+    #expect(exists(moved))
 }

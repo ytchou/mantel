@@ -3,19 +3,19 @@ import Foundation
 import Testing
 @testable import BlockHost
 import NotchCore
-import PlatformServices
 
 @MainActor
 @Suite(.serialized)
 struct BlockStoreTests {
     private func store(
         _ runtime: NotchRuntime, bundledRoot: URL? = nil, blocksRoot: URL? = nil, dataRoot: URL? = nil,
-        isRegistered: @escaping @MainActor (BlockID) -> Bool = { _ in false }
+        oldDataRoot: URL? = nil, isRegistered: @escaping @MainActor (BlockID) -> Bool = { _ in false }
     ) -> BlockStore {
         let store = BlockStore(
             owner: { runtime.state.owner },
             blocksRoot: blocksRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)"),
             dataRoot: dataRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            oldDataRoot: oldDataRoot,
             bundledRoot: bundledRoot,
             defaults: testDefaults(),
             isRegistered: isRegistered
@@ -65,7 +65,8 @@ struct BlockStoreTests {
     }
 
     /// The app at launch: the three bundled blocks, registered, then put in
-    /// the stored order, which is the default when none is stored. Shelf and
+    /// the default order (`BlockSettings.defaultOrder`, applied here by hand
+    /// so these tests do not depend on the settings module). Shelf and
     /// Rename ran inside the app before: their old data folders move to
     /// `BlockData` now that bundled stand-ins have their ids.
     @Test func bundledBlocksAreShelfNowPlayingRenameInDefaultOrder() throws {
@@ -80,14 +81,14 @@ struct BlockStoreTests {
         }
         let runtime = NotchRuntime()
 
-        let standIns = store(runtime, bundledRoot: root, dataRoot: support.appending(path: "BlockData"))
+        let standIns = store(runtime, bundledRoot: root, dataRoot: support.appending(path: "BlockData"), oldDataRoot: support)
             .standIns(developmentPath: nil)
         // By folder name, as found.
         #expect(standIns.map(\.id) == ["nowplaying", "rename", "shelf"])
         #expect(standIns.allSatisfy { $0.info.source == .bundled })
 
         for block in standIns { runtime.register(block, enabled: false) }
-        BlockSettings(defaults: testDefaults(), domain: nil).applyOrder(to: runtime)
+        runtime.setOrder(["shelf", "nowplaying", "rename"])
         #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "rename"])
 
         #expect(try Data(contentsOf: support.appending(path: "BlockData/shelf/state")) == Data("Shelf".utf8))
@@ -237,12 +238,26 @@ struct BlockStoreTests {
         #expect(try Data(contentsOf: dataRoot.appending(path: "shelf/state")) == Data("Shelf".utf8))
         #expect(FileManager.default.fileExists(atPath: support.appending(path: "Shelf/state").path))
 
-        // A block still built into the app keeps its folder.
+        // A block not found at this launch keeps its folder.
         let other = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: other.appending(path: "Rename"), withIntermediateDirectories: true)
         BlockStore.moveOldDataFolders(from: other, to: other.appending(path: "BlockData"), for: ["shelf"])
         #expect(FileManager.default.fileExists(atPath: other.appending(path: "Rename").path))
         #expect(!FileManager.default.fileExists(atPath: other.appending(path: "BlockData/rename").path))
+    }
+
+    /// A custom data folder with no old root given moves nothing from its parent folder.
+    @Test func customDataRootWithoutOldRootMovesNothing() throws {
+        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
+        let root = support.appending(path: "Bundled/Blocks")
+        try bundledPackage(id: "shelf", name: "Shelf", in: root)
+        try FileManager.default.createDirectory(at: support.appending(path: "Shelf"), withIntermediateDirectories: true)
+
+        _ = store(NotchRuntime(), bundledRoot: root, dataRoot: support.appending(path: "BlockData"))
+            .standIns(developmentPath: nil)
+
+        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Shelf").path))
+        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "BlockData/shelf").path))
     }
 
     /// A bundle whose `Contents/Resources/manifest.json` is `json`.

@@ -321,8 +321,10 @@ struct NotchRuntimeTests {
         runtime.register(b)
         a.context?.present(peekPresentation(.standard))
 
+        runtime.dragSessionChanged(active: true)
         runtime.publish(DragSessionStarted(kinds: [.file]))
         #expect(runtime.state.owner == "b")
+        runtime.dragSessionChanged(active: false)
         runtime.publish(DragSessionEnded())
         #expect(runtime.state.owner == "b")
 
@@ -373,6 +375,41 @@ struct NotchRuntimeTests {
         runtime.setEnabled("a", false)
         #expect(!runtime.hasSubscribers(for: Ping.self))
         #expect(changes == 4)
+    }
+
+    @Test func unsubscribeAllDropsDemandAndKeepsTheBlockOn() {
+        let runtime = NotchRuntime()
+        var changes = 0
+        runtime.onDemandChanged = { changes += 1 }
+        let a = FakeBlock("a")
+        a.onActivate = { context in
+            context.subscribe(to: Ping.self) { _ in }
+            context.subscribe(to: Pong.self) { _ in }
+        }
+        runtime.register(a)
+        #expect(changes == 2)
+
+        a.context?.unsubscribeAll()
+        #expect(!runtime.hasSubscribers(for: Ping.self))
+        #expect(!runtime.hasSubscribers(for: Pong.self))
+        #expect(runtime.isEnabled("a"))
+        #expect(changes == 3)
+
+        a.context?.subscribe(to: Ping.self) { _ in }
+        #expect(runtime.hasSubscribers(for: Ping.self))
+        #expect(!runtime.hasSubscribers(for: Pong.self))
+        #expect(changes == 4)
+    }
+
+    @Test func setOrderPutsListedBlocksFirstAndKeepsTheRest() {
+        let runtime = NotchRuntime()
+        for id: BlockID in ["a", "b", "c", "d"] { runtime.register(FakeBlock(id)) }
+
+        runtime.setOrder(["c", "missing", "a"])
+        #expect(runtime.blocks.map(\.id) == ["c", "a", "b", "d"])
+
+        runtime.setOrder([])
+        #expect(runtime.blocks.map(\.id) == ["c", "a", "b", "d"])
     }
 
     @Test func defaultsKeepOldBlocksCompiling() {

@@ -97,9 +97,34 @@ struct PackageValidatorTests {
 
     @Test func refusesExecutableOutsidePackage() throws {
         // `../x` stays in the package but leaves `Contents/MacOS`.
-        for path in ["../x", "/bin/sh", "bin/../../x", "../../../x"] {
+        for path in ["../x", "/bin/sh", "bin/../../x", "../../../x", "", ".", ".."] {
             let error = try refusal(manifest(executable: path), writeExecutable: false)
             #expect(error == .executableOutsidePackage(path), "\(path) leaves the package")
+        }
+    }
+
+    @Test func refusesExecutableWithAFolder() throws {
+        // A file name only, as package-block.sh requires, even when the file
+        // is really there inside `Contents/MacOS`.
+        let nested = try package(manifest(executable: "bin/Tool"), writeExecutable: false)
+        let bin = macOS(nested).appending(path: "bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let tool = bin.appending(path: "Tool")
+        try Data("#!/bin/sh\n".utf8).write(to: tool)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        #expect(throws: BlockInstallError.executableOutsidePackage("bin/Tool")) {
+            try PackageValidator.load(nested, source: Self.installed)
+        }
+    }
+
+    @Test func refusesExecutableFolderLinkedOutOfThePackage() throws {
+        // `Contents/MacOS` itself is a link to a system folder, and the
+        // executable a program there.
+        let linked = try package(manifest(executable: "sh"), writeExecutable: false)
+        try FileManager.default.removeItem(at: macOS(linked))
+        try FileManager.default.createSymbolicLink(at: macOS(linked), withDestinationURL: URL(fileURLWithPath: "/bin"))
+        #expect(throws: BlockInstallError.executableOutsidePackage("sh")) {
+            try PackageValidator.load(linked, source: Self.installed)
         }
     }
 

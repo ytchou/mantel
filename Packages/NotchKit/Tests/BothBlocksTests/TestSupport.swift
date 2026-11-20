@@ -105,9 +105,14 @@ struct Fixture {
     }
 
     /// Publishes an event, and returns once every enabled block that listens
-    /// to it has taken it and everything it caused is handled.
+    /// to it has taken it and everything it caused is handled. A drag event
+    /// also sets the runtime's drag state first, as the drag monitor does.
     func publish<E: NotchEvent>(_ event: E) async {
-        await reach(EventCodec.payload(for: event)?.name) { runtime.publish(event) }
+        await reach(EventCodec.payload(for: event)?.name) {
+            if event is DragSessionStarted { runtime.dragSessionChanged(active: true) }
+            if event is DragSessionEnded { runtime.dragSessionChanged(active: false) }
+            runtime.publish(event)
+        }
     }
 
     func capture(_ url: URL) async {

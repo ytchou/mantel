@@ -62,6 +62,13 @@ private func screenshot(_ url: URL) -> HostToBlock {
 }
 
 private let owns = HostToBlock.owner(owns: true)
+private let ownsNot = HostToBlock.owner(owns: false)
+
+/// `message` as the app sends it again after the block restarted.
+private func replayed(_ message: HostToBlock) -> HostToBlock {
+    guard case let .event(payload, _, seq) = message else { return message }
+    return .event(payload: payload, replay: true, seq: seq)
+}
 
 /// Runs one external drag that drops `items` on the notch.
 private func dragAndDrop(_ items: [WireDrop], on run: Run) async throws {
@@ -215,7 +222,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func aDragEndingWithItemsHeldFallsBackToTheCountPeek() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a"), .text(string: "b"), .link(url: exampleURL)], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday."), .link(url: exampleURL)], on: run)
 
     let now = try #require(shown(run.host))
     #expect(now.opensAt == .peek)
@@ -279,7 +286,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func aSuccessfulDragOutTakesTheStackOffTheShelf() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
     try await dragAndDrop([.text(string: "keep")], on: run)
     let leaving = try #require(try stored(run).last)
     let leavingID = "stack:\(leaving.id.uuidString)"
@@ -309,7 +316,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func aSuccessfulDragOutOfOneItemLeavesTheRestOfTheStack() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
     let item = try #require(try stored(run).first?.items.first)
     let id = "item:\(item.id.uuidString)"
 
@@ -321,7 +328,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func aCancelledDragOutKeepsTheItems() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday")], on: run)
     let stack = try #require(try stored(run).first)
     let id = "stack:\(stack.id.uuidString)"
 
@@ -335,7 +342,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func draggingOutTheLastItemEmptiesTheNotch() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday")], on: run)
     let stack = try #require(try stored(run).first)
     let id = "stack:\(stack.id.uuidString)"
 
@@ -346,7 +353,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func clearShelfActionEmptiesItAndDismisses() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a"), .link(url: exampleURL)], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .link(url: exampleURL)], on: run)
 
     let clear = try #require(lastActions(run.host)?.first { $0.id == "shelf.clear" })
     #expect(clear.title == "Clear Shelf")
@@ -362,7 +369,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func removingTheLastItemFromTheViewDismisses() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday")], on: run)
     let stack = try #require(try stored(run).first)
     let remove = "remove:stack:\(stack.id.uuidString)"
     #expect(buttons(expandedRoot(shown(run.host))).contains(remove))
@@ -374,7 +381,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func heldItemsShowTheirPeekAfterARelaunch() async throws {
     let first = try await start()
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: first)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: first)
     first.host.close()
 
     let relaunched = try await start(folder: first.folder)
@@ -440,11 +447,52 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 // MARK: - New with the package
 
 @MainActor
+@Test func replayedDragAndHoverEventsPresentNothing() async throws {
+    let run = try await start()
+    // A crash mid-drop: the restarted block hears the drag again as replay.
+    try await send(run.host, replayed(dragStarted()), replayed(hover(true)), replayed(dragEnded))
+    #expect(presentCount(run.host) == 0)
+    #expect(shown(run.host) == nil)
+
+    // A live drag afterwards is a drop target as usual.
+    try await send(run.host, dragStarted())
+    #expect(shown(run.host)?.accepts == allKinds)
+}
+
+@MainActor
+@Test func replayedEventsDoNotReplaceTheHeldItemsPresentation() async throws {
+    let first = try await start()
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday")], on: first)
+    first.host.close()
+
+    let relaunched = try await start(folder: first.folder)
+    let presents = presentCount(relaunched.host)
+    try await send(relaunched.host, replayed(dragStarted()), replayed(hover(true)), replayed(dragEnded))
+    #expect(presentCount(relaunched.host) == presents)
+    #expect(shown(relaunched.host)?.priority == .ambient)
+}
+
+@MainActor
+@Test func losingTheNotchEndsBrowsing() async throws {
+    let run = try await start()
+    try await dragAndDrop([.text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
+    try await send(run.host, owns, hover(true))
+    #expect(shown(run.host)?.priority == .interactive)
+
+    try await send(run.host, ownsNot)
+    #expect(shown(run.host)?.priority == .ambient)
+
+    // Hovering while another block owns the notch does not make it browse.
+    try await send(run.host, hover(false), hover(true))
+    #expect(shown(run.host)?.priority == .ambient)
+}
+
+@MainActor
 @Test func modeDecidesPriorityLevelAndAccepts() async throws {
     let run = try await start()
 
     // Drop target.
-    try await send(run.host, dragStarted(), drop([.text(string: "a")]))
+    try await send(run.host, dragStarted(), drop([.text(string: "Ship the release notes by Friday")]))
     var now = try #require(shown(run.host))
     #expect(now.priority == .interactive && now.opensAt == .expanded && now.accepts == allKinds && now.wing == nil)
 
@@ -454,7 +502,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
     #expect(now.priority == .interactive && now.opensAt == .peek && now.accepts == allKinds && now.wing != nil)
 
     // Browsing: the late drop came, the pointer is still on the shelf.
-    try await send(run.host, drop([.text(string: "b")]))
+    try await send(run.host, drop([.text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")]))
     now = try #require(shown(run.host))
     #expect(now.priority == .interactive && now.opensAt == .peek && now.accepts == allKinds && now.wing != nil)
 
@@ -490,8 +538,8 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func dragBeganMarksTheNextDragSessionAsOwn() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a")], on: run)
-    try await dragAndDrop([.text(string: "b")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday")], on: run)
+    try await dragAndDrop([.text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
     let stacks = try stored(run)
     let first = "stack:\(try #require(stacks.first).id.uuidString)"
     let second = "stack:\(try #require(stacks.last).id.uuidString)"
@@ -580,7 +628,7 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func clickOnAStackShowsItsItems() async throws {
     let run = try await start()
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
     let stack = try #require(try stored(run).first)
     let stackID = "stack:\(stack.id.uuidString)"
 
@@ -604,13 +652,13 @@ private let allKinds: [DragStarted.Kind] = [.file, .link, .text]
 @MainActor
 @Test func showCountOffGivesAZeroWidthWing() async throws {
     let run = try await start(settings: ["showCount": .bool(false)])
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: run)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: run)
     let off = try #require(shown(run.host)?.wing)
     #expect(off.width == 0)
     #expect(texts(off.root).isEmpty)
 
     let on = try await start(settings: ["showCount": .bool(true)])
-    try await dragAndDrop([.text(string: "a"), .text(string: "b")], on: on)
+    try await dragAndDrop([.text(string: "Ship the release notes by Friday"), .text(string: "Dear Ana,\nThanks for the review.\nSee you Monday.")], on: on)
     let wing = try #require(shown(on.host)?.wing)
     #expect(wing.width == ShelfTrees.wingWidth)
     #expect(texts(wing.root) == ["2"])

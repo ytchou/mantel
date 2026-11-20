@@ -1,3 +1,4 @@
+import AppKit
 import BlockWire
 import Foundation
 import Testing
@@ -65,6 +66,7 @@ struct RemoteBlockTests {
 
         // A higher-priority block holds the notch: the stand-in withdraws at once.
         // `interactive` counts only during an interaction, here a drag.
+        rig.runtime.dragSessionChanged(active: true)
         rig.runtime.publish(DragSessionStarted(kinds: [.file]))
         other.show(.interactive)
         try rig.process.send(present(dismissIfNotShown: true))
@@ -284,14 +286,108 @@ struct RemoteBlockTests {
         #expect(rig.runtime.state.owner == "hello", "without dismissIfNotShown a late answer is shown")
     }
 
+    /// A real file in the temporary folder, which every block's sandbox reads.
+    private func temporaryFile(_ name: String) throws -> String {
+        let url = FileManager.default.temporaryDirectory.appending(path: "topnotch-paths-\(UUID().uuidString)-\(name)")
+        try Data("x".utf8).write(to: url)
+        return url.path
+    }
+
     @Test func previewAsksTheHostPreview() async throws {
         var shown: [[URL]] = []
         let rig = Rig(preview: { shown.append($0) })
         try await rig.process.start()
+        let a = try temporaryFile("a.png")
+        let b = try temporaryFile("b.pdf")
 
-        try rig.process.send(.preview(paths: ["/tmp/a.png", "/tmp/b.pdf"]))
+        try rig.process.send(.preview(paths: [a, b]))
         await waitUntil { !shown.isEmpty }
 
-        #expect(shown == [[URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.pdf")]])
+        #expect(shown == [[URL(fileURLWithPath: a), URL(fileURLWithPath: b)]])
+    }
+
+    /// Without `files.read`, a block may show only files its sandbox reads:
+    /// a path elsewhere, such as a key in the home folder, is dropped.
+    @Test func previewDropsPathsTheSandboxCannotRead() async throws {
+        var shown: [[URL]] = []
+        let rig = Rig(preview: { shown.append($0) })
+        try await rig.process.start()
+        let allowed = try temporaryFile("a.png")
+        let home = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh/id_rsa").path
+
+        try rig.process.send(.preview(paths: ["/etc/hosts", home, "relative.png", allowed]))
+        await waitUntil { !shown.isEmpty }
+        #expect(shown == [[URL(fileURLWithPath: allowed)]])
+
+        // Nothing readable: no preview at all.
+        shown = []
+        try rig.process.send(.preview(paths: ["/etc/hosts"]))
+        await settle()
+        #expect(shown.isEmpty)
+
+        // With `files.read`, any absolute path.
+        var reading = helloManifest
+        reading.access = [.filesRead]
+        var readingShown: [[URL]] = []
+        let readingRig = Rig(manifest: reading, preview: { readingShown.append($0) })
+        try await readingRig.process.start()
+        try readingRig.process.send(.preview(paths: ["/etc/hosts", "relative.png"]))
+        await waitUntil { !readingShown.isEmpty }
+        #expect(readingShown == [[URL(fileURLWithPath: "/etc/hosts")]])
+    }
+
+    /// The same rule for the files of an item drag-out.
+    @Test func dragOutLeavesOutFilesTheSandboxCannotRead() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        let allowed = try temporaryFile("a.png")
+        let drag = ViewNode.ItemDrag([.file(path: "/etc/hosts"), .file(path: allowed), .text(string: "hi")])
+
+        let payloads = rig.block.model.dragPayloads(for: drag)
+        #expect(payloads.count == 2)
+        #expect((payloads.first?.writer as? NSURL)?.path == allowed)
+        #expect(payloads.last?.writer is NSString)
+
+        var reading = helloManifest
+        reading.access = [.filesRead]
+        let readingRig = Rig(manifest: reading)
+        try await readingRig.process.start()
+        #expect(readingRig.block.model.dragPayloads(for: drag).count == 3)
+    }
+
+    /// The sandbox opens the screenshot folder the process started with. When
+    /// the folder changes, the next screenshot restarts the block first, and
+    /// the new process gets the event live after its `welcome`.
+    @Test func movedScreenshotFolderRestartsTheBlockBeforeTheEvent() async throws {
+        final class Folder { var url = URL(fileURLWithPath: "/tmp/topnotch-shots-a") }
+        let folder = Folder()
+        var manifest = helloManifest
+        manifest.events = ["screenshotCaptured"]
+        manifest.access = [.filesScreenshots]
+        let runtime = NotchRuntime()
+        let launcher = FakeLauncher()
+        let block = Rig.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: testDefaults(),
+                                screenshotFolder: { folder.url })
+        runtime.register(block)
+        let first = try #require(launcher.last)
+        try await first.start()
+
+        runtime.publish(ScreenshotCaptured(url: folder.url.appending(path: "a.png"), createdAt: Date()))
+        _ = await first.waitFor { if case .event = $0 { true } else { false } }
+        #expect(launcher.processes.count == 1, "same folder: no restart")
+
+        folder.url = URL(fileURLWithPath: "/tmp/topnotch-shots-b")
+        let shot = folder.url.appending(path: "b.png")
+        runtime.publish(ScreenshotCaptured(url: shot, createdAt: Date()))
+        #expect(launcher.processes.count == 2)
+        let second = try #require(launcher.last)
+        try await second.start()
+        _ = await second.waitFor { message in
+            if case let .event(.screenshotCaptured(value), false, _) = message { value.path == shot.path } else { false }
+        }
+        let live = second.events.filter { !$0.replay }.map(\.payload)
+        #expect(live.count == 1)
+        if case let .screenshotCaptured(value) = live.first { #expect(value.path == shot.path) } else { Issue.record("no live screenshot") }
+        #expect(block.health == .ok, "a restart for a new folder is not a failure")
     }
 }

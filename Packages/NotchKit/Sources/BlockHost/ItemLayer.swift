@@ -59,10 +59,12 @@ struct ItemDragPayload {
 
 extension RemoteModel {
     /// Pasteboard writers for a drag-out, each with the drag's image asset,
-    /// or a file icon or symbol when the asset is missing.
+    /// or a file icon or symbol when the asset is missing. A file that
+    /// `mayDragFile` refuses is left out.
     func dragPayloads(for drag: ViewNode.ItemDrag) -> [ItemDragPayload] {
         let asset = drag.image.flatMap { image($0) }
         return drag.items.compactMap { drop in
+            if case let .file(path) = drop, !mayDragFile(path) { return nil }
             guard let writer = ItemDragSource.writer(for: drop) else { return nil }
             return ItemDragPayload(writer: writer, image: asset ?? Self.fallbackImage(for: drop))
         }
@@ -143,8 +145,11 @@ final class ItemLayerNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let down = mouseDownEvent, let config, let drag = config.drag else { return }
+        // Cleared on any drag, before the drag guard: a press that moves is
+        // never a click, even on an item that cannot be dragged out.
+        guard let down = mouseDownEvent else { return }
         mouseDownEvent = nil // one session per press
+        guard let config, let drag = config.drag else { return }
         let payloads = config.model.dragPayloads(for: drag)
         guard !payloads.isEmpty else { return }
         let source = config.model.beginItemDrag(config.id)

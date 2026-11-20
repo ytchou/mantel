@@ -39,6 +39,13 @@ enum PackageValidator {
     /// Reads the package's `manifest.json` and checks it. Returns the manifest
     /// when the package may run. The signature is checked by `BlockStore`.
     static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
+        let manifest = try read(package)
+        try validate(manifest, package: package, source: source)
+        return manifest
+    }
+
+    /// Reads and decodes the package's `manifest.json`, without `validate`.
+    static func read(_ package: URL) throws(BlockInstallError) -> Manifest {
         if isOldFormat(package) { throw .oldPackageFormat }
         let manifest: Manifest
         let data: Data
@@ -54,7 +61,6 @@ enum PackageValidator {
         } catch {
             throw .unreadableManifest(describe(error))
         }
-        try validate(manifest, package: package, source: source)
         return manifest
     }
 
@@ -101,13 +107,13 @@ enum PackageValidator {
         let folder = executableFolder(in: package)
         let executable = folder.appending(path: path)
         let resolved = executable.standardizedFileURL.path
-        // `appending(path:)` treats a leading "/" as relative, so an absolute
-        // path is refused on its own. The path is checked as written, then
-        // with symbolic links followed, so a link cannot lead outside
-        // `Contents/MacOS`.
-        guard !path.hasPrefix("/"),
+        // A file name in `Contents/MacOS`, as `package-block.sh` requires: no
+        // "/", and not "", "." or "..". Then, with symbolic links followed,
+        // the executable must still be inside the package, so neither a link
+        // as the executable nor `Contents/MacOS` itself can lead outside it.
+        guard !path.isEmpty, path != ".", path != "..", !path.contains("/"),
               isInside(executable.standardizedFileURL, folder.standardizedFileURL),
-              isInside(executable.resolvingSymlinksInPath(), folder.resolvingSymlinksInPath())
+              isInside(executable.resolvingSymlinksInPath(), package.resolvingSymlinksInPath())
         else {
             throw .executableOutsidePackage(path)
         }

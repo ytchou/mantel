@@ -29,9 +29,8 @@ let package = Package(
         .testTarget(name: "NotchShellTests", dependencies: ["NotchShell"]),
         .testTarget(name: "EventSourcesTests", dependencies: ["EventSources"]),
         .testTarget(name: "PlatformServicesTests", dependencies: ["PlatformServices"]),
-        // PlatformServices only to put the bundled blocks in the app's default order.
         .testTarget(name: "BlockHostTests", dependencies: [
-            "BlockHost", "NotchCore", "PlatformServices", .product(name: "BlockWire", package: "BlockKit"),
+            "BlockHost", "NotchCore", .product(name: "BlockWire", package: "BlockKit"),
         ]),
         // All blocks in one runtime: what happens when they want the notch at once.
         // Each runs as a stand-in over an in-memory connection, scripted as the block.

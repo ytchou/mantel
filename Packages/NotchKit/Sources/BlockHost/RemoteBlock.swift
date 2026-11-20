@@ -27,7 +27,7 @@ public final class RemoteBlock: NotchBlock {
         BlockInfo(summary: manifest.summary, symbol: manifest.symbol.isEmpty ? "square.grid.2x2" : manifest.symbol,
                   // The access the sandbox grants, in the user's words, after
                   // what the author wrote: the Blocks page shows both.
-                  trigger: manifest.trigger, permissions: manifest.permissions + manifest.access.map(BlockStore.accessText),
+                  trigger: manifest.trigger, permissions: manifest.permissions + manifest.accessText,
                   version: manifest.version, source: source)
     }
 
@@ -86,8 +86,12 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var toldOwns = false
     /// True while an owner observation is armed, so re-activation never arms two.
     @ObservationIgnored private var observingOwner = false
-    /// Events subscribed to in the current context; an update adds new ones.
+    /// Events subscribed to in the current context; an update adds new ones
+    /// and, when it drops some, subscribes again from scratch.
     @ObservationIgnored private var subscribed: Set<WireEvent> = []
+    /// The screenshot folder the current process's sandbox opens, for
+    /// `files.screenshots`; nil without that access.
+    @ObservationIgnored private var launchedScreenshotFolder: URL?
 
     /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
@@ -106,7 +110,7 @@ public final class RemoteBlock: NotchBlock {
     /// - Parameters:
     ///   - manifest: the package's manifest, already checked.
     ///   - packageURL: the `.topblock` folder.
-    ///   - dataFolder: the folder the block may write to. Created when the block starts.
+    ///   - dataFolder: the folder the block may write to. Created at each launch of its process.
     ///   - owner: who owns the notch now, read inside observation tracking so
     ///     changes are pushed to the block. Pass `{ runtime.state.owner }`.
     ///   - launcher: starts the process. Nil starts it under the sandbox
@@ -150,6 +154,7 @@ public final class RemoteBlock: NotchBlock {
         health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
         settings = readSettings()
         wireItemCallbacks()
+        model.mayDragFile = { [weak self] path in self?.readablePaths([path]).isEmpty == false }
     }
 
     /// Where the reason for the last turn-off is stored.
@@ -282,7 +287,15 @@ public final class RemoteBlock: NotchBlock {
         self.source = source
         settings = readSettings()
         notes = [:]
-        guard context != nil else { return }
+        guard let context else { return }
+        // An update that drops events ends every subscription and makes them
+        // again, so the runtime no longer counts this block for the dropped
+        // ones and their sources can stop.
+        let events = Set(manifest.events.compactMap(WireEvent.init(rawValue:)))
+        if !subscribed.isSubset(of: events) {
+            context.unsubscribeAll()
+            subscribed = []
+        }
         subscribeToManifestEvents()
         launch()
     }
@@ -302,8 +315,12 @@ public final class RemoteBlock: NotchBlock {
         pingSeq = 0
         lastPong = 0
         lastAnswer = clock.now()
+        launchedScreenshotFolder = manifest.access.contains(.filesScreenshots) ? screenshotFolder() : nil
         let transport: any Transport
         do {
+            // Before the process starts, for both paths: the sandbox profile
+            // names real paths, and the block is told this folder at `welcome`.
+            try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
             if let launcher {
                 transport = try launcher(executableURL, self.generation)
             } else {
@@ -325,15 +342,14 @@ public final class RemoteBlock: NotchBlock {
     }
 
     /// Starts the block under the sandbox profile its manifest asks for.
-    /// The data folder is created first: the profile names real paths.
+    /// `launch` has created the data folder: the profile names real paths.
     /// The temporary folder is the app's, where the shell writes dropped
     /// files, so every block can read them.
     private func spawnSandboxed() throws -> any Transport {
-        try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
         let profile = SandboxProfile(
             network: manifest.access.contains(.network),
             readsHome: manifest.access.contains(.filesRead),
-            screenshotFolder: manifest.access.contains(.filesScreenshots) ? screenshotFolder() : nil,
+            screenshotFolder: launchedScreenshotFolder,
             package: packageURL,
             dataFolder: dataFolder,
             temporaryFolder: FileManager.default.temporaryDirectory,
@@ -465,7 +481,7 @@ public final class RemoteBlock: NotchBlock {
             }
         case let .preview(paths):
             guard isWelcomed else { return }
-            let urls = paths.filter { $0.hasPrefix("/") }.map { URL(fileURLWithPath: $0) }
+            let urls = readablePaths(paths).map { URL(fileURLWithPath: $0) }
             if !urls.isEmpty { preview(urls) }
         case let .settingNote(key, text):
             guard isWelcomed, manifest.settings.contains(where: { $0.key == key && $0.type == .note }) else { return }
@@ -503,7 +519,6 @@ public final class RemoteBlock: NotchBlock {
             let elapsed = launchedAt.duration(to: .now)
             log.info("\(self.id.rawValue, privacy: .public) \(version, privacy: .public) said hello after \(elapsed, privacy: .public), generation \(self.generation)")
         }
-        try? FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
         settings = readSettings()
         self.contract = contract
         send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
@@ -627,6 +642,15 @@ public final class RemoteBlock: NotchBlock {
     private func received(_ payload: EventPayload) {
         // A subscription kept from before an update that dropped this event.
         guard manifest.events.contains(payload.name.rawValue) else { return }
+        if case .screenshotCaptured = payload, screenshotFolderMoved() {
+            // The sandbox opens the folder the process started with; a block
+            // told of a screenshot elsewhere could not rename it. A new process
+            // gets the new folder; this event waits for its `welcome`.
+            log.info("\(self.id.rawValue, privacy: .public): screenshot folder changed, restarting")
+            withdraw()
+            endProcess()?.close()
+            launch()
+        }
         remember(payload)
         if isWelcomed {
             sendEvent(payload, replay: false)
@@ -634,6 +658,44 @@ public final class RemoteBlock: NotchBlock {
             // Live, though it waits for `welcome`.
             pending.append((payload, false))
         }
+    }
+
+    /// True when a process is running under `files.screenshots` and the
+    /// screenshot folder is no longer the one it was started with.
+    private func screenshotFolderMoved() -> Bool {
+        guard transport != nil, manifest.access.contains(.filesScreenshots) else { return false }
+        return screenshotFolder()?.standardizedFileURL != launchedScreenshotFolder?.standardizedFileURL
+    }
+
+    // MARK: Paths the block may show
+
+    /// The paths of `paths` the block's sandbox could read, for `preview`
+    /// and for the files of an item drag-out: any absolute path with
+    /// `files.read`; otherwise only inside its data folder, the temporary
+    /// folder, its package, or, with `files.screenshots`, the screenshot
+    /// folder its process started with. Compared with symbolic links
+    /// followed. Dropped paths are logged.
+    func readablePaths(_ paths: [String]) -> [String] {
+        let readsAll = manifest.access.contains(.filesRead)
+        let roots = readsAll ? [] : ([dataFolder, FileManager.default.temporaryDirectory, packageURL]
+            + [launchedScreenshotFolder].compactMap { $0 }).map(Self.resolvedPath)
+        return paths.filter { path in
+            guard path.hasPrefix("/") else {
+                log.error("\(self.id.rawValue, privacy: .public): relative path dropped: \(path, privacy: .private)")
+                return false
+            }
+            if readsAll { return true }
+            let target = Self.resolvedPath(URL(fileURLWithPath: path))
+            let allowed = roots.contains { root in target == root || target.hasPrefix(root + "/") }
+            if !allowed {
+                log.error("\(self.id.rawValue, privacy: .public): path outside what its sandbox reads dropped: \(path, privacy: .private)")
+            }
+            return allowed
+        }
+    }
+
+    private static func resolvedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     // MARK: Replay

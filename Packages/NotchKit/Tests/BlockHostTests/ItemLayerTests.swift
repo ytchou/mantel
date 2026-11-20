@@ -55,6 +55,29 @@ struct ItemLayerTests {
         #expect(calls.isEmpty)
     }
 
+    /// A press that moves is not a click, even on an item with no drag-out.
+    @Test func pressMoveReleaseWithoutADragSendsNoClick() throws {
+        let model = RemoteModel()
+        var calls: [ItemAction] = []
+        model.onItemAction = { _, action in calls.append(action) }
+        let view = ItemLayerNSView()
+        view.config = ItemLayer(id: "tile", model: model, drag: nil, menu: [], click: true, doubleClick: false, onHover: { _ in })
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+
+        view.mouseDown(with: try event(.leftMouseDown))
+        view.mouseDragged(with: try event(.leftMouseDragged))
+        view.mouseUp(with: try event(.leftMouseUp))
+        #expect(calls.isEmpty)
+
+        // A press and release without moving is a click.
+        view.mouseDown(with: try event(.leftMouseDown))
+        view.mouseUp(with: try event(.leftMouseUp))
+        #expect(calls == [.click])
+    }
+
     @Test func dragSourceAllowsCopyOutsideTheAppOnly() {
         #expect(ItemDragSource.operationMask(for: .outsideApplication) == [.copy, .generic])
         #expect(ItemDragSource.operationMask(for: .withinApplication) == [])

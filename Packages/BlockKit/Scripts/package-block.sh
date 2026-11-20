@@ -16,6 +16,11 @@
 # accepts only for development blocks or with "Allow blocks without a
 # signature" on. Never write an identity into this file.
 #
+# BLOCK_SIGN_TIMESTAMP, optional, sets codesign's secure timestamp: "none"
+# signs without one (no network needed, for local and offline builds); any
+# other value is passed as the timestamp server URL. Unset keeps codesign's
+# default.
+#
 # An existing package of the same name is replaced. The output folder
 # defaults to the current folder.
 #
@@ -82,7 +87,13 @@ plutil -insert CFBundlePackageType -string "BNDL" "$plist"
 
 # Copies can carry extended attributes, which codesign refuses.
 xattr -cr "$staging"
-codesign --force --sign "${BLOCK_SIGN_IDENTITY:--}" "$staging"
+timestamp=""
+case "${BLOCK_SIGN_TIMESTAMP:-}" in
+	'') ;;
+	none) timestamp="--timestamp=none" ;;
+	*) timestamp="--timestamp=$BLOCK_SIGN_TIMESTAMP" ;;
+esac
+codesign --force --sign "${BLOCK_SIGN_IDENTITY:--}" ${timestamp:+"$timestamp"} "$staging"
 
 rm -rf "$package"
 mv "$staging" "$package"

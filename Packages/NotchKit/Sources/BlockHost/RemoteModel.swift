@@ -35,10 +35,11 @@ public final class RemoteModel {
     /// That drag ended; true only when it ended with an operation.
     @ObservationIgnored var onDragEnded: @MainActor (String, Bool) -> Void = { _, _ in }
 
-    /// The dragging source of every drag-out. Held here, not by a view: the
-    /// notch rebuilds its views when the presentation changes, which happens
-    /// as the drag starts, and the source must outlive that.
+    /// The dragging source of every drag-out; see `ItemDragSource`.
     @ObservationIgnored let dragSource = ItemDragSource()
+    /// Whether a file path may go on the drag pasteboard. The stand-in allows
+    /// only paths its block's sandbox could read; other file entries are left out.
+    @ObservationIgnored var mayDragFile: @MainActor (String) -> Bool = { _ in true }
 
     /// Reduce Motion, injected for tests; nil follows the system setting.
     @ObservationIgnored var reduceMotion: Bool?

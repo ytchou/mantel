@@ -36,11 +36,17 @@ struct ShelfBlock: Block {
 
     func start(_ ctx: Context) {
         let session = ShelfSession(ctx, lateDropGrace: lateDropGrace, thumbnailer: thumbnailer)
-        ctx.on(.dragStarted) { _ in session.dragStarted() }
-        ctx.on(.dragEnded) { _ in session.dragEnded() }
+        // Replayed events (after a crash or an update) are history: a drag
+        // they report is over, so they present nothing and start no grace.
+        ctx.on(.dragStarted) { event in if !event.replay { session.dragStarted() } }
+        ctx.on(.dragEnded) { event in if !event.replay { session.dragEnded() } }
         ctx.on(.pointerHover) { event in
             guard let hover = event.pointerHover else { return }
-            session.pointerHoverChanged(isInside: hover.isInside)
+            if event.replay {
+                session.pointerHoverReplayed(isInside: hover.isInside)
+            } else {
+                session.pointerHoverChanged(isInside: hover.isInside)
+            }
         }
         // The shelf hears about screenshots from the event source, not from
         // the rename block, so each block works with the other one off. When
@@ -143,11 +149,24 @@ final class ShelfSession {
         refresh()
     }
 
+    /// Where the pointer was, from a replayed hover. State only: nothing is
+    /// presented until a live event or ownership change calls for it.
+    func pointerHoverReplayed(isInside: Bool) {
+        pointerInside = isInside
+    }
+
     /// The app says ownership after a present, so it may come after the
     /// hover that it answers: the shelf getting the notch under the pointer
-    /// is in use.
+    /// is in use. Losing the notch ends browsing: the pointer is on another
+    /// block's presentation.
     func ownerChanged(_ owns: Bool) {
-        guard owns, pointerInside, !isBrowsing else { return }
+        guard owns else {
+            guard isBrowsing else { return }
+            isBrowsing = false
+            refresh()
+            return
+        }
+        guard pointerInside, !isBrowsing else { return }
         isBrowsing = true
         refresh()
     }

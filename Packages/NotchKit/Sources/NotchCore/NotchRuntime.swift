@@ -67,6 +67,21 @@ public final class NotchRuntime {
         rankChanged()
     }
 
+    /// Put the blocks in `ids` first, in that order, then every other block
+    /// in its current relative order. Unknown ids are ignored. Re-ranks once.
+    public func setOrder(_ ids: [BlockID]) {
+        var rest = blocks
+        var ordered: [any NotchBlock] = []
+        for id in ids {
+            guard let index = rest.firstIndex(where: { $0.id == id }) else { continue }
+            ordered.append(rest.remove(at: index))
+        }
+        let next = ordered + rest
+        guard next.map(\.id) != blocks.map(\.id) else { return }
+        blocks = next
+        rankChanged()
+    }
+
     private func rankChanged() {
         arbiter.setRank(blocks.map(\.id), at: now())
         applyArbiter()
@@ -111,6 +126,13 @@ public final class NotchRuntime {
         demand.contains(ObjectIdentifier(type))
     }
 
+    /// A block subscribed to `type`. Adds it to the demand; reports a change
+    /// only when no enabled block listened to it before.
+    fileprivate func subscribed(to type: ObjectIdentifier) {
+        guard demand.insert(type).inserted else { return }
+        onDemandChanged?()
+    }
+
     /// Recompute which event types have subscribers; report a change once.
     fileprivate func subscriptionsChanged() {
         var next: Set<ObjectIdentifier> = []
@@ -123,18 +145,8 @@ public final class NotchRuntime {
     }
 
     /// Deliver an event to every enabled block subscribed to its type.
-    ///
-    /// `DragSessionStarted` and `DragSessionEnded` also start and end the
-    /// arbiter's drag interaction, before any block hears them.
     public func publish<E: NotchEvent>(_ event: E) {
         let type = ObjectIdentifier(E.self)
-        if event is DragSessionStarted {
-            arbiter.setDragActive(true, at: now())
-            applyArbiter()
-        } else if event is DragSessionEnded {
-            arbiter.setDragActive(false, at: now())
-            applyArbiter()
-        }
         // Iterate copies, so handlers may register, subscribe or present freely.
         for block in blocks {
             guard let context = contexts[block.id] else { continue }
@@ -155,6 +167,15 @@ public final class NotchRuntime {
         arbiter.setPointerInside(isInside, at: now())
         applyArbiter()
         publish(PointerHoverChanged(isInside: isInside))
+    }
+
+    /// A system drag started or ended. Starts or ends the arbiter's drag
+    /// interaction. The drag source calls it before it publishes
+    /// `DragSessionStarted` or `DragSessionEnded`, so the state is set before
+    /// any block hears the event.
+    public func dragSessionChanged(active: Bool) {
+        arbiter.setDragActive(active, at: now())
+        applyArbiter()
     }
 
     /// Forward input to the block that owns the notch. Dropped when idle.
@@ -238,6 +259,12 @@ private final class RuntimeContext: BlockContext {
         handlers[ObjectIdentifier(type), default: []].append { event in
             if let event = event as? E { handler(event) }
         }
+        runtime?.subscribed(to: ObjectIdentifier(type))
+    }
+
+    func unsubscribeAll() {
+        guard isActive, !handlers.isEmpty else { return }
+        handlers = [:]
         runtime?.subscriptionsChanged()
     }
 

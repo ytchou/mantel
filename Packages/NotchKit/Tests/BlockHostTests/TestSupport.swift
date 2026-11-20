@@ -168,6 +168,7 @@ struct Rig {
     static func standIn(
         manifest: Manifest = helloManifest, runtime: NotchRuntime, launcher: FakeLauncher,
         defaults: UserDefaults, heartbeat: ManualClock = ManualClock(), turnOffs: TurnOffs = TurnOffs(),
+        screenshotFolder: @escaping @MainActor () -> URL? = { nil },
         preview: @escaping @MainActor ([URL]) -> Void = { _ in }
     ) -> RemoteBlock {
         RemoteBlock(
@@ -177,6 +178,7 @@ struct Rig {
             dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-tests-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
             launcher: launcher.launcher,
+            screenshotFolder: screenshotFolder,
             defaults: defaults,
             clock: BlockClock(heartbeat),
             turnOff: { id in
@@ -349,11 +351,13 @@ func bundleManifest(_ folder: URL) throws -> Manifest {
     try Manifest.decode(Data(contentsOf: folder.appending(path: "Contents/Resources/manifest.json")))
 }
 
-/// Signature results set by the test, the same for every package.
+/// Signature results set by the test, the same for every package, except
+/// for results queued with `queue`, used first, one per check.
 final class FakeSignatures: SignatureChecking, @unchecked Sendable {
-    // @unchecked: `lock` guards `result`.
+    // @unchecked: `lock` guards `result` and `queued`.
     private let lock = NSLock()
     private var result: PackageSignature
+    private var queued: [PackageSignature] = []
 
     static let signer = "Test Signer"
 
@@ -363,7 +367,12 @@ final class FakeSignatures: SignatureChecking, @unchecked Sendable {
 
     func set(_ result: PackageSignature) { lock.withLock { self.result = result } }
 
-    func check(_ bundle: URL) -> PackageSignature { lock.withLock { result } }
+    /// Results for the next checks, in order; then `result` again.
+    func queue(_ results: [PackageSignature]) { lock.withLock { queued += results } }
+
+    func check(_ bundle: URL) -> PackageSignature {
+        lock.withLock { queued.isEmpty ? result : queued.removeFirst() }
+    }
 }
 
 // MARK: - The fixture block executable

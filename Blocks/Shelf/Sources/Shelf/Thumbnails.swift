@@ -110,6 +110,8 @@ final class Thumbnails {
         context.interpolationQuality = .high
         context.draw(image, in: rect)
         guard let square = context.makeImage() else { return nil }
+        // PNG encoding is copied in Rename's RenamePipeline on purpose: separate
+        // packages, and BlockKit may import only Foundation, CryptoKit and Dispatch.
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
         else { return nil }

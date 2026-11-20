@@ -115,6 +115,7 @@ struct InputTests {
         // As the item layer does: dragBegan, then the system drag starts and
         // the drag monitor publishes it.
         _ = rig.block.model.beginItemDrag("tile-1")
+        rig.runtime.dragSessionChanged(active: true)
         rig.runtime.publish(DragSessionStarted(kinds: [.file]))
         rig.block.model.onDragEnded("tile-1", true)
         _ = await rig.process.waitFor { if case .input(.dragEnded) = $0 { true } else { false } }

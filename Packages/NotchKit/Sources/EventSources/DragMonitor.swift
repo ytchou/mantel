@@ -84,9 +84,11 @@ public final class DragMonitor {
         case .started:
             let kinds = currentKinds()
             log.debug("drag session started kinds=\(kinds.count)")
+            runtime.dragSessionChanged(active: true)
             runtime.publish(DragSessionStarted(kinds: kinds))
         case .ended:
             log.debug("drag session ended")
+            runtime.dragSessionChanged(active: false)
             runtime.publish(DragSessionEnded())
         case nil:
             break

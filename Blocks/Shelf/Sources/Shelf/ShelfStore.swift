@@ -225,6 +225,43 @@ final class ShelfStore {
         } catch {
             log.error("could not read shelf index: \(error.localizedDescription)")
         }
+        if rewriteOldFolderPaths() {
+            save()
+            log.info("moved shelf paths to the data folder")
+        }
+    }
+
+    /// The in-app shelf kept its data in `TopNotch/Shelf`. The app moves that
+    /// folder to this data folder (`TopNotch/BlockData/shelf`), but the index
+    /// still names owned files by their old absolute paths. Rewrite those
+    /// before pruning, or the files would be pruned and swept. Bookmarks are
+    /// left alone: owned files have none, and a user's file never lived there.
+    private func rewriteOldFolderPaths() -> Bool {
+        let topNotch = directory.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent()
+        let oldFolders = [
+            topNotch.appending(path: "Shelf", directoryHint: .isDirectory),
+            topNotch.resolvingSymlinksInPath().appending(path: "Shelf", directoryHint: .isDirectory),
+        ].map { Self.folderPrefix($0) }
+        let newFolder = Self.folderPrefix(directory.standardizedFileURL)
+        var changed = false
+        for stackIndex in stacks.indices {
+            for itemIndex in stacks[stackIndex].items.indices {
+                let item = stacks[stackIndex].items[itemIndex]
+                guard case let .file(path, bookmark, isOwned) = item.content,
+                      let old = oldFolders.first(where: { path.hasPrefix($0) }) else { continue }
+                let newPath = newFolder + path.dropFirst(old.count)
+                stacks[stackIndex].items[itemIndex] = ShelfItem(
+                    id: item.id, content: .file(path: newPath, bookmark: bookmark, isOwned: isOwned))
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// A folder's path ending in "/", so a prefix test stops at a component.
+    private static func folderPrefix(_ url: URL) -> String {
+        let path = url.path(percentEncoded: false)
+        return path.hasSuffix("/") ? path : path + "/"
     }
 
     private func save() {

@@ -411,6 +411,26 @@ private final class FakeInstaller: BlockInstalling {
     #expect(relaunched.blocks.map(\.id) == ["rename", "shelf", "nowplaying", "hello"])
 }
 
+/// The app's register closure for a block installed after launch: register,
+/// then apply the stored order again. A block the order ranks first, such as
+/// one reinstalled after it was refused, goes first now, not only at the next launch.
+@MainActor
+@Test func applyingTheOrderAfterALateRegistrationRanksTheNewBlock() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["hello", "shelf", "nowplaying"])
+    let runtime = NotchRuntime()
+    for id: BlockID in ["shelf", "nowplaying"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("hello"))
+    #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "hello"], "register alone puts it last")
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["hello", "shelf", "nowplaying"])
+}
+
 @MainActor
 @Test func defaultOrderIsShelfNowPlayingRename() {
     let (defaults, name) = makeDefaults()
@@ -433,7 +453,7 @@ private final class FakeInstaller: BlockInstalling {
     let signed = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
                                      permissions: ["Old free text"], sourcePath: "/tmp/Hello.topblock",
                                      access: ["Use the network", "Read files you choose"],
-                                     signer: "Jane Developer", isSigned: true)
+                                     signer: "Jane Developer")
     let signedText = InstallSheetText(signed)
     #expect(signedText.access == ["Use the network", "Read files you choose"])
     #expect(signedText.signature == "Signed by Jane Developer")

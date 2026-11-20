@@ -99,6 +99,10 @@ public protocol BlockContext: AnyObject {
     /// deactivated; there is nothing to cancel.
     func subscribe<E: NotchEvent>(to type: E.Type, _ handler: @escaping @MainActor (E) -> Void)
 
+    /// End every subscription of this block, such as before subscribing again
+    /// to a changed set of events. The block stays turned on.
+    func unsubscribeAll()
+
     /// Ask the notch to show something. Replaces this block's earlier
     /// presentation. The arbiter decides whether it is shown now or waits.
     func present(_ presentation: Presentation)

@@ -30,6 +30,13 @@ public extension BlockInstalling {
     func canTurnOn(_ id: BlockID) -> Bool { true }
 }
 
+/// UserDefaults keys shared by the module that installs blocks and the
+/// settings window, which never import each other.
+public enum BlockDefaultsKey {
+    /// The "Allow blocks without a signature" switch; off when nothing is stored.
+    public static let allowUnsigned = "block.allowUnsigned"
+}
+
 /// What a package says about itself, shown before the user confirms an install.
 public struct BlockPackageSummary: Sendable, Equatable {
     public var id: BlockID
@@ -54,7 +61,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
     /// it is not signed or signed ad hoc.
     public var signer: String?
     /// True when the package has a valid signature that is not ad hoc.
-    public var isSigned: Bool
+    public var isSigned: Bool { signer != nil }
 
     public init(
         id: BlockID,
@@ -67,8 +74,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
         sourcePath: String,
         installedVersion: String? = nil,
         access: [String] = [],
-        signer: String? = nil,
-        isSigned: Bool = false
+        signer: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -81,7 +87,6 @@ public struct BlockPackageSummary: Sendable, Equatable {
         self.installedVersion = installedVersion
         self.access = access
         self.signer = signer
-        self.isSigned = isSigned
     }
 }
 

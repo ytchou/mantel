@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import os
 import Synchronization
+import UniformTypeIdentifiers
 
 /// One screenshot waiting to be named.
 struct RenameJob: Sendable, Identifiable {
@@ -44,8 +45,10 @@ struct RenamePipeline: Sendable {
             kCGImageSourceThumbnailMaxPixelSize: 96,
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        // PNG encoding is copied in Shelf's Thumbnails on purpose: separate
+        // packages, and BlockKit may import only Foundation, CryptoKit and Dispatch.
         let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data

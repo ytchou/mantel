@@ -8,7 +8,8 @@ import os
 /// stand-ins, registers them, and calls `stopAll()` when it quits.
 ///
 /// Three kinds of package, in this order: the bundled blocks, shipped inside
-/// the app bundle (now-playing); the installed blocks in `blocksRoot`; and
+/// the app bundle (Shelf, Now Playing, Screenshot Names); the installed
+/// blocks in `blocksRoot`; and
 /// the development block, one package run from where it is, named with the
 /// `-devBlock <path>` launch argument. Every block runs sandboxed; only
 /// installed packages have their signature checked (see `checkSignature`).
@@ -17,6 +18,7 @@ public final class BlockStore: BlockInstalling {
     private let owner: @MainActor () -> BlockID?
     private let blocksRoot: URL
     private let dataRoot: URL
+    private let oldDataRoot: URL?
     private let bundledRoot: URL?
     private let launcher: BlockLauncher?
     private let screenshotFolder: @MainActor () -> URL?
@@ -39,6 +41,10 @@ public final class BlockStore: BlockInstalling {
     ///     Each stand-in observes it to tell its block when it wins or loses the notch.
     ///   - blocksRoot: the folder of installed `<id>.topblock` packages.
     ///   - dataRoot: the folder holding one data folder per block.
+    ///   - oldDataRoot: the folder holding the data folders of the blocks that
+    ///     ran inside the app, moved into `dataRoot` once. Nil means
+    ///     `~/Library/Application Support/TopNotch` when `dataRoot` is the
+    ///     default one, and no move for any other `dataRoot`.
     ///   - bundledRoot: the folder of `.topblock` packages shipped with the
     ///     app; the app passes `Contents/Resources/Blocks`. Nil for none.
     ///   - launcher: starts block processes; nil starts each one sandboxed
@@ -61,6 +67,7 @@ public final class BlockStore: BlockInstalling {
         owner: @escaping @MainActor () -> BlockID?,
         blocksRoot: URL,
         dataRoot: URL,
+        oldDataRoot: URL? = nil,
         bundledRoot: URL? = nil,
         launcher: BlockLauncher? = nil,
         screenshotFolder: @escaping @MainActor () -> URL? = { nil },
@@ -74,6 +81,7 @@ public final class BlockStore: BlockInstalling {
         self.owner = owner
         self.blocksRoot = blocksRoot
         self.dataRoot = dataRoot
+        self.oldDataRoot = oldDataRoot ?? (dataRoot == Self.defaultDataRoot ? Self.supportRoot : nil)
         self.bundledRoot = bundledRoot
         self.launcher = launcher
         self.screenshotFolder = screenshotFolder
@@ -103,11 +111,10 @@ public final class BlockStore: BlockInstalling {
     static func installedFromKey(_ id: String) -> String { "block.\(id).installedFrom" }
 
     /// Where the signer of an installed block is kept; an update must have
-    /// the same one. Under `block.<id>.`, so Remove clears it.
+    /// the same one. Under `block.<id>.`, so `clearKeys` finds it; Remove
+    /// also deletes it itself, as `clearKeys` finds nothing when the settings
+    /// have no persistent domain (`BlockSettings` with a nil domain).
     static func signerKey(_ id: String) -> String { "block.\(id).signer" }
-
-    /// The "Allow blocks without a signature" switch (`BlockSettings`), off by default.
-    static let allowUnsignedKey = "block.allowUnsigned"
 
     /// The stand-ins to register, in order: the bundled blocks by folder
     /// name, the installed blocks by id, then the development block.
@@ -136,8 +143,10 @@ public final class BlockStore: BlockInstalling {
         made += blocks.compactMap { $0 as? RemoteBlock }
         refused += blocks.compactMap { $0 as? RefusedBlock }
         // Stand-ins start their processes only when registered, after this.
-        Self.moveOldDataFolders(from: dataRoot.deletingLastPathComponent(), to: dataRoot,
-                                for: Set(blocks.compactMap { ($0 as? RemoteBlock)?.id.rawValue }))
+        if let oldDataRoot {
+            Self.moveOldDataFolders(from: oldDataRoot, to: dataRoot,
+                                    for: Set(blocks.compactMap { ($0 as? RemoteBlock)?.id.rawValue }))
+        }
         return blocks
     }
 
@@ -150,8 +159,8 @@ public final class BlockStore: BlockInstalling {
     static let oldDataFolders: [(folder: String, id: String)] = [("Shelf", "shelf"), ("Rename", "rename")]
 
     /// Moves each old data folder to `<dataRoot>/<id>`, once: only when the
-    /// target does not exist yet. Only for `ids`, the blocks that now run as
-    /// packages, so a block still built into the app keeps its folder.
+    /// target does not exist yet. Only for `ids`, the blocks found at this
+    /// launch, so a folder is moved only when its block is there to use it.
     static func moveOldDataFolders(from oldRoot: URL, to dataRoot: URL, for ids: Set<String>) {
         let files = FileManager.default
         let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
@@ -193,9 +202,8 @@ public final class BlockStore: BlockInstalling {
             permissions: manifest.permissions,
             sourcePath: url.path,
             installedVersion: installed?.manifest.version,
-            access: manifest.access.map(Self.accessText),
-            signer: signer,
-            isSigned: signer != nil
+            access: manifest.accessText,
+            signer: signer
         )
     }
 
@@ -222,6 +230,23 @@ public final class BlockStore: BlockInstalling {
             try? FileManager.default.removeItem(at: incoming)
             log.error("copy of \(url.path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             throw BlockInstallError.copyFailed(error.localizedDescription)
+        }
+        // The copy is what runs, so its signature is checked too, by the same
+        // rule, and must give the same signer: the source may have changed
+        // between its check and the copy.
+        // Checked at install and at each launch, not at each restart of the
+        // process: a package changed on disk while the app runs keeps running
+        // until the next launch. If that matters, check the installed copy in
+        // `RemoteBlock.launch` for installed sources (one codesign check per start).
+        do throws(BlockInstallError) {
+            let copied = try checkSignature(incoming, id: manifest.id)
+            guard copied == signer else {
+                throw BlockInstallError.badSignature("the package changed while it was copied")
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: incoming)
+            log.error("copy of \(url.path, privacy: .public) refused: \(error.errorDescription ?? String(describing: error), privacy: .public)")
+            throw error
         }
 
         let existing = installedBlock(manifest.id)
@@ -274,6 +299,8 @@ public final class BlockStore: BlockInstalling {
         }
         unregister(id)
         clearKeys(id)
+        // Explicit: `clearKeys` is a no-op when the settings have no domain,
+        // and a stale signer would refuse a reinstall from another signer.
         defaults.removeObject(forKey: Self.signerKey(id.rawValue))
         let data = dataRoot.appending(path: id.rawValue)
         if FileManager.default.fileExists(atPath: data.path) { try? FileManager.default.removeItem(at: data) }
@@ -307,15 +334,6 @@ public final class BlockStore: BlockInstalling {
         }
     }
 
-    /// An access token in the user's words, for the install sheet and the Blocks page.
-    nonisolated static func accessText(_ access: Access) -> String {
-        switch access {
-        case .network: "Use the network"
-        case .filesRead: "Read your files"
-        case .filesScreenshots: "Rename files in the screenshot folder"
-        }
-    }
-
     // MARK: Signature
 
     /// The rule for an installed package, at install and at every launch:
@@ -337,7 +355,7 @@ public final class BlockStore: BlockInstalling {
             return name
         case .adHoc, .unsigned:
             if let pinned { throw .differentSigner(installed: pinned, found: "no signature") }
-            guard defaults.bool(forKey: Self.allowUnsignedKey) else { throw .unsigned }
+            guard defaults.bool(forKey: BlockDefaultsKey.allowUnsigned) else { throw .unsigned }
             return nil
         }
     }
@@ -399,13 +417,15 @@ public final class BlockStore: BlockInstalling {
                     log.error("installed block at \(package.path, privacy: .public) skipped: its folder name is not a block id")
                     return nil
                 }
-                let decoded = try? Manifest.decode(Data(contentsOf: PackageValidator.manifestURL(in: package)))
+                let read = Result { () throws(BlockInstallError) in try PackageValidator.read(package) }
+                let decoded = try? read.get()
                 if let decoded, decoded.id != id {
                     log.error("installed block at \(package.path, privacy: .public) skipped: its manifest id is \(decoded.id, privacy: .public)")
                     return nil
                 }
                 do throws(BlockInstallError) {
-                    let manifest = try PackageValidator.load(package, source: source)
+                    let manifest = try read.get()
+                    try PackageValidator.validate(manifest, package: package, source: source)
                     // Checked again at every launch: a package changed on disk does not run.
                     if let signer = try checkSignature(package, id: id) {
                         defaults.set(signer, forKey: Self.signerKey(id))

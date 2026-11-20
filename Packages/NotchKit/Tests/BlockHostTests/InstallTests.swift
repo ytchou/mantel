@@ -173,6 +173,21 @@ struct InstallTests {
         #expect(setup.launcher.last!.events.first?.payload.name == .outputVolume)
     }
 
+    /// An update that drops an event no longer counts as listening to it, so
+    /// the event's source can stop; the events it keeps still have it.
+    @Test func updateThatDropsAnEventDropsItsDemand() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(version: "0.2", events: ["pointerHover", "outputVolume"]))
+        #expect(setup.runtime.hasSubscribers(for: OutputVolumeChanged.self))
+        #expect(setup.runtime.hasSubscribers(for: PointerHoverChanged.self))
+
+        try setup.store.install(try setup.package(version: "0.3", events: ["pointerHover"]))
+
+        #expect(!setup.runtime.hasSubscribers(for: OutputVolumeChanged.self))
+        #expect(setup.runtime.hasSubscribers(for: PointerHoverChanged.self))
+        #expect(setup.runtime.isEnabled("hello"))
+    }
+
     @Test func failedCopyKeepsOldPackage() async throws {
         let setup = Setup()
         try setup.store.install(try setup.package(version: "0.2"))
@@ -355,7 +370,7 @@ struct InstallTests {
         #expect(setup.runtime.blocks.isEmpty)
 
         // A broken seal is refused whatever the switch says.
-        setup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        setup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
         setup.signatures.set(.invalid(reason: "a file changed"))
         #expect(throws: BlockInstallError.badSignature("a file changed")) { try setup.store.install(try setup.package()) }
 
@@ -381,7 +396,7 @@ struct InstallTests {
         #expect(throws: expected) { try setup.store.install(newer) }
 
         // Unsigned, even with the switch on, does not replace a signed block.
-        setup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        setup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
         setup.signatures.set(.unsigned)
         #expect(throws: BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "no signature")) {
             try setup.store.install(newer)
@@ -394,6 +409,32 @@ struct InstallTests {
         setup.signatures.set(.valid(signer: FakeSignatures.signer, teamID: ""))
         try setup.store.install(newer)
         #expect(block.manifest.version == "0.3")
+    }
+
+    /// The installed copy is checked too: a source changed between its check
+    /// and the copy installs nothing and leaves nothing behind.
+    @Test func copyWithAnotherSignatureIsRefused() throws {
+        let setup = Setup()
+        // The source passes; the copy reports another signer.
+        setup.signatures.queue([.valid(signer: FakeSignatures.signer, teamID: ""),
+                                .valid(signer: "Someone Else", teamID: "")])
+        #expect(throws: BlockInstallError.badSignature("the package changed while it was copied")) {
+            try setup.store.install(try setup.package())
+        }
+        #expect(setup.installedPackages().isEmpty, "no package and no partial copy")
+        #expect(setup.runtime.blocks.isEmpty)
+        #expect(setup.defaults.object(forKey: BlockStore.signerKey("hello")) == nil)
+
+        // The copy's seal is broken.
+        setup.signatures.queue([.valid(signer: FakeSignatures.signer, teamID: ""), .invalid(reason: "a file changed")])
+        #expect(throws: BlockInstallError.badSignature("a file changed")) {
+            try setup.store.install(try setup.package())
+        }
+        #expect(setup.installedPackages().isEmpty)
+
+        // Both checks agree: installed.
+        try setup.store.install(try setup.package())
+        #expect(setup.installedPackages() == ["hello.topblock"])
     }
 
     @Test func changedPackageIsRefusedAtLaunch() throws {
@@ -411,10 +452,10 @@ struct InstallTests {
 
         // Unsigned at launch, with the switch off, is refused too.
         let unsignedSetup = Setup()
-        unsignedSetup.defaults.set(true, forKey: BlockStore.allowUnsignedKey)
+        unsignedSetup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
         unsignedSetup.signatures.set(.unsigned)
         try unsignedSetup.store.install(try unsignedSetup.package())
-        unsignedSetup.defaults.set(false, forKey: BlockStore.allowUnsignedKey)
+        unsignedSetup.defaults.set(false, forKey: BlockDefaultsKey.allowUnsigned)
         let again = unsignedSetup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
         #expect(again.first is RefusedBlock)
     }

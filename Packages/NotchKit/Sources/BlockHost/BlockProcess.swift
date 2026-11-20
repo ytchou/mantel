@@ -58,8 +58,8 @@ public final class BlockProcess: Transport, @unchecked Sendable {
 
     /// Starts `executable` with the socket as fd 3 and `generation` in its
     /// environment, without a sandbox. Blocks the app runs use
-    /// `spawn(executable:generation:sandbox:)`.
-    public static func spawn(executable: URL, generation: Int) throws(BlockProcessError) -> BlockProcess {
+    /// `spawn(executable:generation:sandbox:)`. Internal: for tests only.
+    static func spawn(executable: URL, generation: Int) throws(BlockProcessError) -> BlockProcess {
         try spawn(executable: executable, generation: generation, sandbox: nil)
     }
 

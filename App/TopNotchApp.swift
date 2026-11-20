@@ -37,8 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defaults: .standard,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
-        // A block installed from the Blocks page joins like one found at launch.
-        register: { [settings, runtime] block in runtime.register(block, enabled: settings.isEnabled(block.id)) },
+        // A block installed from the Blocks page joins like one found at launch,
+        // then takes its place in the stored order (a new id goes last).
+        register: { [settings, runtime] block in
+            runtime.register(block, enabled: settings.isEnabled(block.id))
+            settings.applyOrder(to: runtime)
+        },
         unregister: { [runtime] id in runtime.unregister(id) },
         clearKeys: { [settings] id in settings.clear(id) },
         // A package whose id the runtime already has is refused, as the runtime would drop it.
