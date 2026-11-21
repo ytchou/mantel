@@ -83,13 +83,25 @@ struct InstallTests {
         #expect(summary.name == "Hello")
         #expect(summary.version == "0.2")
         #expect(summary.contract == Contract.current)
-        #expect(summary.events == [BlockStore.eventText(.pointerHover), BlockStore.eventText(.outputVolume)])
+        #expect(summary.events == ["Pointer over the notch", "Volume changes"])
         #expect(summary.newEvents.isEmpty)
         #expect(summary.permissions == ["Nothing special"])
         #expect(summary.sourcePath == package.path)
         #expect(summary.installedVersion == nil)
         #expect(setup.installedPackages().isEmpty)
         #expect(setup.runtime.blocks.isEmpty)
+    }
+
+    @Test func inspectReturnsTheEntriesOfThePackagesEvents() throws {
+        let setup = Setup()
+        let order = ["screenshotCaptured", "pointerHover", "nowPlaying"]
+        let package = try setup.package(events: order)
+
+        let summary = try setup.store.inspect(package)
+
+        #expect(summary.eventEntries.count == order.count)
+        #expect(summary.eventEntries == order.map { EventCatalog.entry(for: WireEvent(rawValue: $0)!) })
+        #expect(summary.eventEntries.map(\.name) == summary.events)
     }
 
     @Test func installCopiesRegistersAndTurnsOn() throws {
@@ -145,7 +157,7 @@ struct InstallTests {
         let newer = try setup.package(version: "0.3", events: ["pointerHover", "outputVolume"])
         let summary = try setup.store.inspect(newer)
         #expect(summary.installedVersion == "0.2")
-        #expect(summary.newEvents == [BlockStore.eventText(.outputVolume)])
+        #expect(summary.newEvents == ["Volume changes"])
 
         try setup.store.install(newer)
 
@@ -480,14 +492,16 @@ struct InstallTests {
         let package = try setup.package()
         var manifest = try bundleManifest(package)
         manifest.access = [.network, .filesScreenshots]
+        manifest.hosts = ["api.example.com", "*.example.org"]
         try Framing.encoder().encode(manifest).write(to: package.appending(path: "Contents/Resources/manifest.json"))
 
+        let network = "Use the network, only to reach: api.example.com, *.example.org"
         let summary = try setup.store.inspect(package)
-        #expect(summary.access == ["Use the network", "Rename files in the screenshot folder"])
+        #expect(summary.access == [network, "Rename files in the screenshot folder"])
 
         try setup.store.install(package)
         let block = try #require(setup.block("hello"))
-        #expect(block.info.permissions == ["Nothing special", "Use the network", "Rename files in the screenshot folder"])
+        #expect(block.info.permissions == ["Nothing special", network, "Rename files in the screenshot folder"])
     }
 }
 

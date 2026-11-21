@@ -45,6 +45,33 @@ public final class Context {
     /// Whether the block's presentation is the one on screen. Becomes false
     /// when it is dismissed, replaced or its time runs out.
     public private(set) var ownsNotch = false
+    /// The local port of the app's network gate, from `welcome`. Nil for a
+    /// block whose manifest names no `hosts`, or when the gate did not open.
+    public private(set) var gatePort: Int?
+
+    /// The session to reach the hosts in the manifest's `hosts`, over HTTPS.
+    /// Its requests go through the app's network gate on `127.0.0.1` at
+    /// `gatePort`, which passes `https://` requests to the named hosts and
+    /// refuses the rest. Use this session for every request: the sandbox
+    /// refuses any other connection, so a `URLSession` the block builds
+    /// itself (`URLSession.shared` included) does not work, and plain
+    /// `http://` does not either. Without a gate port it has no proxy and
+    /// every request fails.
+    public private(set) lazy var urlSession = URLSession(configuration: Self.sessionConfiguration(gatePort: gatePort))
+
+    /// An ephemeral configuration whose HTTPS proxy is the gate at
+    /// `127.0.0.1:<gatePort>`; no proxy without a port.
+    nonisolated static func sessionConfiguration(gatePort: Int?) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        if let gatePort {
+            configuration.connectionProxyDictionary = [
+                kCFNetworkProxiesHTTPSEnable as String: 1,
+                kCFNetworkProxiesHTTPSProxy as String: "127.0.0.1",
+                kCFNetworkProxiesHTTPSPort as String: gatePort,
+            ]
+        }
+        return configuration
+    }
 
     private let transport: any Transport
     private(set) var generation: Int
@@ -216,10 +243,11 @@ public final class Context {
     /// once, when the first `welcome` arrives.
     func receive(_ envelope: Envelope<HostToBlock>, start: (Context) -> Void) {
         switch envelope.message {
-        case let .welcome(_, settings, dataFolder, _):
+        case let .welcome(_, settings, dataFolder, gatePort):
             generation = envelope.generation
             self.settings = settings
             self.dataFolder = URL(fileURLWithPath: dataFolder, isDirectory: true)
+            self.gatePort = gatePort
             if !started {
                 started = true
                 start(self)

@@ -50,7 +50,7 @@ public struct SettingsRootView: View {
                     BlockPane(block: block, runtime: runtime, settings: settings)
                 }
             case .general, nil:
-                GeneralPane()
+                GeneralPane(runtime: runtime)
             }
         }
         .frame(minWidth: 560, minHeight: 420)
@@ -378,6 +378,7 @@ private struct BlockPane: View {
 // MARK: - General pane
 
 private struct GeneralPane: View {
+    let runtime: NotchRuntime
     @State private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
@@ -395,8 +396,7 @@ private struct GeneralPane: View {
             }
 
             Section("Permissions") {
-                FolderAccessRow()
-                AppleIntelligenceRow()
+                ForEach(PermissionRow.rows(in: runtime), id: \.self) { $0.view }
             }
 
             Section("Logs") {

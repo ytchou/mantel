@@ -197,8 +197,9 @@ public final class BlockStore: BlockInstalling {
             name: manifest.name,
             version: manifest.version,
             contract: manifest.contract,
-            events: events.map(Self.eventText),
-            newEvents: installed == nil ? [] : events.filter { !oldEvents.contains($0.rawValue) }.map(Self.eventText),
+            events: events.map { EventCatalog.entry(for: $0).name },
+            newEvents: installed == nil ? [] : events.filter { !oldEvents.contains($0.rawValue) }.map { EventCatalog.entry(for: $0).name },
+            eventEntries: events.map(EventCatalog.entry(for:)),
             permissions: manifest.permissions,
             sourcePath: url.path,
             installedVersion: installed?.manifest.version,
@@ -320,18 +321,6 @@ public final class BlockStore: BlockInstalling {
     /// False for an installed package refused at launch: it cannot start.
     public func canTurnOn(_ id: BlockID) -> Bool {
         refusedBlock(id.rawValue) == nil
-    }
-
-    /// An event name in the user's words, for the install sheet.
-    nonisolated static func eventText(_ event: WireEvent) -> String {
-        switch event {
-        case .pointerHover: "Pointer over the notch"
-        case .outputVolume: "Volume changes"
-        case .nowPlaying: "Music playing"
-        case .screenshotCaptured: "Screenshots"
-        case .dragStarted: "Dragging starts"
-        case .dragEnded: "Dragging ends"
-        }
     }
 
     // MARK: Signature

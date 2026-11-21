@@ -48,6 +48,9 @@ public struct BlockPackageSummary: Sendable, Equatable {
     public var events: [String]
     /// Events the installed version did not listen to. Empty for a new install.
     public var newEvents: [String]
+    /// What each event the block listens to reveals and needs, in the
+    /// manifest's order.
+    public var eventEntries: [EventEntry]
     /// What the block needs from the system, in the user's words.
     public var permissions: [String]
     /// Path of the package being inspected.
@@ -70,6 +73,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
         contract: Int,
         events: [String] = [],
         newEvents: [String] = [],
+        eventEntries: [EventEntry] = [],
         permissions: [String] = [],
         sourcePath: String,
         installedVersion: String? = nil,
@@ -82,6 +86,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
         self.contract = contract
         self.events = events
         self.newEvents = newEvents
+        self.eventEntries = eventEntries
         self.permissions = permissions
         self.sourcePath = sourcePath
         self.installedVersion = installedVersion
@@ -126,6 +131,11 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case oldPackageFormat
     /// The manifest asks for access this version of TopNotch does not know.
     case unknownAccess(String)
+    /// The manifest asks for `network` but names no `hosts`.
+    case networkWithoutHosts
+    /// The manifest's `hosts` cannot be used; the detail says why, such as
+    /// a bare `*`, or hosts without `network`.
+    case invalidHosts(String)
 
     public var errorDescription: String? {
         switch self {
@@ -166,6 +176,10 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "This block uses the old package format, which this version of TopNotch no longer runs. Ask the block's author to package it again with the current package-block.sh."
         case let .unknownAccess(token):
             return "The block asks for access \"\(token)\", which this version of TopNotch does not know. Update TopNotch, or ask the block's author for a matching version."
+        case .networkWithoutHosts:
+            return "The block asks to use the network but does not name the hosts it reaches, so TopNotch cannot limit it. Ask the block's author to list its hosts in the manifest."
+        case let .invalidHosts(detail):
+            return "The block's list of hosts cannot be used: \(detail). Ask the block's author to fix the manifest."
         }
     }
 }

@@ -31,6 +31,29 @@ struct EventCodecTests {
         #expect(big == .nowPlaying(NowPlaying(player: "Spotify", state: .playing, artwork: nil)))
     }
 
+    // MARK: Catalog
+
+    @Test func everyWireEventHasACatalogEntry() {
+        for event in WireEvent.allCases {
+            let entry = EventCatalog.entry(for: event)
+            #expect(!entry.name.isEmpty, "\(event) has no name")
+            #expect(!entry.reveals.isEmpty, "\(event) does not say what it reveals")
+        }
+    }
+
+    @Test func theScreenshotEventNamesItsPermission() {
+        #expect(EventCatalog.entry(for: .screenshotCaptured).permission == .screenshotFolder)
+        for event in WireEvent.allCases where event != .screenshotCaptured {
+            #expect(EventCatalog.entry(for: event).permission == EventEntry.Permission.none, "\(event)")
+        }
+    }
+
+    @Test func theNowPlayingEntryDisclosesTheUndocumentedSource() {
+        let note = EventCatalog.entry(for: .nowPlaying).note
+        #expect(!note.isEmpty)
+        #expect(note.contains("undocumented"))
+    }
+
     @Test func unknownEventNamesAreRejected() {
         #expect(throws: EventCodecError.unknownEvent("keyPressed")) {
             try EventCodec.wireEvent(named: "keyPressed")

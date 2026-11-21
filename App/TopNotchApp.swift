@@ -25,7 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = BlockSettings()
     private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
-    private let onboarding = OnboardingController()
+    private lazy var onboarding = OnboardingController(runtime: runtime)
+    private let screenshotConsent = ScreenshotFolderConsent()
     private lazy var blockStore = BlockStore(
         owner: { [runtime] in runtime.state.owner },
         blocksRoot: BlockStore.defaultBlocksRoot,
@@ -77,7 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sources = SourceCoordinator(runtime: runtime)
         sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self],
                     whileInteractiveShows: true)
-        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self])
+        // The screenshot watcher runs only once macOS allows the screenshot
+        // folder, asked when a block first listens to screenshots.
+        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self], consent: .init(
+            isGranted: { [screenshotConsent] in screenshotConsent.isGranted },
+            ask: { [screenshotConsent, weak sources] in screenshotConsent.ask { sources?.evaluate() } }
+        ))
         sources.add(OutputVolumeWatcher(runtime: runtime), for: [OutputVolumeChanged.self])
         for player in [PlayerNotificationWatcher.Player.spotify, .music] {
             sources.add(PlayerNotificationWatcher(runtime: runtime, player: player), for: [NowPlayingChanged.self])

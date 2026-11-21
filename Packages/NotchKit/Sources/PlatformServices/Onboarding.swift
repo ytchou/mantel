@@ -1,29 +1,7 @@
 import AppKit
 import Foundation
+import NotchCore
 import SwiftUI
-
-// MARK: - Screenshot folder
-
-enum ScreenshotFolder {
-    /// The folder macOS saves screenshots to.
-    static func current() -> URL {
-        resolve(location: UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"),
-                home: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    /// `location` as stored by macOS, with a leading `~` expanded against
-    /// `home`. Missing or empty means `~/Desktop`.
-    static func resolve(location: String?, home: URL) -> URL {
-        guard let location, !location.isEmpty else {
-            return home.appending(path: "Desktop", directoryHint: .isDirectory)
-        }
-        if location == "~" { return home }
-        if location.hasPrefix("~/") {
-            return home.appending(path: String(location.dropFirst(2)), directoryHint: .isDirectory)
-        }
-        return URL(filePath: location, directoryHint: .isDirectory)
-    }
-}
 
 // MARK: - Folder access
 
@@ -58,6 +36,31 @@ enum FolderAccess: Equatable, Sendable {
     }
 }
 
+/// The answer to "may TopNotch read the screenshot folder", asked through
+/// `FolderAccess.check` before the screenshot source first runs. The app
+/// wires it as the source's consent check. Kept for this launch only: each
+/// launch asks again, and macOS answers at once once the user has decided.
+@MainActor
+public final class ScreenshotFolderConsent {
+    public private(set) var isGranted = false
+    private var isAsking = false
+
+    public init() {}
+
+    /// Ask macOS for access to the screenshot folder, then call `done`. An
+    /// ask while one is under way does nothing.
+    public func ask(then done: @escaping @MainActor () -> Void) {
+        guard !isAsking else { return }
+        isAsking = true
+        Task {
+            let access = await FolderAccess.check(ScreenshotFolder.current())
+            isAsking = false
+            isGranted = access == .granted
+            done()
+        }
+    }
+}
+
 enum SystemSettings {
     static let filesAndFolders = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
     static let appleIntelligence = "x-apple.systempreferences:com.apple.Siri-Settings.extension"
@@ -71,9 +74,29 @@ enum SystemSettings {
 
 // MARK: - Permission rows (used by onboarding and Settings > General)
 
+/// A permission row on the General page and in onboarding.
+enum PermissionRow: Hashable {
+    case screenshotFolder
+    case appleIntelligence
+
+    /// The rows to show: the screenshot folder only while a turned-on block
+    /// listens to `ScreenshotCaptured`, since only then does its source run.
+    @MainActor
+    static func rows(in runtime: NotchRuntime) -> [PermissionRow] {
+        (runtime.hasSubscribers(for: ScreenshotCaptured.self) ? [.screenshotFolder] : []) + [.appleIntelligence]
+    }
+
+    @MainActor @ViewBuilder var view: some View {
+        switch self {
+        case .screenshotFolder: FolderAccessRow()
+        case .appleIntelligence: AppleIntelligenceRow()
+        }
+    }
+}
+
 struct FolderAccessRow: View {
     @State private var access: FolderAccess = .unknown
-    private let folder = ScreenshotFolder.current()
+    let folder = ScreenshotFolder.current()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -135,9 +158,11 @@ struct AppleIntelligenceRow: View {
 /// First-run onboarding window content, also reachable from
 /// Settings > General > Permissions.
 public struct OnboardingView: View {
+    private let rows: [PermissionRow]
     private let onDone: () -> Void
 
-    public init(onDone: @escaping () -> Void) {
+    init(rows: [PermissionRow], onDone: @escaping () -> Void) {
+        self.rows = rows
         self.onDone = onDone
     }
 
@@ -145,15 +170,16 @@ public struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome to TopNotch").font(.title2.bold())
-                Text("TopNotch works from the notch and the menu bar. Two things need your OK first. You can come back to them in Settings > General. To open Settings, right-click the notch.")
+                Text("TopNotch works from the notch and the menu bar. What needs your OK is below. You can come back to it in Settings > General. To open Settings, right-click the notch.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding([.horizontal, .top], 20)
 
             Form {
-                Section { FolderAccessRow() }
-                Section { AppleIntelligenceRow() }
+                ForEach(rows, id: \.self) { row in
+                    Section { row.view }
+                }
             }
             .formStyle(.grouped)
 
@@ -172,10 +198,12 @@ public struct OnboardingView: View {
 public final class OnboardingController: NSObject, NSWindowDelegate {
     static let completedKey = "onboarding.completed"
 
+    private let runtime: NotchRuntime
     private let defaults: UserDefaults
     private var window: NSWindow?
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(runtime: NotchRuntime, defaults: UserDefaults = .standard) {
+        self.runtime = runtime
         self.defaults = defaults
         super.init()
     }
@@ -201,7 +229,9 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
         // Measure once, then give the window a fixed size. Letting the hosting
         // view drive the window size through constraints crashed at launch
         // (AppKit exception in the window's update-constraints pass).
-        let hosting = NSHostingView(rootView: OnboardingView { [weak self] in self?.window?.close() })
+        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime)) { [weak self] in
+            self?.window?.close()
+        })
         let size = hosting.fittingSize
         hosting.sizingOptions = []
         let window = NSWindow(

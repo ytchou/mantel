@@ -63,6 +63,13 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private let clock: BlockClock
     @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
     @ObservationIgnored private let preview: @MainActor ([URL]) -> Void
+    /// TopNotch's support folder, closed to the block's reads even with `files.read`.
+    @ObservationIgnored private let supportRoot: URL
+    /// The app's preferences domain, closed to the block.
+    @ObservationIgnored private let preferenceDomain: String
+    /// Opens the network gate's connections to approved hosts. Tests point
+    /// it at a local listener before the block starts.
+    @ObservationIgnored var gateConnector: NetworkGate.Connector = NetworkGate.direct
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -97,6 +104,11 @@ public final class RemoteBlock: NotchBlock {
     /// The screenshot folder the current process's sandbox opens, for
     /// `files.screenshots`; nil without that access.
     @ObservationIgnored private var launchedScreenshotFolder: URL?
+    /// The current process's network gate; nil for a block without hosts,
+    /// and when the gate could not open.
+    @ObservationIgnored private(set) var gate: NetworkGate?
+    /// The local port of `gate`, sent in `welcome` and allowed by the sandbox.
+    @ObservationIgnored private(set) var gatePort: UInt16?
 
     /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
@@ -134,6 +146,10 @@ public final class RemoteBlock: NotchBlock {
     ///   - dropFolder: where the shell writes promised files of a drop;
     ///     dropped files inside it are moved into the block's own temporary
     ///     folder. Tests pass their own.
+    ///   - supportRoot: TopNotch's support folder, which the sandbox closes
+    ///     even with `files.read`, except the block's own package and data.
+    ///   - preferenceDomain: the app's preferences domain; the sandbox closes
+    ///     it and the preferences file `~/Library/Preferences/<it>.plist`.
     public init(
         manifest: Manifest,
         packageURL: URL,
@@ -147,7 +163,9 @@ public final class RemoteBlock: NotchBlock {
         turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
         preview: (@MainActor ([URL]) -> Void)? = nil,
         sharedTemporaryFolder: URL = FileManager.default.temporaryDirectory,
-        dropFolder: URL = DropFolder.root
+        dropFolder: URL = DropFolder.root,
+        supportRoot: URL = RemoteBlock.defaultSupportRoot,
+        preferenceDomain: String = Bundle.main.bundleIdentifier ?? "dev.topnotch.TopNotch"
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -164,11 +182,23 @@ public final class RemoteBlock: NotchBlock {
         self.clock = clock
         self.turnOff = turnOff
         self.preview = preview ?? { FilePreview.shared.show($0) }
+        self.supportRoot = supportRoot
+        self.preferenceDomain = preferenceDomain
         // Turned off after failures, and not yet turned on again.
         health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
         settings = readSettings()
         wireItemCallbacks()
         model.mayDragFile = { [weak self] path in self?.readablePaths([path]).isEmpty == false }
+    }
+
+    /// `~/Library/Application Support/TopNotch`.
+    // The same folder as `BlockStore`'s support root, computed again here so
+    // this change stays out of `BlockStore`; make `BlockStore` use this one
+    // when it is next edited.
+    public nonisolated static var defaultSupportRoot: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
+        return support.appending(path: "TopNotch")
     }
 
     /// Where the reason for the last turn-off is stored.
@@ -373,6 +403,7 @@ public final class RemoteBlock: NotchBlock {
             // `welcome`, and drops are moved into the temporary folder.
             try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: temporaryFolder, withIntermediateDirectories: true)
+            openGate()
             if let launcher {
                 transport = try launcher(executableURL, self.generation)
             } else {
@@ -393,6 +424,28 @@ public final class RemoteBlock: NotchBlock {
         }
     }
 
+    /// Opens the network gate for a block whose manifest names hosts. When
+    /// it cannot open, the block starts without network: no port in
+    /// `welcome`, none in the sandbox, and the reason is logged and passed to
+    /// `onFailure`; the process is not counted as failed.
+    // Uses the manifest's hosts: the approval of the package hash (D18)
+    // covers them, so an update that changes them is approved again first.
+    private func openGate() {
+        gate?.stop()
+        gate = nil
+        gatePort = nil
+        guard manifest.access.contains(.network), !manifest.hosts.isEmpty else { return }
+        let gate = NetworkGate(blockID: id.rawValue, hosts: manifest.hosts, connector: gateConnector)
+        do {
+            gatePort = try gate.start()
+            self.gate = gate
+        } catch {
+            let reason = "\(manifest.name) started without network: \(error)"
+            log.error("\(self.id.rawValue, privacy: .public): \(reason, privacy: .public)")
+            onFailure?(reason)
+        }
+    }
+
     /// Starts the block under the sandbox profile its manifest asks for.
     /// `launch` has created the data and temporary folders: the profile
     /// names real paths. The temporary folder is the block's own, inside the
@@ -400,15 +453,19 @@ public final class RemoteBlock: NotchBlock {
     /// temporary files and dropped files stay out of reach. Dropped files
     /// reach the block by `forwardedDrop`.
     private func spawnSandboxed() throws -> any Transport {
+        let home = FileManager.default.homeDirectoryForCurrentUser
         let profile = SandboxProfile(
-            network: manifest.access.contains(.network),
+            gatePort: gatePort,
             readsHome: manifest.access.contains(.filesRead),
             screenshotFolder: launchedScreenshotFolder,
             package: packageURL,
             dataFolder: dataFolder,
             temporaryFolder: temporaryFolder,
             sharedTemporaryFolder: sharedTemporaryFolder,
-            home: FileManager.default.homeDirectoryForCurrentUser
+            home: home,
+            supportRoot: supportRoot,
+            preferencesFile: home.appending(path: "Library/Preferences/\(preferenceDomain).plist"),
+            preferenceDomain: preferenceDomain
         )
         return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
     }
@@ -428,10 +485,14 @@ public final class RemoteBlock: NotchBlock {
         return true
     }
 
-    /// Stops reading and pinging the current process, sends it `quit` and
-    /// lets it go. Returns its transport, still open, for the caller to close
-    /// or to wait on. Frames still in flight from this process are dropped.
+    /// Stops reading and pinging the current process and closes its network
+    /// gate, sends it `quit` and lets it go. Returns its transport, still
+    /// open, for the caller to close or to wait on. Frames still in flight
+    /// from this process are dropped.
     private func endProcess() -> (any Transport)? {
+        gate?.stop()
+        gate = nil
+        gatePort = nil
         reader?.cancel()
         reader = nil
         heartbeat?.cancel()
@@ -576,8 +637,8 @@ public final class RemoteBlock: NotchBlock {
         }
         settings = readSettings()
         self.contract = contract
-        // The network gate arrives with D19; until then no block gets a port.
-        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path, gatePort: nil))
+        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path,
+                      gatePort: gatePort.map(Int.init)))
         isWelcomed = true
         // The hang limit runs from here, no longer from the launch.
         lastAnswer = clock.now()

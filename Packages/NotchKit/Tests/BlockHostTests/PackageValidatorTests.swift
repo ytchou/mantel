@@ -36,10 +36,12 @@ struct PackageValidatorTests {
         contract: Int = Contract.current,
         executable: String = "HelloBlock",
         events: [String] = ["pointerHover"],
-        settings: [SettingSpec] = []
+        settings: [SettingSpec] = [],
+        access: [Access] = [],
+        hosts: [String] = []
     ) -> Manifest {
         Manifest(id: id, name: "Hello", version: "1.0.0", contract: contract, executable: executable,
-                 events: events, settings: settings)
+                 access: access, hosts: hosts, events: events, settings: settings)
     }
 
     /// The refusal for `manifest` in a package, or `nil` when it passes.
@@ -247,11 +249,49 @@ struct PackageValidatorTests {
 
         #expect(throws: BlockInstallError.unknownAccess("camera")) { try PackageValidator.load(url, source: Self.installed) }
 
-        // Known tokens pass.
+        // Known tokens pass; `network` names its hosts.
         object["access"] = ["network", "files.read", "files.screenshots"]
+        object["hosts"] = ["api.example.com"]
         try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
         let loaded = try PackageValidator.load(url, source: Self.installed)
         #expect(loaded.access == [.network, .filesRead, .filesScreenshots])
+    }
+
+    // MARK: Hosts
+
+    @Test func aBareStarIsRefusedByTheValidator() throws {
+        let error = try refusal(manifest(access: [.network], hosts: ["api.example.com", "*"]))
+        guard case let .invalidHosts(detail)? = error else {
+            Issue.record("expected invalidHosts, got \(String(describing: error))")
+            return
+        }
+        #expect(detail.contains("\"*\""))
+        #expect(try #require(error?.errorDescription).contains("hosts"))
+    }
+
+    @Test func networkWithoutHostsIsRefused() throws {
+        for contract in [2, 3] {
+            #expect(try refusal(manifest(contract: contract, access: [.network])) == .networkWithoutHosts, "contract \(contract)")
+        }
+        #expect(try #require(BlockInstallError.networkWithoutHosts.errorDescription).contains("network"))
+    }
+
+    @Test func hostsWithoutNetworkIsRefused() throws {
+        let error = try refusal(manifest(access: [.filesRead], hosts: ["api.example.com"]))
+        guard case let .invalidHosts(detail)? = error else {
+            Issue.record("expected invalidHosts, got \(String(describing: error))")
+            return
+        }
+        #expect(detail.contains("network"))
+    }
+
+    @Test func networkWithValidHostsPasses() throws {
+        #expect(try refusal(manifest(access: [.network], hosts: ["api.example.com", "*.example.org"])) == nil)
+        // A malformed host or a wildcard over a whole top-level domain is refused.
+        for bad in ["*.com", "api.example.com:443", "a*.example.org"] {
+            let error = try refusal(manifest(access: [.network], hosts: [bad]))
+            if case .invalidHosts? = error {} else { Issue.record("\(bad): \(String(describing: error))") }
+        }
     }
 
     private func macOS(_ package: URL) -> URL {

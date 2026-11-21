@@ -33,6 +33,7 @@ final class Seen {
     var items: [(String, ItemAction)] = []
     var drags: [String] = []
     var inputs: [WireInput] = []
+    var session: URLSession?
 }
 
 /// Polls `condition` until it holds or `timeout` passes.
@@ -170,6 +171,31 @@ struct RunnerTests {
         #expect(seen.changes.first?.0 == "loud" && seen.changes.first?.1 == .bool(false))
         #expect(seen.settingAtStart == false)
         host.close()
+    }
+
+    /// The kit's session goes through the gate at the port from `welcome`;
+    /// without a port it has no proxy.
+    @MainActor
+    @Test func theKitSessionUsesTheGatePort() async throws {
+        var proxies: [[AnyHashable: Any]?] = []
+        for port in [4321, nil] as [Int?] {
+            let seen = Seen()
+            let host = FakeHost()
+            host.run(TestBlock { ctx in seen.session = ctx.urlSession })
+            try await host.welcome(gatePort: port)
+            #expect(await eventually { seen.session != nil })
+            proxies.append(seen.session?.configuration.connectionProxyDictionary)
+            host.close()
+        }
+
+        let gate = try #require(proxies.first ?? nil)
+        #expect(gate[kCFNetworkProxiesHTTPSEnable as String] as? Int == 1)
+        #expect(gate[kCFNetworkProxiesHTTPSProxy as String] as? String == "127.0.0.1")
+        #expect(gate[kCFNetworkProxiesHTTPSPort as String] as? Int == 4321)
+        // Only the HTTPS proxy: plain HTTP is not routed through the gate.
+        #expect(gate[kCFNetworkProxiesHTTPEnable as String] == nil)
+        let none = proxies.last ?? nil
+        #expect(none == nil || none?.isEmpty == true)
     }
 
     // MARK: Contract version 2

@@ -88,26 +88,62 @@ private func cleanUp(_ defaults: UserDefaults, _ name: String) {
 
 // MARK: - Screenshot folder
 
-private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
-
-@Test func missingLocationIsDesktop() {
-    let url = ScreenshotFolder.resolve(location: nil, home: home)
-    #expect(url.path(percentEncoded: false) == "/Users/test/Desktop/")
+/// A block that listens to screenshots once turned on.
+@MainActor
+private final class ScreenshotListener: NotchBlock {
+    let id: BlockID
+    let title = "Screenshots"
+    init(_ id: BlockID) { self.id = id }
+    func activate(_ context: any BlockContext) {
+        context.subscribe(to: ScreenshotCaptured.self) { _ in }
+    }
 }
 
-@Test func emptyLocationIsDesktop() {
-    let url = ScreenshotFolder.resolve(location: "", home: home)
-    #expect(url.path(percentEncoded: false) == "/Users/test/Desktop/")
+@MainActor
+@Test func permissionRowsShowOnlyWhenABlockNeedsThem() {
+    let runtime = NotchRuntime()
+    // No block: the General page and onboarding show no screenshot-folder row.
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
+
+    // A block that does not listen to screenshots, and one registered turned off.
+    runtime.register(FakeBlock("other"))
+    runtime.register(ScreenshotListener("shots"), enabled: false)
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
+
+    runtime.setEnabled("shots", true)
+    #expect(PermissionRow.rows(in: runtime) == [.screenshotFolder, .appleIntelligence])
+
+    runtime.setEnabled("shots", false)
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
 }
 
-@Test func tildeLocationIsExpanded() {
-    let url = ScreenshotFolder.resolve(location: "~/Pictures/Shots", home: home)
+/// The Blocks page switch reaches the runtime's demand change, which is what
+/// starts the screenshot source and its consent check: no extra call is needed.
+@MainActor
+@Test func turningABlockOnInSettingsReportsTheDemandChange() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults)
+    let runtime = NotchRuntime()
+    var changes = 0
+    runtime.onDemandChanged = { changes += 1 }
+    runtime.register(ScreenshotListener("shots"), enabled: false)
+    #expect(changes == 0)
+
+    settings.setEnabled("shots", true, in: runtime)
+
+    #expect(changes == 1)
+    #expect(runtime.hasSubscribers(for: ScreenshotCaptured.self))
+}
+
+/// The settings rows ask for the folder NotchCore resolves, the one the
+/// screenshot watcher reads (`theWatcherReadsTheSharedScreenshotFolder`).
+@MainActor
+@Test func thereIsOneScreenshotFolderDefinition() {
+    #expect(FolderAccessRow().folder == NotchCore.ScreenshotFolder.current())
+    let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
+    let url = NotchCore.ScreenshotFolder.resolve(location: "~/Pictures/Shots", home: home) { _ in true }
     #expect(url.path(percentEncoded: false) == "/Users/test/Pictures/Shots/")
-}
-
-@Test func absoluteLocationIsKept() {
-    let url = ScreenshotFolder.resolve(location: "/Volumes/Data/Shots", home: home)
-    #expect(url.path(percentEncoded: false) == "/Volumes/Data/Shots/")
 }
 
 // MARK: - Onboarding flag
@@ -116,14 +152,14 @@ private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
 @Test func onboardingCompletedFlagPersists() {
     let (defaults, name) = makeDefaults()
     defer { cleanUp(defaults, name) }
-    let controller = OnboardingController(defaults: defaults)
+    let controller = OnboardingController(runtime: NotchRuntime(), defaults: defaults)
     #expect(!controller.isCompleted)
 
     controller.markCompleted()
 
     #expect(controller.isCompleted)
     #expect(defaults.bool(forKey: "onboarding.completed"))
-    #expect(OnboardingController(defaults: defaults).isCompleted)
+    #expect(OnboardingController(runtime: NotchRuntime(), defaults: defaults).isCompleted)
 }
 
 @MainActor

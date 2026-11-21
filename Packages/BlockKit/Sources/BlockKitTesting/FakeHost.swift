@@ -42,10 +42,13 @@ public final class FakeHost: @unchecked Sendable {
         return Task { await runner.run() }
     }
 
-    /// Waits for `hello`, then sends `welcome`.
-    public func welcome(settings: [String: SettingValue] = [:], dataFolder: String = NSTemporaryDirectory()) async throws {
+    /// Waits for `hello`, then sends `welcome`, with `gatePort` for a block
+    /// that reaches hosts.
+    public func welcome(
+        settings: [String: SettingValue] = [:], dataFolder: String = NSTemporaryDirectory(), gatePort: Int? = nil
+    ) async throws {
         _ = await waitFor { if case .hello = $0 { true } else { false } }
-        try send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder))
+        try send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder, gatePort: gatePort))
     }
 
     /// Sends one message to the block, in this host's generation.

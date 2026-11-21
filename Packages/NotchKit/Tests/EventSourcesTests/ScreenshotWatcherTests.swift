@@ -1,4 +1,5 @@
 import Foundation
+import NotchCore
 import Testing
 @testable import EventSources
 
@@ -106,4 +107,15 @@ private let home = URL(filePath: "/Users/someone", directoryHint: .isDirectory)
     #expect(missing.path == "/Users/someone/Desktop")
     #expect(empty.path == "/Users/someone/Desktop")
     #expect(notFolder.path == "/Users/someone/Desktop")
+}
+
+/// The watcher reads the one `ScreenshotFolder` in NotchCore, the same one
+/// the settings rows ask for access to.
+@MainActor
+@Test func theWatcherReadsTheSharedScreenshotFolder() throws {
+    let watcher = ScreenshotWatcher(runtime: NotchRuntime())
+    watcher.start()
+    defer { watcher.stop() }
+    let scanner = try #require(watcher.scanner)
+    #expect(scanner.folder == NotchCore.ScreenshotFolder.current())
 }

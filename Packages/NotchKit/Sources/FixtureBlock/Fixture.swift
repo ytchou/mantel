@@ -17,6 +17,12 @@ import Foundation
 ///   `write failed`, for the sandbox tests.
 /// - `read:<path>`: open that file for reading and log `read ok` or
 ///   `read failed`, for the sandbox tests.
+/// - `fetch:<url>`: GET the URL through the kit's `ctx.urlSession` (the
+///   app's network gate) and log `fetch ok` when any HTTP response arrives,
+///   else `fetch failed`, for the gate tests. The server's certificate is
+///   trusted whatever it is: the tests' local server signs its own.
+/// - `prefs:<domain>`: read the preferences domain through the preferences
+///   service and log `prefs found` when it has any key, else `prefs none`.
 /// On a pointer hover it presents a small peek, so tests can see a present.
 @main
 struct Fixture: Block {
@@ -52,6 +58,17 @@ struct Fixture: Block {
                 let fd = open(path, O_CREAT | O_WRONLY, 0o644)
                 if fd >= 0 { close(fd) }
                 ctx.log(fd >= 0 ? "write ok" : "write failed")
+            } else if command.hasPrefix("fetch:"), let url = URL(string: String(command.dropFirst("fetch:".count))) {
+                let task = ctx.urlSession.dataTask(with: url) { _, response, _ in
+                    let ok = response is HTTPURLResponse
+                    Task { @MainActor in ctx.log(ok ? "fetch ok" : "fetch failed") }
+                }
+                task.delegate = TrustAnyServer()
+                task.resume()
+            } else if command.hasPrefix("prefs:") {
+                let domain = String(command.dropFirst("prefs:".count))
+                let keys = CFPreferencesCopyKeyList(domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] ?? []
+                ctx.log(keys.isEmpty ? "prefs none" : "prefs found")
             } else if command.hasPrefix("read:") {
                 let fd = open(String(command.dropFirst("read:".count)), O_RDONLY)
                 if fd >= 0 { close(fd) }
@@ -76,5 +93,18 @@ struct Fixture: Block {
             }
         }
         return result == 0
+    }
+}
+
+/// Accepts any server certificate, for `fetch:` against the tests' local
+/// server only. The kit's session itself checks certificates as usual.
+private final class TrustAnyServer: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust
+        else { return (.performDefaultHandling, nil) }
+        return (.useCredential, URLCredential(trust: trust))
     }
 }

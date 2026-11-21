@@ -84,6 +84,22 @@ enum PackageValidator {
             throw .unknownEvent(unknown)
         }
         try checkSettings(manifest.settings)
+        try checkHosts(manifest)
+    }
+
+    /// `network` needs `hosts`, and `hosts` needs `network`, whatever the
+    /// contract (D19): a block reaches the network only through the gate,
+    /// which lets through the hosts named. Each host is an exact name or
+    /// `*.` and a domain; a bare `*` is refused.
+    static func checkHosts(_ manifest: Manifest) throws(BlockInstallError) {
+        let network = manifest.access.contains(.network)
+        if network, manifest.hosts.isEmpty { throw .networkWithoutHosts }
+        if !network, !manifest.hosts.isEmpty {
+            throw .invalidHosts("it names hosts but does not ask for \"network\"")
+        }
+        for host in manifest.hosts {
+            if let problem = HostRule.problem(with: host) { throw .invalidHosts(problem) }
+        }
     }
 
     /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
