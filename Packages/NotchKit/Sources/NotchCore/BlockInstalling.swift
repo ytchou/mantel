@@ -20,6 +20,11 @@ public protocol BlockInstalling: AnyObject {
     /// see on install.
     func approve(_ id: BlockID) throws
 
+    /// Read the package of a block waiting for review, where it is, as
+    /// `inspect` reads a chosen one, for the sheet that approves it. Throws
+    /// `nothingToApprove` when no block with this id waits.
+    func reviewSummary(_ id: BlockID) throws -> BlockPackageSummary
+
     /// Stop the block and delete its package, data folder, settings and approval.
     func remove(_ id: BlockID) throws
 
@@ -34,6 +39,17 @@ public protocol BlockInstalling: AnyObject {
 
 public extension BlockInstalling {
     func canTurnOn(_ id: BlockID) -> Bool { true }
+    func reviewSummary(_ id: BlockID) throws -> BlockPackageSummary { throw BlockInstallError.nothingToApprove(id.rawValue) }
+}
+
+/// Access that together lets a block read the owner's files and send them
+/// away: `network` with `files.read` or `files.screenshots` (D17).
+/// `network` alone is not one.
+public enum RiskyPair: Sendable, Equatable {
+    /// `network` with `files.read`.
+    case files
+    /// `network` with `files.screenshots`, without `files.read`.
+    case screenshots
 }
 
 /// What a package says about itself, shown before the user confirms an install.
@@ -63,7 +79,14 @@ public struct BlockPackageSummary: Sendable, Equatable {
     /// it is not signed or signed ad hoc.
     public var signer: String?
     /// True when the package has a valid signature that is not ad hoc.
+    /// False for an unsigned or ad hoc package: its creator cannot be verified.
     public var isSigned: Bool { signer != nil }
+    /// The hosts the block may reach, in the manifest's order. Empty without `network`.
+    public var hosts: [String]
+    /// Hosts the installed or approved version could not reach. Empty for a new install.
+    public var newHosts: [String]
+    /// Set when the block's access lets it read files and send them away.
+    public var riskyPair: RiskyPair?
 
     public init(
         id: BlockID,
@@ -77,8 +100,14 @@ public struct BlockPackageSummary: Sendable, Equatable {
         sourcePath: String,
         installedVersion: String? = nil,
         access: [String] = [],
-        signer: String? = nil
+        signer: String? = nil,
+        hosts: [String] = [],
+        newHosts: [String] = [],
+        riskyPair: RiskyPair? = nil
     ) {
+        self.hosts = hosts
+        self.newHosts = newHosts
+        self.riskyPair = riskyPair
         self.id = id
         self.name = name
         self.version = version

@@ -53,6 +53,10 @@ public final class RemoteBlock: NotchBlock {
     /// so the Blocks page redraws. Nil while the block is not running, and
     /// until the first sample of a process.
     public private(set) var usage: BlockUsage?
+    /// Why the current process runs with less than it asked for, such as
+    /// without network when the gate could not open. Observed, so the Blocks
+    /// page redraws. Nil when it runs as asked, and set again at each start.
+    public private(set) var notice: String?
 
     @ObservationIgnored private let dataFolder: URL
     /// The app's temporary folder. The block's sandbox closes its `TopNotch`
@@ -74,6 +78,11 @@ public final class RemoteBlock: NotchBlock {
     /// Opens the network gate's connections to approved hosts. Tests point
     /// it at a local listener before the block starts.
     @ObservationIgnored var gateConnector: NetworkGate.Connector = NetworkGate.direct
+    /// Opens the gate and returns its port. Tests make it fail.
+    @ObservationIgnored var startGate: @MainActor (NetworkGate) throws -> UInt16 = { try $0.start() }
+    /// The owner's home folder, which `files.read` opens to the sandbox.
+    /// Tests point it at a folder of their own.
+    @ObservationIgnored var homeFolder: URL = FileManager.default.homeDirectoryForCurrentUser
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -126,7 +135,14 @@ public final class RemoteBlock: NotchBlock {
 
     /// Called by `handleFailure(reason:)` with the reason, before supervision
     /// decides, and with the reason the resource watch stopped the block.
+    /// A gate that cannot open is not a failure: see `notice`.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
+
+    /// Asked before every start of the block's process: the reason the
+    /// start is refused, or nil to start. Nil for no check. `BlockStore`
+    /// sets it for installed blocks, to hash the package against its
+    /// approval (D18); it may turn the block off from inside the call.
+    @ObservationIgnored var startCheck: (@MainActor () -> String?)?
 
     // Supervision.
     @ObservationIgnored private var supervisor = Supervisor()
@@ -207,10 +223,7 @@ public final class RemoteBlock: NotchBlock {
         model.mayDragFile = { [weak self] path in self?.readablePaths([path]).isEmpty == false }
     }
 
-    /// `~/Library/Application Support/TopNotch`.
-    // The same folder as `BlockStore`'s support root, computed again here so
-    // this change stays out of `BlockStore`; make `BlockStore` use this one
-    // when it is next edited.
+    /// `~/Library/Application Support/TopNotch`, the root of `BlockStore`'s folders.
     public nonisolated static var defaultSupportRoot: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
@@ -289,8 +302,8 @@ public final class RemoteBlock: NotchBlock {
         }
     }
 
-    /// The most bytes copied from another volume for one dropped item, for a
-    /// block without `files.read`. A larger item is left out and logged.
+    /// The most bytes copied from another volume for one dropped item the
+    /// block's sandbox cannot read where it is. A larger item is left out and logged.
     // 500 MB: a copy from another volume (a USB disk, a network share) is a
     // real read and write, not a clone, and it fills the temporary folder.
     // The limit is per item; a drop of several items may copy more in total.
@@ -324,9 +337,11 @@ public final class RemoteBlock: NotchBlock {
     /// promised file), which the block's sandbox cannot read, is moved to
     /// `<dropsFolder>/<path below the drop folder>` (its `<uuid>` folder
     /// keeps names apart), for every block. Any other file passes unchanged
-    /// to a block with `files.read` or inside the block's own folders, and
-    /// is copied for any other block. Links and text pass unchanged. A
-    /// promised file that cannot be moved is left out, with a log line.
+    /// when the block's sandbox reads it where it is: inside the block's own
+    /// folders, or with `files.read` in the home folder or under `/Volumes`
+    /// (see `filesReadOpens`). Any other file is copied. Links and text pass
+    /// unchanged. A promised file that cannot be moved is left out, with a
+    /// log line.
     // Moves on the main actor: a rename inside one volume, so it is quick.
     // Copies run off it, in `deliverDrop`.
     private func handOver(_ item: DroppedItem) -> HandOver {
@@ -334,8 +349,9 @@ public final class RemoteBlock: NotchBlock {
         let root = Self.resolvedPath(dropFolder)
         let source = Self.resolvedPath(url)
         guard source.hasPrefix(root + "/") else {
-            let isOwn = ownFolders.contains { source == $0 || source.hasPrefix($0 + "/") }
-            return manifest.access.contains(.filesRead) || isOwn ? .ready(Self.wireDrop(item)) : .copy(url)
+            let isOwn = ownFolders.contains { Self.isInside(source, $0) }
+            let opened = manifest.access.contains(.filesRead) && filesReadOpens(source)
+            return opened || isOwn ? .ready(Self.wireDrop(item)) : .copy(url)
         }
         let relative = String(source.dropFirst(root.count + 1))
         let target = dropsFolder.appending(path: relative, directoryHint: .notDirectory)
@@ -506,6 +522,11 @@ public final class RemoteBlock: NotchBlock {
     // MARK: Process
 
     private func launch() {
+        // Before anything of a new process exists. The check may replace
+        // this block in the runtime, which deactivates it.
+        if let refusal = startCheck?() {
+            return log.error("\(self.id.rawValue, privacy: .public) not started: \(refusal, privacy: .public)")
+        }
         generation += 1
         isWelcomed = false
         contract = 1
@@ -592,23 +613,24 @@ public final class RemoteBlock: NotchBlock {
 
     /// Opens the network gate for a block whose manifest names hosts. When
     /// it cannot open, the block starts without network: no port in
-    /// `welcome`, none in the sandbox, and the reason is logged and passed to
-    /// `onFailure`; the process is not counted as failed.
+    /// `welcome`, none in the sandbox, and the reason is logged and shown as
+    /// `notice`; the process is not counted as failed.
     // Uses the manifest's hosts: the approval of the package hash (D18)
     // covers them, so an update that changes them is approved again first.
     private func openGate() {
         gate?.stop()
         gate = nil
         gatePort = nil
+        notice = nil
         guard manifest.access.contains(.network), !manifest.hosts.isEmpty else { return }
         let gate = NetworkGate(blockID: id.rawValue, hosts: manifest.hosts, connector: gateConnector)
         do {
-            gatePort = try gate.start()
+            gatePort = try startGate(gate)
             self.gate = gate
         } catch {
             let reason = "\(manifest.name) started without network: \(error)"
             log.error("\(self.id.rawValue, privacy: .public): \(reason, privacy: .public)")
-            onFailure?(reason)
+            notice = reason
         }
     }
 
@@ -619,7 +641,7 @@ public final class RemoteBlock: NotchBlock {
     /// temporary files and dropped files stay out of reach. Dropped files
     /// reach the block by `forwardedDrop`.
     private func spawnSandboxed() throws -> any Transport {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = homeFolder
         let profile = SandboxProfile(
             gatePort: gatePort,
             readsHome: manifest.access.contains(.filesRead),
@@ -630,7 +652,7 @@ public final class RemoteBlock: NotchBlock {
             sharedTemporaryFolder: sharedTemporaryFolder,
             home: home,
             supportRoot: supportRoot,
-            preferencesFile: home.appending(path: "Library/Preferences/\(preferenceDomain).plist"),
+            preferencesFile: preferencesFile,
             preferenceDomain: preferenceDomain
         )
         return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
@@ -659,6 +681,7 @@ public final class RemoteBlock: NotchBlock {
         watch?.stop()
         watch = nil
         usage = nil
+        notice = nil
         gate?.stop()
         gate = nil
         gatePort = nil
@@ -1008,6 +1031,24 @@ public final class RemoteBlock: NotchBlock {
 
     private static func resolvedPath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func isInside(_ path: String, _ root: String) -> Bool {
+        path == root || path.hasPrefix(root + "/")
+    }
+
+    /// True when `files.read` opens `path` (symbolic links followed) to the
+    /// sandbox, as `SandboxProfile` sets it: inside the home folder or under
+    /// `/Volumes`, but not TopNotch's support folder or the app's preferences file.
+    private func filesReadOpens(_ path: String) -> Bool {
+        let closed = [supportRoot, preferencesFile].map(Self.resolvedPath)
+        return (Self.isInside(path, Self.resolvedPath(homeFolder)) || Self.isInside(path, "/Volumes"))
+            && !closed.contains { Self.isInside(path, $0) }
+    }
+
+    /// `~/Library/Preferences/<preferenceDomain>.plist`, closed to the block.
+    private var preferencesFile: URL {
+        homeFolder.appending(path: "Library/Preferences/\(preferenceDomain).plist")
     }
 
     // MARK: Replay

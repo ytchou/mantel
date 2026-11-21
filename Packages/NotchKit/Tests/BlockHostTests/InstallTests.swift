@@ -700,21 +700,100 @@ struct InstallTests {
         #expect(other.approvals.approval(for: "hello") == nil)
     }
 
+    /// The sheet lists the hosts on their own row ("Can reach"), so its
+    /// access line for `network` does not repeat them; the Blocks page does.
     @Test func summaryAndInfoShowAccessInTheUsersWords() throws {
         let setup = Setup()
         let package = try setup.package()
-        var manifest = try bundleManifest(package)
-        manifest.access = [.network, .filesScreenshots]
-        manifest.hosts = ["api.example.com", "*.example.org"]
-        try Framing.encoder().encode(manifest).write(to: package.appending(path: "Contents/Resources/manifest.json"))
+        try Self.setAccess([.network, .filesScreenshots], hosts: ["api.example.com", "*.example.org"], of: package)
 
         let network = "Use the network, only to reach: api.example.com, *.example.org"
         let summary = try setup.store.inspect(package)
-        #expect(summary.access == [network, "Rename files in the screenshot folder"])
+        #expect(summary.access == ["Use the network", "Rename files in the screenshot folder"])
+        #expect(summary.hosts == ["api.example.com", "*.example.org"])
 
         try setup.store.install(package)
         let block = try #require(setup.block("hello"))
         #expect(block.info.permissions == ["Nothing special", network, "Rename files in the screenshot folder"])
+    }
+
+    /// Rewrites the manifest of `package` with this access and these hosts.
+    private static func setAccess(_ access: [Access], hosts: [String], of package: URL) throws {
+        var manifest = try bundleManifest(package)
+        manifest.access = access
+        manifest.hosts = hosts
+        try Framing.encoder().encode(manifest).write(to: package.appending(path: "Contents/Resources/manifest.json"))
+    }
+
+    // MARK: The sheet's summary
+
+    @Test func inspectFlagsTheRiskyPair() throws {
+        let setup = Setup()
+        let hosts = ["api.example.com"]
+
+        let files = try setup.package()
+        try Self.setAccess([.filesRead, .network], hosts: hosts, of: files)
+        #expect(try setup.store.inspect(files).riskyPair == .files)
+
+        let screenshots = try setup.package()
+        try Self.setAccess([.network, .filesScreenshots], hosts: hosts, of: screenshots)
+        #expect(try setup.store.inspect(screenshots).riskyPair == .screenshots)
+
+        let networkOnly = try setup.package(hosts: hosts)
+        #expect(try setup.store.inspect(networkOnly).riskyPair == nil)
+
+        let filesOnly = try setup.package()
+        try Self.setAccess([.filesRead], hosts: [], of: filesOnly)
+        #expect(try setup.store.inspect(filesOnly).riskyPair == nil)
+    }
+
+    @Test func anUpdateThatAddsAHostNamesTheNewHost() throws {
+        let setup = Setup()
+        let first = try setup.inspectThenInstall(try setup.package(version: "0.2", hosts: ["api.example.com"]))
+        #expect(first.hosts == ["api.example.com"])
+        #expect(first.newHosts.isEmpty, "a new install has no new hosts")
+
+        let update = try setup.store.inspect(try setup.package(version: "0.3", hosts: ["api.example.com", "cdn.example.com"]))
+
+        #expect(update.hosts == ["api.example.com", "cdn.example.com"])
+        #expect(update.newHosts == ["cdn.example.com"])
+    }
+
+    @Test func inspectSaysWhenAPackageIsUnsigned() throws {
+        let setup = Setup()
+        let package = try setup.package()
+        #expect(try setup.store.inspect(package).isSigned)
+
+        for result: PackageSignature in [.unsigned, .adHoc] {
+            setup.signatures.set(result)
+            let summary = try setup.store.inspect(package)
+            #expect(!summary.isSigned)
+            #expect(summary.signer == nil)
+        }
+    }
+
+    /// A pending package is reviewed where it is, by id: the Blocks page
+    /// does not know its folder.
+    @Test func aPendingBlockIsReviewedByID() throws {
+        let setup = Setup()
+        let dropped = try setup.drop(try setup.package(hosts: ["api.example.com"]))
+        setup.launch()
+
+        let summary = try setup.store.reviewSummary("hello")
+
+        #expect(summary.id == "hello")
+        #expect(summary.sourcePath == dropped.path)
+        #expect(summary.hosts == ["api.example.com"])
+        #expect(throws: BlockInstallError.nothingToApprove("other")) { try setup.store.reviewSummary("other") }
+    }
+}
+
+extension InstallTests.Setup {
+    /// Inspects `package` as the sheet does, then installs it.
+    func inspectThenInstall(_ package: URL) throws -> BlockPackageSummary {
+        let summary = try store.inspect(package)
+        try store.install(package)
+        return summary
     }
 }
 

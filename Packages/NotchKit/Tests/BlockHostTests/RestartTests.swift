@@ -233,6 +233,39 @@ struct RestartTests {
         #expect(setup.store.canRemove("hello"))
     }
 
+    /// The package is hashed again before every start (D18), not only after
+    /// a crash: turned off, changed on disk and turned on again, it does not
+    /// start and waits for review.
+    @Test func aChangedPackageIsNotStartedWhenTurnedOnAgain() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        #expect(setup.launcher.processes.count == 1)
+
+        setup.runtime.setEnabled("hello", false)
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        setup.runtime.setEnabled("hello", true)
+        await settle()
+
+        let pending = try #require(setup.runtime.blocks.first as? PendingBlock)
+        #expect(pending.review == .changed)
+        #expect(setup.runtime.blocks.count == 1)
+        #expect(setup.launcher.processes.count == 1, "no process started")
+        #expect(!setup.store.canTurnOn("hello"))
+        #expect(setup.store.canRemove("hello"))
+    }
+
+    /// An unchanged installed package is started again when turned on.
+    @Test func anUnchangedPackageStartsWhenTurnedOnAgain() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+
+        setup.runtime.setEnabled("hello", false)
+        setup.runtime.setEnabled("hello", true)
+
+        #expect(setup.launcher.processes.count == 2)
+        #expect(setup.block("hello") != nil)
+    }
+
     /// An unchanged installed package still comes back after a crash.
     @Test func anUnchangedPackageIsRestartedAfterACrash() async throws {
         let setup = InstallTests.Setup()

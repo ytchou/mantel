@@ -172,6 +172,11 @@ public protocol NotchBlock: AnyObject {
     /// Set while the block waits for the owner's review and never runs.
     /// Nil for every block that may run.
     var review: BlockReview? { get }
+
+    /// Something the owner should know about a block that runs, in the
+    /// user's words, such as that it started without network. Not a
+    /// failure: the block keeps running. Nil when there is nothing to say.
+    var notice: String? { get }
 }
 
 public extension NotchBlock {
@@ -179,6 +184,7 @@ public extension NotchBlock {
     var health: BlockHealth { .ok }
     var usage: BlockUsage? { nil }
     var review: BlockReview? { nil }
+    var notice: String? { nil }
     func deactivate() {}
     func handle(_ input: NotchInput) {}
     var actions: [BlockAction] { [] }

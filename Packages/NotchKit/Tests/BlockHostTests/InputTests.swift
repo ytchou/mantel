@@ -84,18 +84,21 @@ struct InputTests {
     // MARK: Contract version 2
 
     @Test func dropIsForwardedOnlyToAVersion2Block() async throws {
-        let items: [DroppedItem] = [.file(URL(fileURLWithPath: "/tmp/a.png")), .link(URL(string: "https://example.com")!), .text("hi")]
-        // `files.read`: the file's own path goes out, unchecked.
+        let file = try finderFile("a.png", "png")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let items: [DroppedItem] = [.file(file), .link(URL(string: "https://example.com")!), .text("hi")]
+        // `files.read`, a file in the home folder: its own path goes out.
         var reading = helloManifest
         reading.access = [.filesRead]
 
         let current = Rig(manifest: reading)
+        current.block.homeFolder = file.deletingLastPathComponent()
         try await current.process.start()
         try current.process.send(present(accepts: [.file, .link, .text]))
         await waitUntil { current.runtime.state.owner == "hello" }
         current.block.handle(.drop(items))
         _ = await current.process.waitFor { if case .input = $0 { true } else { false } }
-        #expect(current.process.inputs == [.drop(items: [.file(path: "/tmp/a.png"), .link(url: "https://example.com"), .text(string: "hi")])])
+        #expect(current.process.inputs == [.drop(items: [.file(path: file.path), .link(url: "https://example.com"), .text(string: "hi")])])
 
         let old = Rig(manifest: reading)
         try old.process.hello(contract: 1)
@@ -160,17 +163,41 @@ struct InputTests {
         #expect(items.last == .text(string: "hi"))
     }
 
+    /// A file in the home folder, which `files.read` opens: its own path.
+    /// The test's folder stands in for the home folder.
     @Test func aBlockWithFileAccessGetsTheOriginalPath() async throws {
         var reading = helloManifest
         reading.access = [.filesRead]
         let rig = try await owningRig(reading)
         let original = try finderFile("notes.txt", "hello")
         defer { try? FileManager.default.removeItem(at: original.deletingLastPathComponent()) }
+        rig.block.homeFolder = original.deletingLastPathComponent()
 
         let items = await dropped([.file(original)], on: rig)
 
         #expect(items == [.file(path: original.path)])
         #expect(!FileManager.default.fileExists(atPath: drops(rig).path))
+    }
+
+    /// `files.read` opens the home folder and `/Volumes` only: a file
+    /// elsewhere, such as in the temporary folder, arrives as a copy.
+    @Test func aFileOutsideHomeDroppedOnAFileAccessBlockArrivesAsACopy() async throws {
+        var reading = helloManifest
+        reading.access = [.filesRead]
+        let rig = try await owningRig(reading)
+        let original = try finderFile("notes.txt", "hello")
+        defer { try? FileManager.default.removeItem(at: original.deletingLastPathComponent()) }
+        // A home folder that does not hold the file.
+        rig.block.homeFolder = FileManager.default.temporaryDirectory.appending(path: "topnotch-home-\(UUID().uuidString)")
+
+        let items = await dropped([.file(original)], on: rig)
+
+        let sent = try #require(path(items.first))
+        #expect(items.count == 1)
+        #expect(sent.hasPrefix(drops(rig).path + "/"))
+        #expect(URL(fileURLWithPath: sent).lastPathComponent == "notes.txt")
+        #expect(FileManager.default.contents(atPath: sent) == Data("hello".utf8))
+        #expect(FileManager.default.contents(atPath: original.path) == Data("hello".utf8))
     }
 
     /// A file the shell wrote into the drop folder is moved into the block's

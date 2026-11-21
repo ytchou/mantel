@@ -4,6 +4,7 @@ import Foundation
 import Network
 import Testing
 @testable import BlockHost
+import NotchCore
 
 /// The gate over real local sockets. Its connector always leads to a
 /// listener on this Mac: no test reaches the internet.
@@ -130,6 +131,36 @@ struct NetworkGateTests {
         rig.block.stop()
         #expect(rig.block.gate == nil)
         #expect(rig.block.gatePort == nil)
+    }
+
+    /// A gate that cannot open: the block starts without network, and the
+    /// reason is published for the Blocks page, then cleared once the gate
+    /// opens at a later start.
+    @MainActor
+    @Test func aGateThatCannotOpenPublishesTheReason() async throws {
+        var manifest = helloManifest
+        manifest.access = [.network]
+        manifest.hosts = ["api.example.com"]
+        let runtime = NotchRuntime()
+        let launcher = FakeLauncher()
+        let block = Rig.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: testDefaults())
+        block.startGate = { _ in throw NetworkGateError.failed("no port") }
+        runtime.register(block)
+        defer { block.stop() }
+        try await launcher.last!.start()
+
+        let notice = try #require(block.notice)
+        #expect(notice.contains("without network"))
+        #expect(notice.contains("no port"))
+        #expect(block.health == .ok, "not a failure: the block runs")
+        #expect(block.gatePort == nil)
+        #expect(welcomePort(launcher.last!.received) == .some(nil))
+
+        block.startGate = { try $0.start() }
+        runtime.setEnabled(block.id, false)
+        runtime.setEnabled(block.id, true)
+        #expect(block.notice == nil)
+        #expect(block.gatePort != nil)
     }
 
     /// The gate port the first `welcome` carried; nil when none was sent.

@@ -1,4 +1,5 @@
 import BlockWire
+import NotchCore
 
 extension Access {
     /// The access in the user's words, for the install sheet and the Blocks
@@ -17,4 +18,16 @@ extension Manifest {
     /// The one place this text is made: `BlockStore` shows it on the install
     /// sheet, `RemoteBlock` on the Blocks page after the author's permissions.
     var accessText: [String] { access.map { $0.displayText(hosts: hosts) } }
+
+    /// The access for the install sheet, which lists the hosts on a row of
+    /// their own ("Can reach"), so `network` does not repeat them.
+    var sheetAccessText: [String] { access.map { $0 == .network ? "Use the network" : $0.displayText(hosts: hosts) } }
+
+    /// `network` with `files.read` or `files.screenshots`, or nil.
+    var riskyPair: RiskyPair? {
+        guard access.contains(.network) else { return nil }
+        if access.contains(.filesRead) { return .files }
+        if access.contains(.filesScreenshots) { return .screenshots }
+        return nil
+    }
 }

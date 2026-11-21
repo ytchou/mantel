@@ -213,6 +213,9 @@ public final class BlockStore: BlockInstalling {
         let installed = installedBlock(manifest.id)
         let events = manifest.events.compactMap(WireEvent.init(rawValue:))
         let oldEvents = Set(installed?.manifest.events ?? [])
+        // The hosts the owner approved last: the installed version's, or for
+        // a package waiting for review after a change, its approval's.
+        let oldHosts = installed?.manifest.hosts ?? approvals.approval(for: BlockID(rawValue: manifest.id))?.hosts
         return BlockPackageSummary(
             id: BlockID(rawValue: manifest.id),
             name: manifest.name,
@@ -224,9 +227,19 @@ public final class BlockStore: BlockInstalling {
             permissions: manifest.permissions,
             sourcePath: url.path,
             installedVersion: installed?.manifest.version,
-            access: manifest.accessText,
-            signer: signer
+            access: manifest.sheetAccessText,
+            signer: signer,
+            hosts: manifest.hosts,
+            newHosts: oldHosts.map { old in manifest.hosts.filter { !old.contains($0) } } ?? [],
+            riskyPair: manifest.riskyPair
         )
+    }
+
+    /// Reads the package of a block waiting for review where it is in the
+    /// Blocks folder, as `inspect` does.
+    public func reviewSummary(_ id: BlockID) throws -> BlockPackageSummary {
+        guard let placeholder = pendingBlock(id.rawValue) else { throw BlockInstallError.nothingToApprove(id.rawValue) }
+        return try inspect(placeholder.packageURL)
     }
 
     /// Copies the package into the Blocks folder, approves that build and
@@ -436,24 +449,20 @@ public final class BlockStore: BlockInstalling {
         return approval
     }
 
-    /// Hashes an installed block's package again when its process failed,
-    /// before `RemoteBlock` decides to start it again (D18). A package that
-    /// is no longer the approved build is not started again: its stand-in
-    /// is replaced by a `PendingBlock` (changed), which turns it off, so
-    /// `RemoteBlock` finds no context and does not restart.
-    // Runs on a failure, not on every start: the app passes no launcher to
-    // wrap, and `RemoteBlock.launch` takes no check. A package changed while
-    // the app runs still starts when the owner turns its block off and on
-    // again; move this check into `RemoteBlock.launch` (one hash per start)
-    // to close that.
-    private func recheck(_ block: RemoteBlock) {
-        guard made.contains(where: { $0 === block }), case .installed = block.source else { return }
-        guard approvals.approval(for: block.id)?.hash != PackageHash.of(block.packageURL) else { return }
-        log.error("installed block \(block.id.rawValue, privacy: .public) not started again: its package changed after it was approved")
+    /// Hashes an installed block's package again before each start of its
+    /// process, at launch, when it is turned on and before a restart after a
+    /// failure (D18). A package that is no longer the approved build is not
+    /// started: its stand-in is replaced by a `PendingBlock` (changed),
+    /// which turns it off. Returns the reason the start is refused, or nil.
+    private func recheck(_ block: RemoteBlock) -> String? {
+        guard made.contains(where: { $0 === block }), case .installed = block.source else { return nil }
+        guard approvals.approval(for: block.id)?.hash != PackageHash.of(block.packageURL) else { return nil }
+        log.error("installed block \(block.id.rawValue, privacy: .public) not started: its package changed after it was approved")
         made.removeAll { $0 === block }
         let placeholder = PendingBlock(manifest: block.manifest, packageURL: block.packageURL, source: block.source, reason: .changed)
         pending.append(placeholder)
         replace(placeholder)
+        return PendingBlock.reason(.changed)
     }
 
     // MARK: Signature
@@ -668,10 +677,10 @@ public final class BlockStore: BlockInstalling {
             turnOff: turnOff
         )
         if case .installed = source {
-            // Before a restart after a failure: still the approved build?
-            block.onFailure = { [weak self, weak block] _ in
-                guard let self, let block else { return }
-                self.recheck(block)
+            // Before every start: still the approved build?
+            block.startCheck = { [weak self, weak block] in
+                guard let self, let block else { return nil }
+                return self.recheck(block)
             }
         }
         return block

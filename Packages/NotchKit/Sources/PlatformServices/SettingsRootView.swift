@@ -32,9 +32,10 @@ public struct SettingsRootView: View {
             List(selection: $selection) {
                 Label("General", systemImage: "gearshape").tag(SettingsPane.general)
                 Label("Blocks", systemImage: "square.grid.2x2").tag(SettingsPane.blocks)
-                if !entries.isEmpty {
+                let sidebar = BlockEntry.sidebar(entries)
+                if !sidebar.isEmpty {
                     Section("Block Settings") {
-                        ForEach(entries) { entry in
+                        ForEach(sidebar) { entry in
                             Label(entry.title, systemImage: entry.info.symbol).tag(SettingsPane.block(entry.id))
                         }
                     }
@@ -84,17 +85,30 @@ struct BlockEntry: Identifiable {
     /// False for a block that cannot start whatever the user does, such as an
     /// installed package refused at launch.
     let canTurnOn: Bool
+    /// What the block's process used at the last sample, or nil.
+    let usage: BlockUsage?
+    /// Set while the block waits for the owner's review.
+    let review: BlockReview?
+    /// Something to know about a block that runs, shown in the warning box.
+    let notice: String?
+    /// True when an installer can show the sheet that approves a block waiting for review.
+    let canReview: Bool
     /// Shown as "~" at the start of a path.
     let home: String
 
     init(id: BlockID, title: String, info: BlockInfo, health: BlockHealth = .ok, isRemovable: Bool = false,
-         canTurnOn: Bool = true, home: String = NSHomeDirectory()) {
+         canTurnOn: Bool = true, usage: BlockUsage? = nil, review: BlockReview? = nil, notice: String? = nil,
+         canReview: Bool = false, home: String = NSHomeDirectory()) {
         self.id = id
         self.title = title
         self.info = info
         self.health = health
         self.isRemovable = isRemovable
         self.canTurnOn = canTurnOn
+        self.usage = usage
+        self.review = review
+        self.notice = notice
+        self.canReview = canReview
         self.home = home
     }
 
@@ -103,15 +117,80 @@ struct BlockEntry: Identifiable {
     init(block: any NotchBlock, installer: (any BlockInstalling)?, home: String = NSHomeDirectory()) {
         self.init(id: block.id, title: block.title, info: block.info, health: block.health,
                   isRemovable: installer?.canRemove(block.id) ?? false,
-                  canTurnOn: installer?.canTurnOn(block.id) ?? true, home: home)
+                  canTurnOn: installer?.canTurnOn(block.id) ?? true,
+                  usage: block.usage, review: block.review, notice: block.notice,
+                  canReview: installer != nil, home: home)
+    }
+
+    /// The footer of the Blocks page's install section.
+    static let blocksFolderNote = "Blocks live in ~/Library/Application Support/TopNotch/Blocks"
+
+    /// The entries listed in the sidebar: every block that can run, not
+    /// those waiting for review.
+    static func sidebar(_ entries: [BlockEntry]) -> [BlockEntry] {
+        entries.filter { $0.review == nil }
+    }
+
+    /// "New" or "Changed" while the block waits for review, else nil.
+    var badge: String? {
+        switch review {
+        case .new?: "New"
+        case .changed?: "Changed"
+        case nil: nil
+        }
+    }
+
+    /// Why the block waits for review, in place of its summary.
+    var reviewText: String? {
+        switch review {
+        case .new?: "Found in the Blocks folder. Review it before it can run."
+        case .changed?: "This package changed since you approved it."
+        case nil: nil
+        }
+    }
+
+    /// A "Review…" button, for a block waiting for review.
+    var offersReview: Bool { review != nil && canReview }
+    /// A block waiting for review has no on/off switch: it cannot run.
+    var hasSwitch: Bool { review == nil }
+    /// Nor Move Up and Move Down.
+    var hasOrderControls: Bool { review == nil }
+
+    /// The row's title and badge, read as one.
+    var accessibilityLabel: String {
+        badge.map { "\(title), \($0)" } ?? title
+    }
+
+    /// What the process used, such as "38 MB · 0.1% processor", or nil.
+    var usageLine: String? {
+        guard let usage else { return nil }
+        let memory = ByteCountFormatter.string(fromByteCount: Int64(clamping: usage.memoryBytes), countStyle: .memory)
+        return "\(memory) · \(String(format: "%.1f", usage.processorFraction * 100))% processor"
+    }
+
+    /// Turns the block on from its stopped box, which clears the reason.
+    @MainActor
+    func turnOn(settings: BlockSettings, runtime: NotchRuntime) {
+        settings.setEnabled(id, true, in: runtime)
     }
 
     /// Where the block comes from, its version, the trigger, the permissions
     /// and recent restarts on one line, such as
     /// "Built in · Taking a screenshot · Needs: Access to the screenshot folder"
     /// or "Installed from ~/dev/hello-block · 0.2 · Pointer hover · Restarted once".
+    /// For a block waiting for review: its package, its version and "Off".
     var detail: String {
         var parts: [String] = []
+        if review != nil {
+            switch info.source {
+            case let .installed(from): parts.append(abbreviated(from))
+            case let .development(path): parts.append(abbreviated(path))
+            case .builtIn, .bundled: break
+            }
+            if let version = info.version, !version.isEmpty { parts.append(version) }
+            parts.append("Off")
+            return parts.joined(separator: " · ")
+        }
         switch info.source {
         case .builtIn, .bundled: parts.append("Built in")
         case let .installed(from): parts.append("Installed from " + abbreviated(from))
@@ -126,9 +205,10 @@ struct BlockEntry: Identifiable {
         return parts.joined(separator: " · ")
     }
 
-    /// Why the app turned the block off, or nil.
+    /// Why the app turned the block off, or nil. Nil for a block waiting for
+    /// review: `reviewText` says why it does not run.
     var turnedOffReason: String? {
-        if case let .turnedOff(reason) = health { return reason }
+        if review == nil, case let .turnedOff(reason) = health { return reason }
         return nil
     }
 
@@ -175,32 +255,39 @@ private struct BlocksPane: View {
         Form {
             Section {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    row(entry)
+                    if entry.review != nil {
+                        reviewRow(entry)
+                    } else {
+                        row(entry)
+                            .accessibilityLabel(entry.accessibilityLabel)
+                    }
                     if let reason = entry.turnedOffReason {
-                        HStack {
-                            Label("Turned off: \(reason)", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer()
+                        ReasonBox(kind: .stopped, text: reason) {
                             if entry.offersTurnOn {
-                                Button("Turn On") { settings.setEnabled(entry.id, true, in: runtime) }
+                                Button("Turn On") { entry.turnOn(settings: settings, runtime: runtime) }
                             }
                         }
+                    } else if let notice = entry.notice {
+                        ReasonBox(kind: .warning, text: notice)
                     }
                     HStack {
-                        // Stock buttons with text, so the order can be changed from the keyboard.
-                        Button("Move Up") { settings.move(entry.id, to: index - 1, in: runtime) }
-                            .disabled(index == 0)
-                        Button("Move Down") { settings.move(entry.id, to: index + 1, in: runtime) }
-                            .disabled(index == entries.count - 1)
+                        if entry.hasOrderControls {
+                            // Stock buttons with text, so the order can be changed from the keyboard.
+                            Button("Move Up") { settings.move(entry.id, to: index - 1, in: runtime) }
+                                .disabled(index == 0)
+                            Button("Move Down") { settings.move(entry.id, to: index + 1, in: runtime) }
+                                .disabled(index == entries.count - 1)
+                        }
                         Spacer()
                         if entry.isRemovable, installer != nil {
-                            Button("Update\u{2026}") { choosePackage(updating: entry.id) }
+                            if entry.review == nil {
+                                Button("Update\u{2026}") { choosePackage(updating: entry.id) }
+                            }
                             Button("Remove", role: .destructive) { removing = entry }
                         }
                     }
                     .accessibilityElement(children: .contain)
-                    .accessibilityLabel(entry.title)
+                    .accessibilityLabel(entry.accessibilityLabel)
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -216,15 +303,20 @@ private struct BlocksPane: View {
                         Spacer()
                         Button("Install Block\u{2026}") { choosePackage() }
                     }
+                } footer: {
+                    Text(BlockEntry.blocksFolderNote)
                 }
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Blocks")
         .sheet(item: $pending) { pending in
-            BlockInstallSheet(summary: pending.summary) {
+            BlockInstallSheet(summary: pending.summary, review: pending.isReview) {
                 self.pending = nil
-                install(pending.url)
+                switch pending.request {
+                case let .install(url): install(url)
+                case let .review(id): approve(id)
+                }
             } cancel: {
                 self.pending = nil
             }
@@ -253,26 +345,84 @@ private struct BlocksPane: View {
             get: { settings.isEnabled(entry.id) },
             set: { settings.setEnabled(entry.id, $0, in: runtime) }
         )) {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
+            entryLabel(entry)
+        }
+    }
+
+    /// A block waiting for review: no switch, a "Review…" button instead.
+    private func reviewRow(_ entry: BlockEntry) -> some View {
+        HStack {
+            entryLabel(entry)
+            Spacer()
+            if entry.offersReview {
+                Button("Review\u{2026}") { review(entry.id) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(entry.accessibilityLabel)
+    }
+
+    /// The icon, the title with its badge, then the summary or why it waits
+    /// for review, the detail line and the usage line.
+    private func entryLabel(_ entry: BlockEntry) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
                     Text(entry.title)
-                    if !entry.info.summary.isEmpty {
-                        Text(entry.info.summary)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !entry.detail.isEmpty {
-                        Text(entry.detail)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if let badge = entry.badge {
+                        // A word, not a color alone.
+                        Text(badge)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
                     }
                 }
-            } icon: {
-                // Fixed width, so titles line up whatever the symbol's shape.
-                Image(systemName: entry.info.symbol).frame(width: 22)
+                if let text = entry.reviewText {
+                    Text(text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !entry.info.summary.isEmpty {
+                    Text(entry.info.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !entry.detail.isEmpty {
+                    Text(entry.detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let usage = entry.usageLine {
+                    Text(usage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             }
+        } icon: {
+            // Fixed width, so titles line up whatever the symbol's shape.
+            Image(systemName: entry.info.symbol).frame(width: 22)
+        }
+    }
+
+    /// Shows the sheet for a block waiting for review, from its package
+    /// where it is, or why it cannot be approved.
+    private func review(_ id: BlockID) {
+        guard let installer else { return }
+        do {
+            pending = PendingInstall(request: .review(id), summary: try installer.reviewSummary(id))
+        } catch {
+            failure = Failure(title: "The block cannot be approved", message: error.localizedDescription)
+        }
+    }
+
+    private func approve(_ id: BlockID) {
+        do {
+            try installer?.approve(id)
+        } catch {
+            failure = Failure(title: "The block was not approved", message: error.localizedDescription)
         }
     }
 
@@ -291,7 +441,7 @@ private struct BlocksPane: View {
         do {
             let summary = try installer.inspect(url)
             if let refusal = summary.refusal(updating: id) { throw refusal }
-            pending = PendingInstall(url: url, summary: summary)
+            pending = PendingInstall(request: .install(url), summary: summary)
         } catch {
             failure = Failure(title: "The block cannot be installed", message: error.localizedDescription)
         }
@@ -328,11 +478,20 @@ private struct Failure {
     let message: String
 }
 
-/// A package the user chose, with what it says about itself.
+/// A package the user chose, or one waiting for review, with what it says
+/// about itself.
 private struct PendingInstall: Identifiable {
-    let url: URL
+    enum Request: Hashable {
+        /// From "Install Block…" or "Update…": copied in when confirmed.
+        case install(URL)
+        /// From "Review…": approved where it is when confirmed.
+        case review(BlockID)
+    }
+
+    let request: Request
     let summary: BlockPackageSummary
-    var id: URL { url }
+    var id: Request { request }
+    var isReview: Bool { if case .review = request { true } else { false } }
 }
 
 // MARK: - Block pane
