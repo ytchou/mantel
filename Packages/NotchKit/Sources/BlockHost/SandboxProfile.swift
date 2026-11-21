@@ -11,8 +11,10 @@ import Foundation
 /// temporary folder) is closed except the block's own folder inside it.
 /// `files.read` opens the home folder and other volumes (`/Volumes`), but
 /// never TopNotch's support folder (other blocks' packages and data, the
-/// approvals) or the app's preferences file. In SBPL the last matching rule wins, so each allow follows the deny
-/// it narrows. The rules were measured on macOS 26.5 (`spikes/FINDINGS.md`,
+/// approvals) or the app's preferences file. In SBPL the last matching rule
+/// wins, so each allow follows the deny it narrows; but a rule for one
+/// operation (`file-read-metadata`) beats a wildcard (`file-read*`) in any
+/// order. The rules were measured on macOS 26.5 (`spikes/FINDINGS.md`,
 /// "Sandbox rules, 21 Nov").
 ///
 /// Limits that remain:
@@ -22,7 +24,10 @@ import Foundation
 /// - Writes into the per-user temporary folder stay open, because Foundation
 ///   ignores `TMPDIR` and frameworks (FoundationModels, Quick Look
 ///   thumbnails) write there. Reads there are closed outside the block's own
-///   folder, so two blocks cannot pass files through it by reading.
+///   folder, so two blocks cannot pass files through it by reading. Metadata
+///   there stays readable outside the app's `TopNotch` subtree (whether a
+///   named file exists, its size and dates, not listings): Foundation needs
+///   it to create folders and open files for writing.
 /// - Metadata of anything in the home folder stays readable (names, sizes,
 ///   dates): without it the on-device model reports "Apple Intelligence not
 ///   enabled".
@@ -127,6 +132,16 @@ struct SandboxProfile: Sendable, Equatable {
         // Reads: an allow-list from here on.
         lines.append("(deny file-read*)")
         lines.append("(allow file-read* " + Self.systemReadLocations.joined(separator: " ") + ")")
+        // Metadata in the shared temporary folder, never its contents or
+        // listings: without it Foundation cannot write there
+        // (`createDirectory(withIntermediateDirectories:)`, `FileHandle`)
+        // and `touch` fails. A rule for `file-read-metadata` beats any
+        // `file-read*` rule whatever their order, so the app's subtree is
+        // closed again and the block's own folder reopened with the same
+        // operation. Probed on macOS 26, 2026-11-21.
+        lines.append("(allow file-read-metadata (subpath \(Self.literal(sharedTemporaryFolder))))")
+        lines.append("(deny file-read-metadata (subpath \(Self.literal(appTemporaryFolder))))")
+        lines.append("(allow file-read-metadata (subpath \(temporary)))")
         if readsHome {
             // Other volumes too: files on external disks stay readable, as
             // before the allow-list. The deny below still wins there.

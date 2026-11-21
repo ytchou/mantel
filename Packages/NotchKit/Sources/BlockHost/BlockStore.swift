@@ -635,11 +635,15 @@ public final class BlockStore: BlockInstalling {
                             packageURL: found.package, source: .installed(from: found.package.path), reason: reason)
     }
 
+    /// Each package as `folder/<name>`, in `folder`'s form, as install forms
+    /// its destination: `contentsOfDirectory(at:)` returns paths with
+    /// symbolic links resolved (`/private/var/...` for `/var/...`).
     private func packages(in folder: URL, kind: String) -> [URL] {
         guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
         do {
-            return try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "topblock" }
+            return try FileManager.default.contentsOfDirectory(atPath: folder.path)
+                .filter { ($0 as NSString).pathExtension == "topblock" }
+                .map { folder.appending(path: $0, directoryHint: .isDirectory) }
         } catch {
             log.error("no \(kind, privacy: .public) blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return []

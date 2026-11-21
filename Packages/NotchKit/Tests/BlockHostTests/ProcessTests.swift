@@ -162,7 +162,10 @@ struct ProcessTests {
     }
 
     /// Through the preferences service, not the file: the app's domain reads
-    /// nothing; another domain still reads (a written limit).
+    /// nothing; another domain still reads (a written limit). The profile's
+    /// home is the real one, as in the app: the preferences client needs
+    /// metadata reads there, and without them every domain reads nothing,
+    /// so the closed half would pass whatever the rule (probed 2026-11-21).
     @Test func fixtureCannotReadTheAppsPreferenceDomain() async throws {
         let rig = try SandboxRig()
         defer { rig.remove() }
@@ -172,9 +175,10 @@ struct ProcessTests {
         CFPreferencesAppSynchronize(domain as CFString)
         defer { defaults.removePersistentDomain(forName: domain) }
 
-        let closed = try await rig.run(rig.profile(preferenceDomain: domain), ["prefs:\(domain)"])
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let closed = try await rig.run(rig.profile(preferenceDomain: domain, home: home), ["prefs:\(domain)"])
         #expect(closed == ["prefs none"])
-        let control = try await rig.run(rig.profile(preferenceDomain: "dev.topnotch.unrelated"), ["prefs:\(domain)"])
+        let control = try await rig.run(rig.profile(preferenceDomain: "dev.topnotch.unrelated", home: home), ["prefs:\(domain)"])
         #expect(control == ["prefs found"])
     }
 
@@ -238,9 +242,9 @@ private struct SandboxRig {
     }
 
     func profile(gatePort: UInt16? = nil, readsHome: Bool = false,
-                 preferenceDomain: String = "dev.topnotch.TopNotchTests") -> SandboxProfile {
+                 preferenceDomain: String = "dev.topnotch.TopNotchTests", home: URL? = nil) -> SandboxProfile {
         SandboxProfile(gatePort: gatePort, readsHome: readsHome, screenshotFolder: nil, package: package,
-                       dataFolder: data, temporaryFolder: temporary, sharedTemporaryFolder: shared, home: home,
+                       dataFolder: data, temporaryFolder: temporary, sharedTemporaryFolder: shared, home: home ?? self.home,
                        supportRoot: support, preferencesFile: preferencesFile, preferenceDomain: preferenceDomain)
     }
 

@@ -45,6 +45,9 @@ struct SandboxProfileTests {
             #"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#,
             "(deny file-read*)",
             systemLine,
+            #"(allow file-read-metadata (subpath "/topnotch-test/shared-tmp"))"#,
+            #"(deny file-read-metadata (subpath "/topnotch-test/shared-tmp/TopNotch"))"#,
+            #"(allow file-read-metadata (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#,
             ownReadsLine,
             metadataLine,
         ])
@@ -185,6 +188,10 @@ struct SandboxProfileTests {
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", dropped.path]) != 0)
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", drops.appending(path: "new").path]) != 0)
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", otherApp.path]) != 0)
+        // Metadata of the shared folder is readable (Foundation needs it to
+        // write there), but not listings, and nothing in the app's subtree.
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/ls", folders.shared.path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/stat", dropped.path]) != 0)
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", folders.shared.appending(path: "new").path]) == 0)
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", own.path]) == 0)
         #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", own.path]) == 0)

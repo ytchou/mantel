@@ -463,7 +463,10 @@ Limits that remain:
 - Writes into the per-user temporary folder stay open: Foundation ignores
   `TMPDIR`, and frameworks (FoundationModels, Quick Look thumbnails) write
   there. Reads there are closed outside the block's own folder, so two
-  blocks cannot pass files through it by reading.
+  blocks cannot pass files through it by reading. Metadata there stays
+  readable outside the app's `TopNotch` folder (whether a named file
+  exists, its size and dates, not listings): Foundation needs it to create
+  folders and open files for writing.
 - Metadata of anything in the home folder stays readable (names, sizes,
   dates): without it the on-device model reports "Apple Intelligence not
   enabled".
