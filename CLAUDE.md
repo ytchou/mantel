@@ -36,7 +36,7 @@ is, without installing it (sandboxed, no signature check): `make build`, then
 | `Packages/NotchKit/Sources/NotchCore` | Block contract, event bus, arbiter (priority, then the owner's block order; the guard on `interactive`), which events have a listener | Import AppKit UI, any other module |
 | `Packages/NotchKit/Sources/NotchShell` | Notch panel, idle/peek/expanded drawing, input forwarding | Know about any specific block |
 | `Packages/NotchKit/Sources/EventSources` | System event sources that publish to the bus, started only while a turned-on block listens | Draw UI, call a block directly |
-| `Packages/NotchKit/Sources/BlockHost` | Stand-ins for the block processes (`RemoteBlock`), process supervision, the sandbox each block runs under (`SandboxProfile`), drawing a block's view from data (items, drag-out, Quick Look), package validation, the package signature check (`PackageSignature`), install, update and remove (`BlockStore`) | Import `NotchShell`, `PlatformServices`, any block |
+| `Packages/NotchKit/Sources/BlockHost` | Stand-ins for the block processes (`RemoteBlock`), process supervision, the sandbox each block runs under (`SandboxProfile`), each block's network gate (`NetworkGate`), the memory and processor watch (`ResourceWatch`), drawing a block's view from data (items, drag-out, Quick Look), package validation, the package signature check (`PackageSignature`), the owner's approvals (`ApprovalStore`) and blocks waiting for review (`PendingBlock`), what each event reveals (`EventCatalog`), install, update and remove (`BlockStore`) | Import `NotchShell`, `PlatformServices`, any block |
 | `Packages/BlockKit` | Separate package: the wire protocol (`BlockWire`, `PROTOCOL.md`), the kit block authors write against (`BlockKit`, `BlockKitTesting`), the `HelloBlock` example (the template for new blocks) and `Scripts/package-block.sh`; see its `README.md` | Depend on `NotchKit`; import anything but Foundation in `BlockWire`, or anything but Foundation, CryptoKit and Dispatch in `BlockKit` |
 | `Blocks/Shelf` | Separate package: the shelf block (drop, hold, drag out, Quick Look), bundled in the app; manifest `access`: `files.read`. Library `ShelfCore` holds the block, executable `Shelf` only its entry point | Be linked into the app; depend on `NotchKit` |
 | `Blocks/Rename` | Separate package: the screenshot rename block ("Screenshot Names"), bundled in the app; manifest `access`: `files.screenshots`. Library `RenameCore` holds the block, executable `Rename` only its entry point | Be linked into the app; depend on `NotchKit` |
@@ -55,11 +55,21 @@ Rules:
   `BlockHost`, which depends on `NotchCore` and `BlockWire` only.
 - A new block starts from the `HelloBlock` example in `Packages/BlockKit`.
 - A block's sandbox comes from its manifest's `access` list (`network`,
-  `files.read`, `files.screenshots`); without a token it gets no network, no
-  reads in the home folder and no writes outside its data folder and the
-  temporary folder. The app's `<TMPDIR>/TopNotch/` subtree is closed to reads
-  and writes except the block's own `TopNotch/Blocks/<id>/`; dropped files are
-  moved into that folder before the drop is sent.
+  `files.read`, `files.screenshots`). Reads come from an allow-list: system
+  locations, the block's package, data folder and own temporary folder, and
+  what its tokens open. Without a token it gets no network, no reads in the
+  home folder and no writes outside its data folder and the temporary folder.
+- `network` reaches only the hosts in the manifest's `hosts`, over HTTPS,
+  through the block's `NetworkGate`. Name lookups are closed.
+- TopNotch's preferences domain, its preferences file and its support folder
+  are closed to every block, `files.read` included, except the block's own
+  package and data folder.
+- The app's `<TMPDIR>/TopNotch/` subtree is closed to reads and writes
+  except the block's own `TopNotch/Blocks/<id>/`. Files the app wrote for a
+  drop are moved into that folder before the drop is sent. Dropped files the
+  block's sandbox cannot read where they are are copied there.
+- The limits the sandbox leaves are listed once, in `SandboxProfile`'s
+  header and in `PROTOCOL.md` under "Sandbox".
 - Between presentations of equal priority, the block higher in the owner's
   order on the Blocks page gets the notch. No order is written in code: with
   none stored, blocks rank in the order they were added, bundled blocks by
@@ -84,10 +94,20 @@ Rules:
   phase passes `EXPANDED_CODE_SIGN_IDENTITY` to `package-block.sh` as
   `BLOCK_SIGN_IDENTITY`. They are covered by the app's own seal and are not
   checked one by one.
-- An installed block needs a valid signature that is not ad hoc, unless the
-  owner turns on "Allow blocks without a signature" on the Blocks page. A
-  package changed after signing is always refused. An update must come from
-  the same signer as the installed block. The check runs at install and at
-  every launch.
+- An installed block runs only with the owner's approval of its exact build.
+  The approval is a SHA-256 over the package, kept in `Approvals.json` in
+  the support folder (`~/Library/Application Support/TopNotch`). It is
+  checked before every start.
+- A package found in the Blocks folder without an approval waits as New. A
+  package changed since its approval waits as Changed. Neither runs until
+  the owner approves it.
+- The signer is stored with the approval. An update must come from the same
+  signer as the installed block. An unsigned or ad hoc package can be
+  approved, for that exact build, but never as an update of a signed block.
+- A package changed after signing is always refused. The signature check
+  runs at install, at approval and at every launch.
+- Blocks from earlier versions, whose signer was kept in the preferences,
+  are approved once as they are when the signer still matches.
+- `-devBlock` needs no approval and has no signature check.
 - Never write a signing identity or team id into the repository, tests,
   commits or PR text. Tests sign ad hoc only.

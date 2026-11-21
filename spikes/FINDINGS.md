@@ -429,3 +429,5 @@ question 3 profile plus `(deny mach-lookup (global-name "com.apple.dnssd.service
 `(deny user-preference-read (preference-domain "dev.topnotch.TopNotch"))`
 (`EXTRA='<the two preference rules>' ./q3.sh gate-dns`, `./run.sh gate-dns fm`,
 `./thumbs.sh gate-dns`: all as in questions 3 and 1).
+
+These rules are now in `SandboxProfile` (`Packages/NotchKit/Sources/BlockHost/SandboxProfile.swift`).
