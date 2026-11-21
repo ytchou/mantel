@@ -123,6 +123,55 @@ struct ArbiterTests {
         #expect(arbiter.state.owner == "a")
     }
 
+    // Notch time rule (D13): an endless view nobody acts on
+    @Test func anEndlessInteractiveViewRanksLowestWhenNobodyActsOnIt() {
+        var arbiter = Arbiter()
+        // The endless view's block is first in the rank: the rank does not save it.
+        arbiter.setRank(["shelf", "other"], at: .zero)
+        arbiter.setDragActive(true, at: .zero)
+        arbiter.present(peekPresentation(.interactive), for: "shelf", at: .zero)
+        arbiter.setDragActive(false, at: .seconds(1))
+        arbiter.present(peekPresentation(.standard, duration: .seconds(5)), for: "other", at: .seconds(2))
+        #expect(arbiter.state.owner == "shelf", "inside the window it still wins")
+
+        arbiter.advance(to: .seconds(21))
+        #expect(arbiter.state.owner == "other")
+        #expect(arbiter.nextDeadline == .seconds(26))
+        arbiter.advance(to: .seconds(26))
+        #expect(arbiter.state.owner == "shelf", "it comes back when the timed view ends")
+    }
+
+    // Notch time rule (D13): inside the window nothing changes
+    @Test func anInteractiveViewStillWinsWhileItsBlockIsInteracting() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["other", "shelf"], at: .zero)
+        arbiter.present(peekPresentation(.interactive), for: "shelf", at: .zero)
+        arbiter.setPointerInside(true, at: .seconds(1))
+        arbiter.present(peekPresentation(.standard, duration: .seconds(5)), for: "other", at: .seconds(2))
+        #expect(arbiter.state.owner == "shelf")
+
+        arbiter.setPointerInside(false, at: .seconds(5))
+        arbiter.advance(to: .seconds(24))
+        #expect(arbiter.state.owner == "shelf")
+        arbiter.advance(to: .seconds(25))
+        #expect(arbiter.state.owner == "other")
+    }
+
+    // Notch time rule (D13): a timed top-priority view falls to `standard`
+    @Test func aTimedInteractiveViewFallsToStandardAsBefore() {
+        var arbiter = Arbiter()
+        // `base` is first in the rank, so it would win a tie at `ambient`.
+        arbiter.setRank(["base", "top"], at: .zero)
+        arbiter.present(peekPresentation(.ambient), for: "base", at: .zero)
+        arbiter.present(peekPresentation(.interactive, duration: .seconds(10)), for: "top", at: .zero)
+        #expect(arbiter.state.owner == "top")
+
+        // At `standard` it ties with another standard view, and the rank decides.
+        arbiter.setRank(["result", "top", "base"], at: .seconds(1))
+        arbiter.present(peekPresentation(.standard, duration: .seconds(5)), for: "result", at: .seconds(1))
+        #expect(arbiter.state.owner == "result")
+    }
+
     // Rank changes
     @Test func setRankChangesTheOwnerAtOnce() {
         var arbiter = Arbiter()
@@ -188,8 +237,10 @@ struct ArbiterTests {
         #expect(arbiter.nextDeadline == .seconds(26))
 
         // Pre-empted at 22s with 4s left: a waiting presentation does not count down.
-        arbiter.present(peekPresentation(.interactive), for: "top", at: .seconds(22))
-        #expect(arbiter.nextDeadline == nil)
+        // `top` is timed: an endless one nobody acts on would rank below `timed`.
+        arbiter.present(peekPresentation(.interactive, duration: .seconds(1000)), for: "top", at: .seconds(22))
+        #expect(arbiter.state.owner == "top")
+        #expect(arbiter.nextDeadline == .seconds(1022))
         arbiter.advance(to: .seconds(100))
         arbiter.dismiss("top", at: .seconds(100))
         #expect(arbiter.state.owner == "timed")

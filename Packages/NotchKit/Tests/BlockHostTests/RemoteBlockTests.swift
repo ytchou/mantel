@@ -116,7 +116,7 @@ struct RemoteBlockTests {
         #expect(first.allSatisfy { !$0.replay }, "a change during the start still shows a peek")
         // `welcome` comes first, with settings read from the manifest defaults.
         #expect(rig.process.received.first.map { message -> Bool in
-            if case let .welcome(contract, settings, _) = message {
+            if case let .welcome(contract, settings, _, _) = message {
                 contract == Contract.current && settings == ["loud": .bool(false), "size": .string("large")]
             } else { false }
         } == true)
@@ -143,21 +143,58 @@ struct RemoteBlockTests {
     }
 
     @Test func presentSecondsAreBounded() async throws {
-        #expect(RemoteBlock.duration(seconds: .infinity) == nil)
-        #expect(RemoteBlock.duration(seconds: .nan) == nil)
-        #expect(RemoteBlock.duration(seconds: 0) == nil)
-        #expect(RemoteBlock.duration(seconds: 2.5) == .milliseconds(2500))
+        #expect(RemoteBlock.duration(seconds: .infinity, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: .nan, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: 0, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: 2.5, priority: .ambient) == .milliseconds(2500))
+        #expect(RemoteBlock.duration(seconds: 2.5, priority: .standard) == .milliseconds(2500))
 
         let rig = Rig()
         try await rig.process.start()
         // Before the fix this traps converting to `Duration`.
-        try rig.process.send(present(seconds: 1e300))
+        try rig.process.send(present(priority: .ambient, seconds: 1e300))
         await waitUntil { rig.runtime.state.owner == "hello" }
         #expect(rig.runtime.state.presentation?.duration == .seconds(3600))
 
-        try rig.process.send(present(.text("Again"), seconds: -1))
+        try rig.process.send(present(.text("Again"), priority: .ambient, seconds: -1))
         await waitUntil { rig.block.model.peek == .text("Again") }
         await settle()
+        #expect(rig.runtime.state.presentation?.duration == nil)
+    }
+
+    @Test func aStandardPresentationIsCappedAtSixtySeconds() async throws {
+        #expect(RemoteBlock.standardMaxSeconds == 60)
+        #expect(RemoteBlock.duration(seconds: 1e300, priority: .standard) == .seconds(60))
+
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(priority: .standard, seconds: 3600))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.duration == .seconds(60))
+    }
+
+    @Test func aStandardPresentationWithNoEndGetsSixtySeconds() async throws {
+        for seconds: Double in [0, -1, .infinity, .nan] {
+            #expect(RemoteBlock.duration(seconds: seconds, priority: .standard) == .seconds(60), "\(seconds)")
+        }
+
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(priority: .standard, seconds: nil))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.duration == .seconds(60))
+    }
+
+    @Test func ambientAndInteractiveKeepNoEnd() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(.text("Low"), priority: .ambient, seconds: nil))
+        await waitUntil { rig.block.model.peek == .text("Low") && rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.priority == .ambient)
+        #expect(rig.runtime.state.presentation?.duration == nil)
+
+        try rig.process.send(present(.text("Top"), priority: .interactive, seconds: nil))
+        await waitUntil { rig.block.model.peek == .text("Top") && rig.runtime.state.presentation?.priority == .interactive }
         #expect(rig.runtime.state.presentation?.duration == nil)
     }
 
@@ -232,7 +269,7 @@ struct RemoteBlockTests {
 
         let reason = try #require(failures.first)
         #expect(reason.contains("99"))
-        #expect(reason.contains("contracts 1 to 2"))
+        #expect(reason.contains("contracts 1 to 3"))
         #expect(rig.runtime.state.owner == nil)
         #expect(!rig.process.received.contains { if case .welcome = $0 { true } else { false } })
     }

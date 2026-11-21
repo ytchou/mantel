@@ -9,7 +9,7 @@ struct SettingsTests {
     /// The settings the first `welcome` carried.
     private func welcomeSettings(_ process: FakeProcess) -> [String: SettingValue]? {
         process.received.lazy.compactMap { message -> [String: SettingValue]? in
-            if case let .welcome(_, settings, _) = message { settings } else { nil }
+            if case let .welcome(_, settings, _, _) = message { settings } else { nil }
         }.first
     }
 

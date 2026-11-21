@@ -25,6 +25,10 @@ public struct Manifest: Codable, Hashable, Sendable {
     /// What the block may do beyond the default sandbox. Contract version
     /// 2; empty when the manifest has none.
     public var access: [Access]
+    /// The host names a block with `network` may reach through the app's
+    /// gate, such as `api.example.com` or `*.example.org`. Contract version
+    /// 3; empty when the manifest has none, and then left out when encoded.
+    public var hosts: [String]
     /// Event names, as in `WireEvent`. Kept as text so the app can name an
     /// unknown event in its message.
     public var events: [String]
@@ -41,6 +45,7 @@ public struct Manifest: Codable, Hashable, Sendable {
         trigger: String = "",
         permissions: [String] = [],
         access: [Access] = [],
+        hosts: [String] = [],
         events: [String] = [],
         settings: [SettingSpec] = []
     ) {
@@ -54,12 +59,13 @@ public struct Manifest: Codable, Hashable, Sendable {
         self.trigger = trigger
         self.permissions = permissions
         self.access = access
+        self.hosts = hosts
         self.events = events
         self.settings = settings
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, contract, executable, summary, symbol, trigger, permissions, access, events, settings
+        case id, name, version, contract, executable, summary, symbol, trigger, permissions, access, hosts, events, settings
     }
 
     public init(from decoder: any Decoder) throws {
@@ -81,8 +87,30 @@ public struct Manifest: Codable, Hashable, Sendable {
             }
             return value
         }
+        hosts = try c.decodeIfPresent([String].self, forKey: .hosts) ?? []
         events = try c.decodeIfPresent([String].self, forKey: .events) ?? []
         settings = try c.decodeIfPresent([SettingSpec].self, forKey: .settings) ?? []
+    }
+
+    /// Writes every field, as before, and `hosts` only when it is not empty,
+    /// so a version 1 or 2 manifest encodes as it did.
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(version, forKey: .version)
+        try c.encode(contract, forKey: .contract)
+        try c.encode(executable, forKey: .executable)
+        try c.encode(summary, forKey: .summary)
+        try c.encode(symbol, forKey: .symbol)
+        try c.encode(trigger, forKey: .trigger)
+        try c.encode(permissions, forKey: .permissions)
+        try c.encode(access, forKey: .access)
+        if !hosts.isEmpty {
+            try c.encode(hosts, forKey: .hosts)
+        }
+        try c.encode(events, forKey: .events)
+        try c.encode(settings, forKey: .settings)
     }
 
     /// Decodes `manifest.json` bytes. Every failure names the field.

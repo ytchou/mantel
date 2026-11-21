@@ -6,9 +6,9 @@ import Foundation
 /// refuses a block whose version is outside `supported`.
 public enum Contract {
     /// The version this code speaks.
-    public static let current = 2
+    public static let current = 3
     /// The versions the app accepts.
-    public static let supported: ClosedRange<Int> = 1...2
+    public static let supported: ClosedRange<Int> = 1...3
 
     /// The largest frame body, in bytes. A larger frame is an error.
     public static let maxFrameBytes = 4 * 1024 * 1024

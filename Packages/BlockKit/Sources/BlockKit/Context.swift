@@ -216,7 +216,7 @@ public final class Context {
     /// once, when the first `welcome` arrives.
     func receive(_ envelope: Envelope<HostToBlock>, start: (Context) -> Void) {
         switch envelope.message {
-        case let .welcome(_, settings, dataFolder):
+        case let .welcome(_, settings, dataFolder, _):
             generation = envelope.generation
             self.settings = settings
             self.dataFolder = URL(fileURLWithPath: dataFolder, isDirectory: true)

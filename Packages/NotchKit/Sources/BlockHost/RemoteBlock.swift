@@ -576,7 +576,8 @@ public final class RemoteBlock: NotchBlock {
         }
         settings = readSettings()
         self.contract = contract
-        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
+        // The network gate arrives with D19; until then no block gets a port.
+        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path, gatePort: nil))
         isWelcomed = true
         // The hang limit runs from here, no longer from the launch.
         lastAnswer = clock.now()
@@ -613,7 +614,7 @@ public final class RemoteBlock: NotchBlock {
             wing: content(wing, .wing),
             expanded: content(expanded, .expanded),
             opensAt: opensAt == .expanded ? .expanded : .peek,
-            duration: seconds.flatMap(Self.duration(seconds:)),
+            duration: Self.duration(seconds: seconds, priority: priority),
             accepts: Set(accepts.map(Self.dropKind))
         ))
         // Exactly what an in-app block does to answer a change just made:
@@ -623,12 +624,21 @@ public final class RemoteBlock: NotchBlock {
 
     /// The longest presentation a block may ask for, in seconds.
     static let maxSeconds = 3600.0
+    /// The longest a `standard` presentation stays, in seconds (D13). It is
+    /// also the time of a `standard` presentation sent with no end.
+    static let standardMaxSeconds = 60.0
 
-    /// A presentation's time from the block's `seconds`: nil (until dismissed)
-    /// when it is not finite or not positive, and at most `maxSeconds`.
-    static func duration(seconds: Double) -> Duration? {
-        guard seconds.isFinite, seconds > 0 else { return nil }
-        return .seconds(min(seconds, maxSeconds))
+    /// A presentation's time from the block's `seconds`. A `standard` one
+    /// ends within `standardMaxSeconds`, and at that time when the block sent
+    /// no usable `seconds`. An `ambient` or `interactive` one stays until
+    /// dismissed (nil) when `seconds` is missing, not finite or not positive,
+    /// and ends within `maxSeconds` otherwise.
+    static func duration(seconds: Double?, priority: Priority) -> Duration? {
+        let limit = priority == .standard ? standardMaxSeconds : maxSeconds
+        guard let seconds, seconds.isFinite, seconds > 0 else {
+            return priority == .standard ? .seconds(standardMaxSeconds) : nil
+        }
+        return .seconds(min(seconds, limit))
     }
 
     /// False, after reporting a failure, when a tree is over the node limit.

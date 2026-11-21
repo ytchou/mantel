@@ -154,6 +154,28 @@ struct MessagesTests {
         }
     }
 
+    @Test func welcomeCarriesTheGatePortWhenThereIsOne() throws {
+        let withPort = HostToBlock.welcome(contract: 3, settings: [:], dataFolder: "/tmp/a", gatePort: 49152)
+        #expect(try roundTrip(withPort).message == withPort)
+        let encoded = String(decoding: try Framing.encode(withPort, generation: 1), as: UTF8.self)
+        #expect(encoded.contains("\"gatePort\":49152"))
+
+        let withoutPort = HostToBlock.welcome(contract: 3, settings: [:], dataFolder: "/tmp/a")
+        #expect(try roundTrip(withoutPort).message == withoutPort)
+        let plain = String(decoding: try Framing.encode(withoutPort, generation: 1), as: UTF8.self)
+        #expect(!plain.contains("gatePort"), "gatePort encoded while nil")
+    }
+
+    /// Version 3 adds the gate port to `welcome`; the version 1 and 2 files
+    /// above still match unchanged.
+    @Test func theVersionThreeGoldenFileMatches() throws {
+        try matchGoldenFile("golden-v3.json", blockToHost: SamplesV3.blockToHost, hostToBlock: SamplesV3.hostToBlock)
+        try decodeAndEncodeGoldenFile("golden-v3.json", blockToHostCount: SamplesV3.blockToHost.count)
+        for message in SamplesV3.hostToBlock {
+            #expect(try roundTrip(message) == Envelope(generation: 3, message: message))
+        }
+    }
+
     @Test func v1NodeEncodesWithoutV2Fields() throws {
         // The keys inside `{"kind": {"<name>": {...}}}` for each version 1 builder.
         let expected: [(ViewNode, Set<String>)] = [
@@ -382,5 +404,17 @@ enum SamplesV2 {
         .input(input: .item(id: "tile-1", action: .menu(id: "open"))),
         .input(input: .dragBegan(id: "tile-1")),
         .input(input: .dragEnded(id: "tile-1", succeeded: true)),
+    ]
+}
+
+/// The version 3 additions, used by the golden-v3 test.
+enum SamplesV3 {
+    static let blockToHost: [BlockToHost] = [
+        .hello(contract: 3, id: "weather", version: "3.0.0"),
+    ]
+
+    static let hostToBlock: [HostToBlock] = [
+        .welcome(contract: 3, settings: ["units": .string("metric")], dataFolder: "/tmp/weather", gatePort: 49152),
+        .welcome(contract: 3, settings: [:], dataFolder: "/tmp/weather"),
     ]
 }
