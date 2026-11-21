@@ -19,6 +19,16 @@ extension Manifest {
     /// sheet, `RemoteBlock` on the Blocks page after the author's permissions.
     var accessText: [String] { access.map { $0.displayText(hosts: hosts) } }
 
+    /// The block's row on the Blocks page, the same for a running block
+    /// (`RemoteBlock`) and one waiting for review (`PendingBlock`): the
+    /// access the sandbox grants, in the user's words, after what the
+    /// author wrote.
+    func blockInfo(source: BlockSource) -> BlockInfo {
+        BlockInfo(summary: summary, symbol: symbol.isEmpty ? "square.grid.2x2" : symbol,
+                  trigger: trigger, permissions: permissions + accessText,
+                  version: version, source: source)
+    }
+
     /// The access for the install sheet, which lists the hosts on a row of
     /// their own ("Can reach"), so `network` does not repeat them.
     var sheetAccessText: [String] { access.map { $0 == .network ? "Use the network" : $0.displayText(hosts: hosts) } }

@@ -146,6 +146,11 @@ public final class NotchRuntime {
         demand.contains(ObjectIdentifier(type))
     }
 
+    /// True when the block `id` is enabled and subscribes to events of `type`.
+    public func isSubscribed(_ id: BlockID, to type: any NotchEvent.Type) -> Bool {
+        !(contexts[id]?.handlers[ObjectIdentifier(type)]?.isEmpty ?? true)
+    }
+
     /// A block subscribed to `type`. Adds it to the demand; reports a change
     /// only when no enabled block listened to it before.
     fileprivate func subscribed(to type: ObjectIdentifier) {

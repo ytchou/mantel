@@ -64,7 +64,9 @@ public struct Manifest: Codable, Hashable, Sendable {
         self.settings = settings
     }
 
-    private enum CodingKeys: String, CodingKey {
+    /// Internal and `CaseIterable` so a test checks that `encode` writes
+    /// every key: a field added later cannot be dropped silently.
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, version, contract, executable, summary, symbol, trigger, permissions, access, hosts, events, settings
     }
 
@@ -106,9 +108,7 @@ public struct Manifest: Codable, Hashable, Sendable {
         try c.encode(trigger, forKey: .trigger)
         try c.encode(permissions, forKey: .permissions)
         try c.encode(access, forKey: .access)
-        if !hosts.isEmpty {
-            try c.encode(hosts, forKey: .hosts)
-        }
+        try c.encodeIfPresent(hosts.isEmpty ? nil : hosts, forKey: .hosts)
         try c.encode(events, forKey: .events)
         try c.encode(settings, forKey: .settings)
     }

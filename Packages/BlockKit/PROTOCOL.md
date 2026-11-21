@@ -211,7 +211,7 @@ of each event the manifest lists.
 |---|---|---|---|
 | `pointerHover` | Pointer over the notch | The pointer entered or left the notch | none |
 | `dragStarted` | Dragging starts | A drag is under way, and the kinds of things in it (file, link, text), never their content | none |
-| `dragEnded` | Dragging ends | A drag is under way, and the kinds of things in it (file, link, text), never their content | none |
+| `dragEnded` | Dragging ends | A drag has ended, and the kinds of things in it (file, link, text), never their content | none |
 | `screenshotCaptured` | Screenshots | The path and time of a new screenshot | the screenshot folder |
 | `outputVolume` | Volume changes | The output volume and mute state | none |
 | `nowPlaying` | Music playing | Player, state, title, artist, artwork | none |
@@ -401,7 +401,9 @@ sandbox. An unknown token is refused.
   contract.
 - A bare `*` is refused.
 - `*.` with a top-level domain only, such as `*.com`, is refused.
-- An entry that is not a host name is refused.
+- An entry that is not a host name is refused: a host name is letters,
+  digits, `-` and `.`, in labels that are not empty, at most 253
+  characters.
 
 ### Network gate
 
@@ -413,8 +415,11 @@ sandbox. An unknown token is refused.
 - The gate accepts `CONNECT <host>:443` for a host that matches an entry in
   `hosts`. It answers `200`, opens the connection and passes bytes both ways.
 - Anything else gets `403` and is closed: another host, another port, plain
-  HTTP, a request header over 8 KB.
-- Each refused host is logged once, never with the request's content.
+  HTTP, a host that is not a host name (by the rule under "Hosts"), a
+  request header over 8 KB.
+- Each refused host is logged once, cut to 253 characters, never with the
+  request's content. After 64 different refused hosts, one line says more
+  are not logged.
 - In Swift, use `ctx.urlSession`: it sends every request through the gate.
   A session the block builds itself (`URLSession.shared` included) does not
   work.
@@ -425,7 +430,8 @@ The app refuses a manifest, at install and at launch, when: a required field
 is missing or has the wrong type; `id` breaks the rule above or is reserved
 (`shelf`, `rename`, `nowplaying`, `block`, `onboarding`, `com`, `apple`,
 `ns`; only a bundled block may use one); `contract` is not supported;
-`executable` is outside `Contents/MacOS` or not executable; an event name is
+`executable` is outside `Contents/MacOS` or not executable; a symbolic link
+in the package leads outside it; an event name is
 unknown; an `access` token is unknown; `hosts` breaks a rule under "Hosts";
 or a setting is malformed. Each case has its own message.
 
@@ -442,18 +448,24 @@ denies:
 - preference writes, and reads of TopNotch's own preferences domain;
 - file writes, except in the block's data folder, the temporary folder and
   `/dev`;
-- file reads and writes in the app's `TopNotch` folder inside the temporary
-  folder, where dropped files and every block's temporary folder are, except
-  in the block's own temporary folder;
 - file reads outside an allow-list: the system locations a process needs,
   the block's package, its data folder, its own temporary folder, and what
-  its tokens open.
+  its tokens open;
+- after everything a token opens: file reads and writes in the app's
+  `TopNotch` folder inside the temporary folder (dropped files and every
+  block's temporary folder), in TopNotch's support folder
+  (`~/Library/Application Support/TopNotch`: other blocks' packages and
+  data, the approvals) and of the app's preferences file, except the
+  block's own temporary folder, data folder and package.
 
-`files.read` opens the home folder and every volume under `/Volumes`. It
-never opens TopNotch's support folder
-(`~/Library/Application Support/TopNotch`: other blocks' packages and data,
-the approvals) or the app's preferences file.
+`files.read` opens the home folder and every volume under `/Volumes`.
 `files.screenshots` opens reads and writes in the screenshot folder only.
+Neither opens what the last rule closes, even when the screenshot folder is
+the home folder.
+
+The app follows the same rule before it shows (`preview`) or drags out a file
+the block names, and before it hands a dropped file over where it is: a path
+the block's sandbox cannot read is left out, or for a drop, copied.
 
 Limits that remain:
 
@@ -479,6 +491,20 @@ Limits that remain:
   can name and learn whether it exists.
 - `files.read` opens every mounted volume under `/Volumes` whole, not only
   the home folder: files on external disks must stay readable.
+- System services can fetch from the network for a block, outside the
+  network gate: the network deny covers the block's own process only. A
+  background `URLSession` (run by `nsurlsessiond`) or LaunchServices
+  opening a URL in another app reaches any host. Closing them needs their
+  services denied, which may break frameworks blocks use; that needs a
+  follow-up spike.
+- A block starts in a process group of its own, and the group is ended with
+  it, so its child processes do not outlive it. A child that leaves the
+  group is not ended, and the memory and processor watch counts the
+  block's own process only, not its children.
+- The package hash is checked before each start, but the package runs in
+  place from its folder: a file changed between the check and the moment
+  it is loaded is not caught until the next start.
 
 The signature answers who made the block. The owner's approval answers
-whether this exact build may run.
+whether this exact build may run. A package the app cannot read in full (a file it
+cannot open, a folder it cannot list) matches no approval and does not start.

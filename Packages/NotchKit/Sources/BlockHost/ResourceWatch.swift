@@ -19,7 +19,8 @@ typealias ResourceSampler = @Sendable (pid_t) -> ResourceSample?
 /// limit starts the count again), it calls `onBreach` with the reason in the
 /// user's words and stops. Each sample is passed to `onSample`. A sample that
 /// fails ends the watch quietly: the process is gone, and the stand-in
-/// learns that from its socket.
+/// learns that from its socket. It reads the block's own process only, not
+/// child processes it started (those are ended with it; see `BlockProcess`).
 // The limits are the same for every block: 500 MB and half a core for two
 // minutes leave room for the on-device model and Quick Look thumbnails,
 // and stop a leak or a busy loop long before the Mac slows down. Sampling
@@ -98,8 +99,7 @@ final class ResourceWatch {
         let now = clock.now()
         var fraction = 0.0
         if let previous {
-            let elapsed = Double((now - previous.at).components.seconds) * 1e9
-                + Double((now - previous.at).components.attoseconds) / 1e9
+            let elapsed = (now - previous.at) / .nanoseconds(1)
             let before = previous.sample.processorNanoseconds
             let used = sample.processorNanoseconds >= before ? Double(sample.processorNanoseconds - before) : 0
             fraction = elapsed > 0 ? used / elapsed : 0

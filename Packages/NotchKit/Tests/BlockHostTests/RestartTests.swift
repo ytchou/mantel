@@ -254,6 +254,40 @@ struct RestartTests {
         #expect(setup.store.canRemove("hello"))
     }
 
+    /// The launch check counts for the start right after it only: a block
+    /// found at launch turned off, changed later, is hashed when turned on.
+    @Test func aBlockFoundOffAtLaunchIsHashedWhenTurnedOnLater() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let runtime = NotchRuntime()
+        // The relaunched store stays alive for the whole test, as in the app.
+        let store = setup.makeStore(checksRuntime: false)
+        for block in store.standIns(developmentPath: nil) { runtime.register(block, enabled: false) }
+        await settle()
+
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        runtime.setEnabled("hello", true)
+        await settle()
+
+        #expect(setup.launcher.processes.count == 1, "only the process started at install")
+        withExtendedLifetime(store) {}
+    }
+
+    /// An installed block whose store is gone cannot be hashed: it does not start.
+    @Test func anInstalledBlockDoesNotStartWithoutItsStore() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let runtime = NotchRuntime()
+        // `relaunch` keeps no reference to the store it makes.
+        for block in setup.relaunch() { runtime.register(block, enabled: false) }
+        await settle()
+
+        runtime.setEnabled("hello", true)
+        await settle()
+
+        #expect(setup.launcher.processes.count == 1, "only the process started at install")
+    }
+
     /// An unchanged installed package is started again when turned on.
     @Test func anUnchangedPackageStartsWhenTurnedOnAgain() async throws {
         let setup = InstallTests.Setup()

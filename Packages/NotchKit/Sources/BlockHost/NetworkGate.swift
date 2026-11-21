@@ -13,8 +13,12 @@ struct HostRule: Sendable, Equatable {
         self.pattern = pattern.lowercased()
     }
 
+    /// False for anything that is not a host name (`isHostName`), whatever
+    /// the rule: a NUL, `/`, `%` or `_` before an approved suffix must not
+    /// pass, since the connector may read only the part before it.
     func matches(_ host: String) -> Bool {
         let host = host.lowercased()
+        guard Self.isHostName(host) else { return false }
         guard pattern.hasPrefix("*.") else { return host == pattern }
         // ".example.org": at least one character must come before it.
         let suffix = pattern.dropFirst()
@@ -27,14 +31,19 @@ struct HostRule: Sendable, Equatable {
         if pattern == "*" { return "\"*\" would let it reach every host" }
         let wildcard = pattern.hasPrefix("*.")
         let name = wildcard ? String(pattern.dropFirst(2)) : pattern
-        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.")
-        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
-        guard !name.isEmpty, name.allSatisfy(allowed.contains), labels.allSatisfy({ !$0.isEmpty }) else {
-            return "\"\(pattern)\" is not a host name"
-        }
+        guard isHostName(name.lowercased()) else { return "\"\(pattern)\" is not a host name" }
         // "*.com" names every host under a top-level domain.
-        if wildcard, labels.count < 2 { return "\"\(pattern)\" would let it reach every host under \"\(name)\"" }
+        if wildcard, !name.contains(".") { return "\"\(pattern)\" would let it reach every host under \"\(name)\"" }
         return nil
+    }
+
+    /// True when `name` is lowercase letters, digits, `-` and `.` only, in
+    /// labels that are not empty, and at most 253 characters: a host name
+    /// or an IPv4 address. An IPv6 address never is.
+    static func isHostName(_ name: String) -> Bool {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-.")
+        return !name.isEmpty && name.count <= 253 && name.allSatisfy(allowed.contains)
+            && name.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty }
     }
 }
 
@@ -57,8 +66,10 @@ enum NetworkGateError: Error, CustomStringConvertible {
 /// `CONNECT <host>:443` for a host that matches one of the block's rules,
 /// opens the connection itself (so the block needs no name lookups) and
 /// passes bytes both ways. Anything else (another host, another port, plain
-/// HTTP, a header that never ends) gets `403` and is closed. Each refused
-/// host is logged once, never with the request's content.
+/// HTTP, a host that is not a host name, a header that never ends) gets
+/// `403` and is closed. Each refused host is logged once, cut to
+/// `loggedHostLength` characters and never with the request's content; past
+/// `refusedLogLimit` different ones, one line says more are not logged.
 ///
 /// Every mutable property is used on `queue` only.
 final class NetworkGate: @unchecked Sendable {
@@ -78,6 +89,11 @@ final class NetworkGate: @unchecked Sendable {
     static let refusal = Data("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
     static let established = Data("HTTP/1.1 200 Connection Established\r\n\r\n".utf8)
     static let unreachable = Data("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+    /// The most different refusals a gate remembers and logs: the text is
+    /// the block's, so neither memory nor the log may grow without end.
+    static let refusedLogLimit = 64
+    /// The most characters of a refused host that are logged: a host name's limit.
+    static let loggedHostLength = 253
 
     let blockID: String
     let rules: [HostRule]
@@ -88,8 +104,10 @@ final class NetworkGate: @unchecked Sendable {
     private var listener: NWListener?
     /// Every connection the gate holds, from either side, until it ends.
     private var open: [ObjectIdentifier: NWConnection] = [:]
-    /// Hosts already logged as refused.
+    /// Hosts already logged as refused, at most `refusedLogLimit`.
     private var refused: Set<String> = []
+    /// True once the line saying more refusals are not logged was written.
+    private var refusalsCapped = false
 
     init(blockID: String, hosts: [String], connector: @escaping Connector = NetworkGate.direct) {
         self.blockID = blockID
@@ -101,6 +119,9 @@ final class NetworkGate: @unchecked Sendable {
     func allows(_ host: String) -> Bool {
         rules.contains { $0.matches(host) }
     }
+
+    /// The refusals logged so far. For tests.
+    var refusedHosts: Set<String> { queue.sync { refused } }
 
     /// Opens the listener and returns its port.
     // Waits on the caller's thread, the main actor in the app, for the
@@ -237,8 +258,14 @@ final class NetworkGate: @unchecked Sendable {
     }
 
     private func refuse(_ client: NWConnection, naming host: String) {
-        if refused.insert(host).inserted {
-            log.info("\(self.blockID, privacy: .public): the gate refused \(host, privacy: .public)")
+        let host = String(host.prefix(Self.loggedHostLength))
+        if refused.count < Self.refusedLogLimit {
+            if refused.insert(host).inserted {
+                log.info("\(self.blockID, privacy: .public): the gate refused \(host, privacy: .public)")
+            }
+        } else if !refused.contains(host), !refusalsCapped {
+            refusalsCapped = true
+            log.info("\(self.blockID, privacy: .public): the gate refused more hosts; they are not logged")
         }
         client.send(content: Self.refusal, completion: .contentProcessed { _ in client.cancel() })
     }

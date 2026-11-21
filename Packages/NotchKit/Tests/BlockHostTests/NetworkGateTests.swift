@@ -93,6 +93,52 @@ struct NetworkGateTests {
         #expect(asked.all.isEmpty)
     }
 
+    /// A3: a NUL (or `/`, `%`, `_`) before an approved suffix is no host
+    /// name, so the connector never sees it.
+    @Test func theGateRefusesAHostThatIsNotAHostName() async throws {
+        let asked = Asked()
+        let gate = NetworkGate(blockID: "test", hosts: ["*.example.org"], connector: { host, port in
+            asked.add("\(host):\(port)")
+            return NWConnection(host: "127.0.0.1", port: 9, using: .tcp)
+        })
+        let port = try gate.start()
+        defer { gate.stop() }
+
+        for host in ["1.2.3.4\u{0}.example.org", "evil.test/.example.org", "a%2e.example.org", "a_b.example.org",
+                     "[::1].example.org"] {
+            #expect(!HostRule("*.example.org").matches(host), "\(host)")
+            let client = try LoopbackClient(port: port)
+            defer { client.close() }
+            try client.write("CONNECT \(host):443 HTTP/1.1\r\n\r\n")
+            let head = try client.readHead()
+            #expect(head.hasPrefix("HTTP/1.1 403"), "\(host): \(head)")
+        }
+        #expect(asked.all.isEmpty)
+    }
+
+    /// GS1: refusals are block-chosen text; the gate keeps at most
+    /// `refusedLogLimit` of them, each cut to `loggedHostLength` characters.
+    @Test func theGateKeepsALimitedNumberOfRefusals() async throws {
+        let gate = NetworkGate(blockID: "test", hosts: ["api.example.com"], connector: { _, _ in
+            Issue.record("nothing is approved")
+            return NWConnection(host: "127.0.0.1", port: 9, using: .tcp)
+        })
+        let port = try gate.start()
+        defer { gate.stop() }
+
+        let long = String(repeating: "a", count: 2000)
+        for index in 0..<(NetworkGate.refusedLogLimit + 10) {
+            let client = try LoopbackClient(port: port)
+            defer { client.close() }
+            try client.write("CONNECT \(index)-\(long).test:443 HTTP/1.1\r\n\r\n")
+            #expect(try client.readHead().hasPrefix("HTTP/1.1 403"))
+        }
+
+        let refused = gate.refusedHosts
+        #expect(refused.count == NetworkGate.refusedLogLimit)
+        #expect(refused.allSatisfy { $0.count <= NetworkGate.loggedHostLength })
+    }
+
     @Test func theGateParsesOnlyConnect() {
         let target = NetworkGate.connectTarget(Data("CONNECT Api.Example.com:443 HTTP/1.1".utf8))
         #expect(target?.host == "api.example.com")

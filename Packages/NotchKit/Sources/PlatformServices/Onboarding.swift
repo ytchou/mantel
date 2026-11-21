@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NotchCore
+import Observation
 import SwiftUI
 
 // MARK: - Folder access
@@ -37,27 +38,48 @@ enum FolderAccess: Equatable, Sendable {
 }
 
 /// The answer to "may TopNotch read the screenshot folder", asked through
-/// `FolderAccess.check` before the screenshot source first runs. The app
-/// wires it as the source's consent check. Kept for this launch only: each
-/// launch asks again, and macOS answers at once once the user has decided.
+/// `FolderAccess.check` before the screenshot source first runs, and again
+/// each time the owner presses "Allow access". The app wires it as the
+/// source's consent check and sets `onChange` to the source coordinator's
+/// `evaluate`. Kept for this launch only: each launch asks again, and macOS
+/// answers at once once the user has decided.
 @MainActor
+@Observable
 public final class ScreenshotFolderConsent {
     public private(set) var isGranted = false
-    private var isAsking = false
+    /// True once an answer came in that is not "allowed". The Blocks page
+    /// then says why a block that needs the folder does nothing.
+    public private(set) var isRefused = false
+    /// Called after every answer; the app passes the source coordinator's `evaluate`.
+    @ObservationIgnored public var onChange: (@MainActor () -> Void)?
+    @ObservationIgnored private var isAsking = false
 
     public init() {}
 
-    /// Ask macOS for access to the screenshot folder, then call `done`. An
-    /// ask while one is under way does nothing.
-    public func ask(then done: @escaping @MainActor () -> Void) {
+    /// Ask macOS for access to the screenshot folder. An ask while one is
+    /// under way does nothing.
+    public func ask() {
         guard !isAsking else { return }
         isAsking = true
         Task {
             let access = await FolderAccess.check(ScreenshotFolder.current())
             isAsking = false
-            isGranted = access == .granted
-            done()
+            record(access)
         }
+    }
+
+    /// Checks `folder` again, as "Allow access" does, and records the answer.
+    func check(_ folder: URL) async -> FolderAccess {
+        let access = await FolderAccess.check(folder)
+        record(access)
+        return access
+    }
+
+    /// Keeps `access` as the answer and reports it through `onChange`.
+    func record(_ access: FolderAccess) {
+        isGranted = access == .granted
+        isRefused = !isGranted
+        onChange?()
     }
 }
 
@@ -86,9 +108,10 @@ enum PermissionRow: Hashable {
         (runtime.hasSubscribers(for: ScreenshotCaptured.self) ? [.screenshotFolder] : []) + [.appleIntelligence]
     }
 
-    @MainActor @ViewBuilder var view: some View {
+    /// - Parameter consent: updated when the owner presses "Allow access".
+    @MainActor @ViewBuilder func view(consent: ScreenshotFolderConsent?) -> some View {
         switch self {
-        case .screenshotFolder: FolderAccessRow()
+        case .screenshotFolder: FolderAccessRow(consent: consent)
         case .appleIntelligence: AppleIntelligenceRow()
         }
     }
@@ -97,6 +120,12 @@ enum PermissionRow: Hashable {
 struct FolderAccessRow: View {
     @State private var access: FolderAccess = .unknown
     let folder = ScreenshotFolder.current()
+    /// Takes the answer, so the screenshot source starts once access is allowed.
+    let consent: ScreenshotFolderConsent?
+
+    init(consent: ScreenshotFolderConsent? = nil) {
+        self.consent = consent
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -113,7 +142,11 @@ struct FolderAccessRow: View {
                     Button("Allow access") {
                         Task {
                             access = .checking
-                            access = await FolderAccess.check(folder)
+                            if let consent {
+                                access = await consent.check(folder)
+                            } else {
+                                access = await FolderAccess.check(folder)
+                            }
                         }
                     }
                     .disabled(access == .checking)
@@ -159,10 +192,12 @@ struct AppleIntelligenceRow: View {
 /// Settings > General > Permissions.
 public struct OnboardingView: View {
     private let rows: [PermissionRow]
+    private let consent: ScreenshotFolderConsent?
     private let onDone: () -> Void
 
-    init(rows: [PermissionRow], onDone: @escaping () -> Void) {
+    init(rows: [PermissionRow], consent: ScreenshotFolderConsent? = nil, onDone: @escaping () -> Void) {
         self.rows = rows
+        self.consent = consent
         self.onDone = onDone
     }
 
@@ -178,7 +213,7 @@ public struct OnboardingView: View {
 
             Form {
                 ForEach(rows, id: \.self) { row in
-                    Section { row.view }
+                    Section { row.view(consent: consent) }
                 }
             }
             .formStyle(.grouped)
@@ -199,11 +234,14 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
     static let completedKey = "onboarding.completed"
 
     private let runtime: NotchRuntime
+    private let consent: ScreenshotFolderConsent?
     private let defaults: UserDefaults
     private var window: NSWindow?
 
-    public init(runtime: NotchRuntime, defaults: UserDefaults = .standard) {
+    /// - Parameter consent: updated when the owner presses "Allow access".
+    public init(runtime: NotchRuntime, consent: ScreenshotFolderConsent? = nil, defaults: UserDefaults = .standard) {
         self.runtime = runtime
+        self.consent = consent
         self.defaults = defaults
         super.init()
     }
@@ -229,7 +267,7 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
         // Measure once, then give the window a fixed size. Letting the hosting
         // view drive the window size through constraints crashed at launch
         // (AppKit exception in the window's update-constraints pass).
-        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime)) { [weak self] in
+        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime), consent: consent) { [weak self] in
             self?.window?.close()
         })
         let size = hosting.fittingSize

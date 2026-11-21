@@ -14,7 +14,7 @@ enum EventCatalog {
                        reveals: "A drag is under way, and the kinds of things in it (file, link, text), never their content")
         case .dragEnded:
             EventEntry(name: "Dragging ends",
-                       reveals: "A drag is under way, and the kinds of things in it (file, link, text), never their content")
+                       reveals: "A drag has ended, and the kinds of things in it (file, link, text), never their content")
         case .screenshotCaptured:
             EventEntry(name: "Screenshots",
                        reveals: "The path and time of a new screenshot",

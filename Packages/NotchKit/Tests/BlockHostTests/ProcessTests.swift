@@ -29,6 +29,44 @@ struct ProcessTests {
         #expect(!processExists(process.pid))
     }
 
+    /// A7: a child the block started does not outlive it.
+    @Test func aChildProcessEndsWithTheBlock() async throws {
+        let rig = try SandboxRig()
+        defer { rig.remove() }
+        let process = try BlockProcess.spawn(executable: Fixture.executable(in: rig.package), generation: 1,
+                                             sandbox: rig.profile())
+        defer { process.terminate() }
+        #expect(getpgid(process.pid) == process.pid, "the block leads a process group of its own")
+
+        let logs = try await rig.talk(to: process, generation: 1, commands: ["spawn"]).logs
+        let line = try #require(logs.first)
+        let child = try #require(pid_t(line.dropFirst("spawned ".count)), "log: \(line)")
+        #expect(processExists(child))
+
+        process.terminate()
+        let deadline = Date().addingTimeInterval(5)
+        while processExists(child), Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!processExists(child), "the child was ended with the block")
+    }
+
+    /// A8: an action waits for the process to exit, then runs once.
+    @Test func whenExitedRunsAfterTheProcessExits() async throws {
+        let package = try Fixture.package()
+        let process = try BlockProcess.spawn(executable: Fixture.executable(in: package), generation: 1)
+        defer { process.terminate() }
+        let ran = Asked()
+
+        process.whenExited { ran.add("exited") }
+        #expect(ran.all.isEmpty, "still running")
+
+        process.terminate()
+        let deadline = Date().addingTimeInterval(2)
+        while ran.all.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(ran.all == ["exited"])
+        process.whenExited { ran.add("late") }
+        #expect(ran.all == ["exited", "late"], "after the exit, at once")
+    }
+
     // MARK: Sandboxed
 
     @Test func sandboxedFixtureSaysHello() async throws {

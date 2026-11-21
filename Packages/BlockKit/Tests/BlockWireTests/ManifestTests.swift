@@ -79,6 +79,17 @@ struct ManifestTests {
         #expect(decoded.hosts == ["api.example.com", "*.example.org"])
     }
 
+    /// A field added later must be written too: with every field set, the
+    /// encoded keys are exactly the coding keys.
+    @Test func encodingWritesEveryField() throws {
+        let manifest = Manifest(id: "a", name: "A", version: "1", contract: 3, executable: "A",
+                                summary: "S", symbol: "star", trigger: "T", permissions: ["P"],
+                                access: [.network], hosts: ["api.example.com"], events: ["pointerHover"],
+                                settings: [SettingSpec(key: "k", type: .toggle, title: "K")])
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(manifest)) as? [String: Any]
+        #expect(Set(object?.keys.map { $0 } ?? []) == Set(Manifest.CodingKeys.allCases.map(\.stringValue)))
+    }
+
     @Test func aVersionTwoManifestDecodesWithNoHosts() throws {
         let v2 = #"{"id":"a","name":"A","version":"1","contract":2,"executable":"A","access":["files.read"]}"#
         let decoded = try Manifest.decode(Data(v2.utf8))

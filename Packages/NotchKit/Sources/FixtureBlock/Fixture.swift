@@ -23,6 +23,8 @@ import Foundation
 ///   trusted whatever it is: the tests' local server signs its own.
 /// - `prefs:<domain>`: read the preferences domain through the preferences
 ///   service and log `prefs found` when it has any key, else `prefs none`.
+/// - `spawn`: start `/bin/sleep 60` as a child process and log
+///   `spawned <pid>`, or `spawn failed`, for the process group tests.
 /// On a pointer hover it presents a small peek, so tests can see a present.
 @main
 struct Fixture: Block {
@@ -69,6 +71,12 @@ struct Fixture: Block {
                 let domain = String(command.dropFirst("prefs:".count))
                 let keys = CFPreferencesCopyKeyList(domain as CFString, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] ?? []
                 ctx.log(keys.isEmpty ? "prefs none" : "prefs found")
+            } else if command == "spawn" {
+                var pid: pid_t = 0
+                let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("60"), nil]
+                defer { argv.forEach { free($0) } }
+                let result = posix_spawn(&pid, "/bin/sleep", nil, nil, argv, nil)
+                ctx.log(result == 0 ? "spawned \(pid)" : "spawn failed")
             } else if command.hasPrefix("read:") {
                 let fd = open(String(command.dropFirst("read:".count)), O_RDONLY)
                 if fd >= 0 { close(fd) }

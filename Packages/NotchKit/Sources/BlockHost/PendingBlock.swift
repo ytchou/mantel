@@ -22,9 +22,7 @@ final class PendingBlock: NotchBlock {
         title = manifest.name
         self.packageURL = packageURL
         review = reason
-        info = BlockInfo(summary: manifest.summary, symbol: manifest.symbol.isEmpty ? "square.grid.2x2" : manifest.symbol,
-                         trigger: manifest.trigger, permissions: manifest.permissions + manifest.accessText,
-                         version: manifest.version, source: source)
+        info = manifest.blockInfo(source: source)
         health = .turnedOff(reason: Self.reason(reason))
     }
 

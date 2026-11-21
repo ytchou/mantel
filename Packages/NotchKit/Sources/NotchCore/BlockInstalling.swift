@@ -11,14 +11,17 @@ public protocol BlockInstalling: AnyObject {
     func inspect(_ url: URL) throws -> BlockPackageSummary
 
     /// Copy the package at `url` into the installed blocks and start it. Replaces
-    /// an installed block with the same id.
-    func install(_ url: URL) throws
+    /// an installed block with the same id. `expectedHash` is the
+    /// `packageHash` of the summary the owner confirmed: a package that is
+    /// no longer that build is refused with `changedDuringReview`.
+    func install(_ url: URL, expectedHash: String) throws
 
     /// Approve the package of a block waiting for review, found in the
     /// Blocks folder or changed since its last approval, and start it.
     /// Checks the package again first and throws the refusal the user would
-    /// see on install.
-    func approve(_ id: BlockID) throws
+    /// see on install. `expectedHash` binds the approval to the build the
+    /// owner reviewed, as for `install`.
+    func approve(_ id: BlockID, expectedHash: String) throws
 
     /// Read the package of a block waiting for review, where it is, as
     /// `inspect` reads a chosen one, for the sheet that approves it. Throws
@@ -35,10 +38,15 @@ public protocol BlockInstalling: AnyObject {
     /// installed package refused at launch; the Blocks page then offers no
     /// "Turn On". True by default.
     func canTurnOn(_ id: BlockID) -> Bool
+
+    /// The folder installed packages are kept in, shown on the Blocks page.
+    /// Nil by default: no folder is shown.
+    var blocksFolder: URL? { get }
 }
 
 public extension BlockInstalling {
     func canTurnOn(_ id: BlockID) -> Bool { true }
+    var blocksFolder: URL? { nil }
     func reviewSummary(_ id: BlockID) throws -> BlockPackageSummary { throw BlockInstallError.nothingToApprove(id.rawValue) }
 }
 
@@ -59,9 +67,11 @@ public struct BlockPackageSummary: Sendable, Equatable {
     public var version: String
     /// The contract version the package was built for.
     public var contract: Int
-    /// Events the block listens to, as display text.
-    public var events: [String]
-    /// Events the installed version did not listen to. Empty for a new install.
+    /// The SHA-256 of the package as read for this summary. Confirming the
+    /// sheet passes it back, so only this build is installed or approved.
+    public var packageHash: String
+    /// Events the installed or approved version did not listen to. Empty for
+    /// a new install.
     public var newEvents: [String]
     /// What each event the block listens to reveals and needs, in the
     /// manifest's order.
@@ -93,7 +103,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
         name: String,
         version: String,
         contract: Int,
-        events: [String] = [],
+        packageHash: String = "",
         newEvents: [String] = [],
         eventEntries: [EventEntry] = [],
         permissions: [String] = [],
@@ -112,7 +122,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
         self.name = name
         self.version = version
         self.contract = contract
-        self.events = events
+        self.packageHash = packageHash
         self.newEvents = newEvents
         self.eventEntries = eventEntries
         self.permissions = permissions
@@ -151,8 +161,6 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case differentBlock(expected: String, found: String)
     /// The package's signature is broken: it was changed after signing.
     case badSignature(String)
-    /// The package is not signed, or signed ad hoc.
-    case unsigned
     /// The update is signed by someone other than the installed block.
     case differentSigner(installed: String, found: String)
     /// The package is in the old flat format, from before blocks were bundles.
@@ -166,6 +174,8 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case invalidHosts(String)
     /// No block with this id waits for review.
     case nothingToApprove(String)
+    /// The package is no longer the build the sheet showed.
+    case changedDuringReview
 
     public var errorDescription: String? {
         switch self {
@@ -198,8 +208,6 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "This package is the block \"\(found)\", not \"\(expected)\", so it cannot update \"\(expected)\". Choose the package of \"\(expected)\", or use Install Block\u{2026} to add \"\(found)\"."
         case let .badSignature(detail):
             return "The block's signature is not valid (\(detail)). The package may have been changed after it was signed. Ask the block's author for a new copy."
-        case .unsigned:
-            return "This block is not signed, so TopNotch cannot tell who made it. Ask the block's author for a signed package, or approve this build only if you built it or trust where it came from."
         case let .differentSigner(installed, found):
             return "This update is signed by \"\(found)\", but the installed block is signed by \"\(installed)\", so it was not installed. Get the update from the block's original author, or remove the block first if you trust the new signer."
         case .oldPackageFormat:
@@ -212,6 +220,8 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "The block's list of hosts cannot be used: \(detail). Ask the block's author to fix the manifest."
         case let .nothingToApprove(id):
             return "No block \"\(id)\" is waiting for review. Open the Blocks page again to see its current state."
+        case .changedDuringReview:
+            return "The package changed while you were reviewing it. Review it again."
         }
     }
 }

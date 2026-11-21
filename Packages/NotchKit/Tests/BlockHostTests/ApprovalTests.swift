@@ -43,15 +43,66 @@ struct ApprovalTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "Approvals.json")
         let store = ApprovalStore(file: file)
-        try store.approve(id: "signed", hash: "abc", signer: "Example Signer", hosts: ["api.example.com"])
-        try store.approve(id: "unsigned", hash: "def", signer: nil, hosts: [])
+        try store.approve(id: "weather-peek", hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", signer: "Example Signer", hosts: ["api.example.com"])
+        try store.approve(id: "clip-stash", hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", signer: nil, hosts: [])
 
         let reloaded = ApprovalStore(file: file)
 
-        #expect(reloaded.approval(for: "signed")
-            == Approval(id: "signed", hash: "abc", signer: "Example Signer", hosts: ["api.example.com"]))
-        #expect(reloaded.approval(for: "unsigned") == Approval(id: "unsigned", hash: "def", signer: nil, hosts: []))
-        #expect(reloaded.approval(for: "other") == nil)
+        #expect(reloaded.approval(for: "weather-peek")
+            == Approval(id: "weather-peek", hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", signer: "Example Signer", hosts: ["api.example.com"]))
+        #expect(reloaded.approval(for: "clip-stash") == Approval(id: "clip-stash", hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", signer: nil, hosts: []))
+        #expect(reloaded.approval(for: "timer") == nil)
+    }
+
+    @Test func eventsRoundTripAndAnOldRecordHasNone() throws {
+        let root = temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "Approvals.json")
+        try ApprovalStore(file: file).approve(id: "screenshots", hash: String(repeating: "a", count: 64), signer: nil,
+                                              hosts: [], events: ["screenshotCaptured", "pointerHover"])
+
+        #expect(ApprovalStore(file: file).approval(for: "screenshots")?.events == ["screenshotCaptured", "pointerHover"])
+
+        // As written before events were kept.
+        let old = #"{"older":{"hash":"\#(String(repeating: "b", count: 64))","hosts":["api.example.com"]}}"#
+        try Data(old.utf8).write(to: file)
+        let approval = try #require(ApprovalStore(file: file).approval(for: "older"))
+        #expect(approval.events == [])
+        #expect(approval.hosts == ["api.example.com"])
+        #expect(approval.signer == nil)
+    }
+
+    /// A4: what the app cannot read cannot be compared, so it matches no approval.
+    @Test func anUnreadableFileMatchesNoApproval() throws {
+        let root = temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = try makePackage(in: root, named: "Probe.topblock")
+        let approved = PackageHash.of(package)
+        let library = package.appending(path: "Contents/Frameworks/libProbe.dylib")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: library.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: library.path) }
+
+        let first = PackageHash.of(package)
+        #expect(first != approved)
+        #expect(PackageHash.of(package) != first, "two reads of an unreadable package never agree")
+    }
+
+    @Test func anUnlistableFolderMatchesNoApproval() throws {
+        let root = temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = try makePackage(in: root, named: "Probe.topblock")
+        let approved = PackageHash.of(package)
+        let folder = package.appending(path: "Contents/Frameworks")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+
+        #expect(PackageHash.of(package) != approved)
+        #expect(PackageHash.of(package) != PackageHash.of(package))
+    }
+
+    @Test func aMissingPackageMatchesNoApproval() {
+        let missing = temporaryFolder().appending(path: "Gone.topblock")
+        #expect(PackageHash.of(missing) != PackageHash.of(missing))
     }
 
     @Test func removingAnApprovalDeletesIt() throws {
@@ -59,15 +110,15 @@ struct ApprovalTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "Approvals.json")
         let store = ApprovalStore(file: file)
-        try store.approve(id: "gone", hash: "abc", signer: nil, hosts: [])
-        try store.approve(id: "kept", hash: "def", signer: nil, hosts: [])
+        try store.approve(id: "weather-peek", hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", signer: nil, hosts: [])
+        try store.approve(id: "clip-stash", hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", signer: nil, hosts: [])
 
-        try store.remove(id: "gone")
+        try store.remove(id: "weather-peek")
 
-        #expect(ApprovalStore(file: file).approval(for: "gone") == nil)
-        #expect(ApprovalStore(file: file).approval(for: "kept") != nil)
+        #expect(ApprovalStore(file: file).approval(for: "weather-peek") == nil)
+        #expect(ApprovalStore(file: file).approval(for: "clip-stash") != nil)
         let text = try String(contentsOf: file, encoding: .utf8)
-        #expect(!text.contains("gone"))
+        #expect(!text.contains("weather-peek"))
     }
 
     @Test func aMissingOrDamagedFileMeansNoApprovals() throws {
@@ -75,16 +126,16 @@ struct ApprovalTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "Approvals.json")
 
-        #expect(ApprovalStore(file: file).approval(for: "any") == nil)
+        #expect(ApprovalStore(file: file).approval(for: "weather-peek") == nil)
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("not json {".utf8).write(to: file)
         let damaged = ApprovalStore(file: file)
-        #expect(damaged.approval(for: "any") == nil)
+        #expect(damaged.approval(for: "weather-peek") == nil)
 
         // A damaged file is replaced by the next approval, not a crash.
-        try damaged.approve(id: "fresh", hash: "abc", signer: nil, hosts: [])
-        #expect(ApprovalStore(file: file).approval(for: "fresh") != nil)
+        try damaged.approve(id: "clip-stash", hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", signer: nil, hosts: [])
+        #expect(ApprovalStore(file: file).approval(for: "clip-stash") != nil)
     }
 
     // MARK: - Helpers

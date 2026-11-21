@@ -27,6 +27,7 @@ public final class BlockStore: BlockInstalling {
     private let screenshotFolder: @MainActor () -> URL?
     private let defaults: UserDefaults
     private let turnOff: @MainActor (BlockID) -> Void
+    private let turnOn: @MainActor (BlockID) -> Void
     private let register: @MainActor (any NotchBlock) -> Void
     private let replace: @MainActor (any NotchBlock) -> Void
     private let unregister: @MainActor (BlockID) -> Void
@@ -36,6 +37,12 @@ public final class BlockStore: BlockInstalling {
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
     /// Every stand-in this store made, so `stopAll` can end their processes.
     private var made: [RemoteBlock] = []
+    /// Stand-ins whose package was hashed against its approval moments ago:
+    /// their next start check passes without hashing again (one hash per
+    /// start). Filled only around the call that starts them, or, for the
+    /// stand-ins found at launch, until the end of the current main-actor
+    /// turn, in which the app registers them. Every later start hashes.
+    private var justVerified: Set<ObjectIdentifier> = []
     /// Installed packages refused at launch, listed so they can be removed.
     private var refused: [RefusedBlock] = []
     /// Installed packages waiting for the owner's review.
@@ -66,6 +73,9 @@ public final class BlockStore: BlockInstalling {
     ///     `defaultApprovalsFile`.
     ///   - turnOff: turns a block off after repeated failures; the app passes
     ///     a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
+    ///   - turnOn: turns a block on and stores it on, after the owner
+    ///     confirms "Install and Turn On" or "Approve and Turn On"; the app
+    ///     passes a closure that calls `BlockSettings.setEnabled(id, true, in:)`.
     ///   - register: adds a newly installed block to the runtime, on unless
     ///     the user turned it off.
     ///   - replace: swaps the registered block with the same id for this
@@ -88,6 +98,7 @@ public final class BlockStore: BlockInstalling {
         defaults: UserDefaults = .standard,
         approvalsFile: URL? = nil,
         turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
+        turnOn: @escaping @MainActor (BlockID) -> Void = { _ in },
         register: @escaping @MainActor (any NotchBlock) -> Void = { _ in },
         replace: (@MainActor (any NotchBlock) -> Void)? = nil,
         unregister: @escaping @MainActor (BlockID) -> Void = { _ in },
@@ -97,12 +108,13 @@ public final class BlockStore: BlockInstalling {
         self.owner = owner
         self.blocksRoot = blocksRoot
         self.dataRoot = dataRoot
-        self.oldDataRoot = oldDataRoot ?? (dataRoot == Self.defaultDataRoot ? RemoteBlock.defaultSupportRoot : nil)
+        self.oldDataRoot = oldDataRoot ?? (dataRoot == Self.defaultDataRoot ? SupportFolder.root : nil)
         self.bundledRoot = bundledRoot
         self.launcher = launcher
         self.screenshotFolder = screenshotFolder
         self.defaults = defaults
         self.turnOff = turnOff
+        self.turnOn = turnOn
         self.register = register
         self.replace = replace ?? { block in
             unregister(block.id)
@@ -115,14 +127,14 @@ public final class BlockStore: BlockInstalling {
     }
 
     /// `~/Library/Application Support/TopNotch/Blocks`.
-    public nonisolated static var defaultBlocksRoot: URL { RemoteBlock.defaultSupportRoot.appending(path: "Blocks") }
+    public nonisolated static var defaultBlocksRoot: URL { SupportFolder.root.appending(path: "Blocks") }
 
     /// `~/Library/Application Support/TopNotch/BlockData`.
-    public nonisolated static var defaultDataRoot: URL { RemoteBlock.defaultSupportRoot.appending(path: "BlockData") }
+    public nonisolated static var defaultDataRoot: URL { SupportFolder.root.appending(path: "BlockData") }
 
     /// `~/Library/Application Support/TopNotch/Approvals.json`, which the
     /// sandbox closes to every block.
-    public nonisolated static var defaultApprovalsFile: URL { RemoteBlock.defaultSupportRoot.appending(path: "Approvals.json") }
+    public nonisolated static var defaultApprovalsFile: URL { SupportFolder.root.appending(path: "Approvals.json") }
 
     /// Where the path a block was installed from is kept. Under `block.<id>.`,
     /// so Remove clears it with the block's other keys.
@@ -161,6 +173,11 @@ public final class BlockStore: BlockInstalling {
         made += blocks.compactMap { $0 as? RemoteBlock }
         refused += blocks.compactMap { $0 as? RefusedBlock }
         pending += blocks.compactMap { $0 as? PendingBlock }
+        // The app registers the stand-ins in this turn; a start after it hashes again.
+        justVerified.formIntersection(blocks.compactMap { ($0 as? RemoteBlock).map(ObjectIdentifier.init) })
+        if !justVerified.isEmpty {
+            Task { @MainActor [weak self] in self?.justVerified.removeAll() }
+        }
         // Stand-ins start their processes only when registered, after this.
         if let oldDataRoot {
             Self.moveOldDataFolders(from: oldDataRoot, to: dataRoot,
@@ -207,22 +224,29 @@ public final class BlockStore: BlockInstalling {
     /// Also reads a package waiting for review where it is in the Blocks
     /// folder, so the sheet can show it before `approve`.
     public func inspect(_ url: URL) throws -> BlockPackageSummary {
+        // Hashed first: confirming the sheet installs or approves only this build.
+        let hash = PackageHash.of(url)
         let manifest = try PackageValidator.load(url, source: .installed(from: url.path))
         try checkAvailable(manifest.id)
-        let signer = try checkSignature(url, pinned: approvals.approval(for: BlockID(rawValue: manifest.id))?.signer)
+        let approval = approvals.approval(for: BlockID(rawValue: manifest.id))
+        let signer = try checkSignature(url, pinned: approval?.signer)
         let installed = installedBlock(manifest.id)
         let events = manifest.events.compactMap(WireEvent.init(rawValue:))
-        let oldEvents = Set(installed?.manifest.events ?? [])
-        // The hosts the owner approved last: the installed version's, or for
-        // a package waiting for review after a change, its approval's.
-        let oldHosts = installed?.manifest.hosts ?? approvals.approval(for: BlockID(rawValue: manifest.id))?.hosts
+        // What the owner approved last: the installed version's, or for a
+        // package waiting for review after a change, its approval's. An
+        // approval stored before events were kept has none, so every event
+        // shows as new once. Nil for a new block: nothing is new.
+        let oldEvents = installed?.manifest.events ?? approval?.events
+        let oldHosts = installed?.manifest.hosts ?? approval?.hosts
         return BlockPackageSummary(
             id: BlockID(rawValue: manifest.id),
             name: manifest.name,
             version: manifest.version,
             contract: manifest.contract,
-            events: events.map { EventCatalog.entry(for: $0).name },
-            newEvents: installed == nil ? [] : events.filter { !oldEvents.contains($0.rawValue) }.map { EventCatalog.entry(for: $0).name },
+            packageHash: hash,
+            newEvents: oldEvents.map { old in
+                events.filter { !old.contains($0.rawValue) }.map { EventCatalog.entry(for: $0).name }
+            } ?? [],
             eventEntries: events.map(EventCatalog.entry(for:)),
             permissions: manifest.permissions,
             sourcePath: url.path,
@@ -250,8 +274,10 @@ public final class BlockStore: BlockInstalling {
     /// existing stand-in takes the new package, keeping its place, settings
     /// and data. A package refused at launch, or waiting for review, is
     /// replaced by the new one, in its place. A refused package, an id
-    /// another block already has, or a copy that fails, changes nothing.
-    public func install(_ url: URL) throws {
+    /// another block already has, a copy that fails, or a package that is
+    /// no longer the build with `expectedHash`, changes nothing. A new block
+    /// is turned on, as the sheet says; an update keeps its on/off state.
+    public func install(_ url: URL, expectedHash: String) throws {
         let source = BlockSource.installed(from: url.path)
         let manifest = try PackageValidator.load(url, source: source)
         let id = BlockID(rawValue: manifest.id)
@@ -259,8 +285,10 @@ public final class BlockStore: BlockInstalling {
         let previous = approvals.approval(for: id)
         let signer = try checkSignature(url, pinned: previous?.signer)
         let existing = installedBlock(manifest.id)
-        let placeholder: (any NotchBlock)? = pendingBlock(manifest.id) ?? refusedBlock(manifest.id)
-        let destination = existing?.packageURL ?? pendingBlock(manifest.id)?.packageURL ?? refusedBlock(manifest.id)?.packageURL
+        let placeholder: (block: any NotchBlock, package: URL)? =
+            pendingBlock(manifest.id).map { ($0 as any NotchBlock, $0.packageURL) }
+                ?? refusedBlock(manifest.id).map { ($0 as any NotchBlock, $0.packageURL) }
+        let destination = existing?.packageURL ?? placeholder?.package
             ?? blocksRoot.appending(path: "\(manifest.id).topblock", directoryHint: .isDirectory)
         // Copied beside the destination first, so a failed copy leaves the
         // installed version untouched. Its extension is not `.topblock`, so a
@@ -287,13 +315,20 @@ public final class BlockStore: BlockInstalling {
             log.error("copy of \(url.path, privacy: .public) refused: \(error.errorDescription ?? String(describing: error), privacy: .public)")
             throw error
         }
+        // The copy is the build the owner reviewed, or nothing is installed.
+        let hash = PackageHash.of(incoming)
+        guard hash == expectedHash else {
+            try? FileManager.default.removeItem(at: incoming)
+            log.error("copy of \(url.path, privacy: .public) refused: not the build that was reviewed")
+            throw BlockInstallError.changedDuringReview
+        }
         // The copy's build is approved before the swap: the hash does not
         // depend on the folder name, and a failed swap restores the old approval.
         do {
-            try approvals.approve(id: id, hash: PackageHash.of(incoming), signer: signer, hosts: manifest.hosts)
+            try record(Approval(id: id, hash: hash, signer: signer, hosts: manifest.hosts, events: manifest.events),
+                       failure: "not stored")
         } catch {
             try? FileManager.default.removeItem(at: incoming)
-            log.error("approval of \(manifest.id, privacy: .public) not stored: \(error.localizedDescription, privacy: .public)")
             throw BlockInstallError.copyFailed(error.localizedDescription)
         }
 
@@ -317,16 +352,19 @@ public final class BlockStore: BlockInstalling {
 
         if let existing {
             log.info("updated \(manifest.id, privacy: .public) to \(manifest.version, privacy: .public)")
-            existing.replacePackage(manifest: manifest, source: source)
+            startingVerified(existing) { existing.replacePackage(manifest: manifest, source: source) }
         } else {
             log.info("installed \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(url.path, privacy: .public)")
             let block = standIn(manifest: manifest, package: destination, source: source)
             made.append(block)
-            if let placeholder {
-                forget(placeholder)
-                replace(block)
-            } else {
-                register(block)
+            startingVerified(block) {
+                if let placeholder {
+                    forget(placeholder.block)
+                    replace(block)
+                } else {
+                    register(block)
+                }
+                turnOn(id)
             }
         }
     }
@@ -334,14 +372,16 @@ public final class BlockStore: BlockInstalling {
     /// Checks the package of a block waiting for review again, its signer
     /// against the one approved before if any, records the approval of this
     /// build (hash, signer, hosts), and puts the block's stand-in in the
-    /// placeholder's place, which starts it when it is on. The package stays
-    /// where it was found.
-    public func approve(_ id: BlockID) throws {
+    /// placeholder's place and turns it on. The package stays where it was
+    /// found. A package that is no longer the build with `expectedHash`, the
+    /// one the owner reviewed, is refused with `changedDuringReview`.
+    public func approve(_ id: BlockID, expectedHash: String) throws {
         guard let placeholder = pendingBlock(id.rawValue) else { throw BlockInstallError.nothingToApprove(id.rawValue) }
         let package = placeholder.packageURL
         let source = placeholder.info.source
         // Hashed before the checks and again after: the build recorded is the one checked.
         let hash = PackageHash.of(package)
+        guard hash == expectedHash else { throw BlockInstallError.changedDuringReview }
         let manifest = try PackageValidator.load(package, source: source)
         guard manifest.id == id.rawValue else {
             throw BlockInstallError.differentBlock(expected: id.rawValue, found: manifest.id)
@@ -351,16 +391,19 @@ public final class BlockStore: BlockInstalling {
             throw BlockInstallError.badSignature("the package changed while it was checked")
         }
         do {
-            try approvals.approve(id: id, hash: hash, signer: signer, hosts: manifest.hosts)
+            try record(Approval(id: id, hash: hash, signer: signer, hosts: manifest.hosts, events: manifest.events),
+                       failure: "not stored")
         } catch {
-            log.error("approval of \(id.rawValue, privacy: .public) not stored: \(error.localizedDescription, privacy: .public)")
             throw BlockInstallError.copyFailed(error.localizedDescription)
         }
         log.info("approved \(id.rawValue, privacy: .public) \(manifest.version, privacy: .public) at \(package.path, privacy: .public)")
         forget(placeholder)
         let block = standIn(manifest: manifest, package: package, source: source)
         made.append(block)
-        replace(block)
+        startingVerified(block) {
+            replace(block)
+            turnOn(id)
+        }
     }
 
     /// Stops and unregisters an installed block, or one refused at launch or
@@ -402,6 +445,8 @@ public final class BlockStore: BlockInstalling {
         log.info("removed \(id.rawValue, privacy: .public)")
     }
 
+    public var blocksFolder: URL? { blocksRoot }
+
     public func canRemove(_ id: BlockID) -> Bool {
         installedBlock(id.rawValue) != nil || refusedBlock(id.rawValue) != nil || pendingBlock(id.rawValue) != nil
     }
@@ -416,15 +461,35 @@ public final class BlockStore: BlockInstalling {
 
     /// Puts `previous` back as the approval of `id`, or none, after a failed install.
     private func restore(_ previous: Approval?, of id: BlockID) {
+        if let previous {
+            try? record(previous, failure: "not restored")
+            return
+        }
         do {
-            if let previous {
-                try approvals.approve(id: id, hash: previous.hash, signer: previous.signer, hosts: previous.hosts)
-            } else {
-                try approvals.remove(id: id)
-            }
+            try approvals.remove(id: id)
         } catch {
             log.error("approval of \(id.rawValue, privacy: .public) not restored: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Stores `approval`. A failure is logged as "approval of <id> <failure>"
+    /// and thrown, for the caller to handle its own way.
+    private func record(_ approval: Approval, failure: String) throws {
+        do {
+            try approvals.approve(id: approval.id, hash: approval.hash, signer: approval.signer,
+                                  hosts: approval.hosts, events: approval.events)
+        } catch {
+            log.error("approval of \(approval.id.rawValue, privacy: .public) \(failure, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    /// Runs `start`, which starts `block` right after its package was hashed
+    /// against its approval, with that start's check passing without a second hash.
+    private func startingVerified(_ block: RemoteBlock, _ start: () -> Void) {
+        justVerified.insert(ObjectIdentifier(block))
+        start()
+        justVerified.remove(ObjectIdentifier(block))
     }
 
     /// The approval of an installed block from a version before approvals:
@@ -437,11 +502,11 @@ public final class BlockStore: BlockInstalling {
     private func migratedApproval(_ id: String, manifest: Manifest, package: URL) throws(BlockInstallError) -> Approval? {
         guard let signer = defaults.string(forKey: Self.signerKey(id)) else { return nil }
         _ = try checkSignature(package, pinned: signer)
-        let approval = Approval(id: BlockID(rawValue: id), hash: PackageHash.of(package), signer: signer, hosts: manifest.hosts)
+        let approval = Approval(id: BlockID(rawValue: id), hash: PackageHash.of(package), signer: signer,
+                                hosts: manifest.hosts, events: manifest.events)
         do {
-            try approvals.approve(id: approval.id, hash: approval.hash, signer: approval.signer, hosts: approval.hosts)
+            try record(approval, failure: "from its stored signer not stored")
         } catch {
-            log.error("approval of \(id, privacy: .public) from its stored signer not stored: \(error.localizedDescription, privacy: .public)")
             return nil
         }
         defaults.removeObject(forKey: Self.signerKey(id))
@@ -455,7 +520,9 @@ public final class BlockStore: BlockInstalling {
     /// started: its stand-in is replaced by a `PendingBlock` (changed),
     /// which turns it off. Returns the reason the start is refused, or nil.
     private func recheck(_ block: RemoteBlock) -> String? {
-        guard made.contains(where: { $0 === block }), case .installed = block.source else { return nil }
+        guard made.contains(where: { $0 === block }) else { return nil }
+        // Hashed moments ago, before this start: see `justVerified`.
+        if justVerified.remove(ObjectIdentifier(block)) != nil { return nil }
         guard approvals.approval(for: block.id)?.hash != PackageHash.of(block.packageURL) else { return nil }
         log.error("installed block \(block.id.rawValue, privacy: .public) not started: its package changed after it was approved")
         made.removeAll { $0 === block }
@@ -614,7 +681,10 @@ public final class BlockStore: BlockInstalling {
             }
             _ = try checkSignature(package, pinned: approval.signer)
             log.info("installed block \(id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
-            return standIn(manifest: manifest, package: package, source: source)
+            let block = standIn(manifest: manifest, package: package, source: source)
+            // Just hashed: its first start, when the app registers it, does not hash again.
+            justVerified.insert(ObjectIdentifier(block))
+            return block
         } catch {
             let reason = error.errorDescription ?? String(describing: error)
             log.error("installed block \(id, privacy: .public) turned off: \(reason, privacy: .public)")
@@ -668,6 +738,9 @@ public final class BlockStore: BlockInstalling {
         return standIn(manifest: manifest, package: package, source: source)
     }
 
+    /// Why an installed block does not start when its store is gone.
+    static let uncheckedReason = "TopNotch could not check this block's package."
+
     private func standIn(manifest: Manifest, package: URL, source: BlockSource) -> RemoteBlock {
         let block = RemoteBlock(
             manifest: manifest,
@@ -683,7 +756,9 @@ public final class BlockStore: BlockInstalling {
         if case .installed = source {
             // Before every start: still the approved build?
             block.startCheck = { [weak self, weak block] in
-                guard let self, let block else { return nil }
+                guard let block else { return nil }
+                // No store, no hash: fail closed rather than start unchecked.
+                guard let self else { return Self.uncheckedReason }
                 return self.recheck(block)
             }
         }

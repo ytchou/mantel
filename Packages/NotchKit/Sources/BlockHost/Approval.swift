@@ -13,35 +13,44 @@ enum PackageHash {
     /// share an input. The folder's own name and the file dates are not
     /// part of it. Folders add nothing on their own, and other kinds of
     /// item (sockets, pipes) are skipped: a package holds neither.
+    ///
+    /// Fails closed: when the package is missing, or any item in it cannot be
+    /// read (a file that cannot be opened, a folder that cannot be listed),
+    /// the result is `unreadable` followed by a new random value, which is
+    /// not hex, matches no approval and differs from every earlier result.
+    /// A package the app cannot read in full is never taken as approved.
     static func of(_ package: URL) -> String {
         let manager = FileManager.default
-        // `subpaths(atPath:)` does not follow symbolic links. A missing
-        // package hashes as an empty one, which matches no approval.
-        let paths = (manager.subpaths(atPath: package.path) ?? []).sorted()
+        // `subpaths(atPath:)` does not follow symbolic links.
+        guard let listed = manager.subpaths(atPath: package.path) else { return unreadable() }
         var hasher = SHA256()
-        for path in paths {
+        for path in listed.sorted() {
             let item = package.appending(path: path).path
             guard let type = (try? manager.attributesOfItem(atPath: item))?[.type] as? FileAttributeType else {
-                add(kind: "?", path: path, content: Data(), to: &hasher)
-                continue
+                return unreadable()
             }
             switch type {
             case .typeRegular:
                 // Whole file in memory: packages are a few MB. Stream in
                 // chunks if packages grow past ~100 MB.
-                if let content = manager.contents(atPath: item) {
-                    add(kind: "F", path: path, content: content, to: &hasher)
-                } else {
-                    add(kind: "?", path: path, content: Data(), to: &hasher)
-                }
+                guard let content = manager.contents(atPath: item) else { return unreadable() }
+                add(kind: "F", path: path, content: content, to: &hasher)
             case .typeSymbolicLink:
-                let target = (try? manager.destinationOfSymbolicLink(atPath: item)) ?? ""
+                guard let target = try? manager.destinationOfSymbolicLink(atPath: item) else { return unreadable() }
                 add(kind: "L", path: path, content: Data(target.utf8), to: &hasher)
+            case .typeDirectory:
+                // `subpaths` skips a folder it cannot list without saying so.
+                guard (try? manager.contentsOfDirectory(atPath: item)) != nil else { return unreadable() }
             default:
                 continue
             }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A value no approval holds and no later call returns again.
+    private static func unreadable() -> String {
+        "unreadable-\(UUID().uuidString)"
     }
 
     private static func add(kind: Character, path: String, content: Data, to hasher: inout SHA256) {
@@ -59,12 +68,15 @@ enum PackageHash {
 }
 
 /// The owner's approval of one block package: the package hash at the time,
-/// the signer then (nil for an unsigned package) and the hosts approved.
+/// the signer then (nil for an unsigned package), the hosts approved and the
+/// events the package listened to then.
 struct Approval: Equatable, Sendable {
     let id: BlockID
     let hash: String
     let signer: String?
     let hosts: [String]
+    /// Empty for an approval stored before events were kept.
+    var events: [String] = []
 }
 
 /// Approvals kept in a small JSON file, not in the preferences, so a block
@@ -74,6 +86,11 @@ struct Approval: Equatable, Sendable {
 ///
 /// Each call reads the file again, and each change rewrites it atomically.
 /// A missing or damaged file reads as no approvals.
+// Re-reading on every call is a deliberate shortcut: the file is a few KB,
+// read a few times per block start, so it stays cheap for tens of blocks and
+// is never stale. Upgrade path if starts or blocks grow by an order of
+// magnitude: keep the records in memory, filled on first read and replaced
+// on every write.
 struct ApprovalStore: Sendable {
     let file: URL
 
@@ -83,13 +100,13 @@ struct ApprovalStore: Sendable {
 
     func approval(for id: BlockID) -> Approval? {
         records()[id.rawValue].map {
-            Approval(id: id, hash: $0.hash, signer: $0.signer, hosts: $0.hosts)
+            Approval(id: id, hash: $0.hash, signer: $0.signer, hosts: $0.hosts, events: $0.events)
         }
     }
 
-    func approve(id: BlockID, hash: String, signer: String?, hosts: [String]) throws {
+    func approve(id: BlockID, hash: String, signer: String?, hosts: [String], events: [String] = []) throws {
         var all = records()
-        all[id.rawValue] = Record(hash: hash, signer: signer, hosts: hosts)
+        all[id.rawValue] = Record(hash: hash, signer: signer, hosts: hosts, events: events)
         try write(all)
     }
 
@@ -106,6 +123,23 @@ struct ApprovalStore: Sendable {
         let hash: String
         let signer: String?
         let hosts: [String]
+        let events: [String]
+
+        init(hash: String, signer: String?, hosts: [String], events: [String]) {
+            self.hash = hash
+            self.signer = signer
+            self.hosts = hosts
+            self.events = events
+        }
+
+        /// A record written before events were kept has none.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            hash = try container.decode(String.self, forKey: .hash)
+            signer = try container.decodeIfPresent(String.self, forKey: .signer)
+            hosts = try container.decode([String].self, forKey: .hosts)
+            events = try container.decodeIfPresent([String].self, forKey: .events) ?? []
+        }
     }
 
     private func records() -> [String: Record] {

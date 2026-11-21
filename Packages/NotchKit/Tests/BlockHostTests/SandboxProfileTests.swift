@@ -27,7 +27,9 @@ struct SandboxProfileTests {
 
     private let metadataLine = #"(allow file-read-metadata (subpath "/topnotch-test/home"))"#
     private let systemLine = "(allow file-read* " + SandboxProfile.systemReadLocations.joined(separator: " ") + ")"
-    private let ownReadsLine = #"(allow file-read* (subpath "/topnotch-test/home/support/BlockData/hello") (subpath "/topnotch-test/home/support/Blocks/Hello.topblock") (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#
+    private let closeLine = #"(deny file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch") (subpath "/topnotch-test/home/support") (literal "/topnotch-test/home/Library/Preferences/dev.topnotch.Test.plist"))"#
+    private let ownLine = #"(allow file-read* file-write* (subpath "/topnotch-test/home/support/BlockData/hello") (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#
+    private let packageLine = #"(allow file-read* (subpath "/topnotch-test/home/support/Blocks/Hello.topblock"))"#
 
     @Test func defaultProfileDeniesNetworkWritesReadsPreferencesAndAppleEvents() {
         let text = lines(profile())
@@ -41,14 +43,14 @@ struct SandboxProfileTests {
             #"(deny user-preference-read (preference-domain "dev.topnotch.Test"))"#,
             "(deny file-write*)",
             #"(allow file-write* (subpath "/topnotch-test/home/support/BlockData/hello") (subpath "/topnotch-test/shared-tmp") (subpath "/dev"))"#,
-            #"(deny file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch"))"#,
-            #"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#,
             "(deny file-read*)",
             systemLine,
             #"(allow file-read-metadata (subpath "/topnotch-test/shared-tmp"))"#,
             #"(deny file-read-metadata (subpath "/topnotch-test/shared-tmp/TopNotch"))"#,
             #"(allow file-read-metadata (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#,
-            ownReadsLine,
+            closeLine,
+            ownLine,
+            packageLine,
             metadataLine,
         ])
     }
@@ -59,15 +61,13 @@ struct SandboxProfileTests {
         let text = lines(profile())
         let deny = text.firstIndex(of: "(deny file-read*)")
         let system = text.firstIndex(of: systemLine)
-        let own = text.firstIndex(of: ownReadsLine)
+        let own = text.firstIndex(of: ownLine)
         #expect(deny != nil && system != nil && own != nil)
         if let deny, let system, let own {
             #expect(deny < system)
             #expect(system < own)
-            // No read allow comes before the deny, except the block's own
-            // temporary folder, which the deny then narrows to writes.
-            let earlierReadAllows = text[..<deny].filter { $0.hasPrefix("(allow file-read*") }
-            #expect(earlierReadAllows == [#"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#])
+            // No read allow comes before the deny.
+            #expect(!text[..<deny].contains { $0.hasPrefix("(allow file-read") })
         }
         #expect(SandboxProfile.systemReadLocations == [
             #"(literal "/")"#, #"(literal "/etc")"#, #"(literal "/var")"#, #"(literal "/tmp")"#,
@@ -81,26 +81,32 @@ struct SandboxProfileTests {
         #expect(!text.contains { $0.hasPrefix("(allow file-read*") && $0.contains(#"(subpath "/topnotch-test/shared-tmp")"#) })
     }
 
-    /// The app's `TopNotch` subtree of the temporary folder is closed; each
-    /// block reads and writes only its own folder inside it. SBPL: the later
-    /// rule wins, so the own folder's allow comes after the subtree's deny,
-    /// which comes after the write allow of the whole temporary folder.
-    @Test func appTemporarySubtreeIsDeniedAndTheBlocksOwnIsAllowedAfter() {
+    /// The app's `TopNotch` subtree of the temporary folder, TopNotch's
+    /// support folder and the preferences file are closed after every
+    /// allow; each block reads and writes only its own folders inside them.
+    /// SBPL: the later rule wins, so the own folders' allow comes after the
+    /// deny, which comes after the write allow of the whole temporary folder.
+    @Test func topNotchsFoldersAreDeniedLastAndTheBlocksOwnAllowedAfter() {
         let text = lines(profile())
         let write = text.firstIndex { $0.hasPrefix("(allow file-write*") && $0.contains(#"(subpath "/topnotch-test/shared-tmp")"#) }
-        let deny = text.firstIndex(of: #"(deny file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch"))"#)
-        let allow = text.firstIndex(of: #"(allow file-read* file-write* (subpath "/topnotch-test/shared-tmp/TopNotch/Blocks/hello"))"#)
-        #expect(write != nil)
-        #expect(deny != nil)
-        #expect(allow != nil)
-        if let write, let deny, let allow {
+        let deny = text.firstIndex(of: closeLine)
+        let own = text.firstIndex(of: ownLine)
+        let package = text.firstIndex(of: packageLine)
+        #expect(write != nil && deny != nil && own != nil && package != nil)
+        if let write, let deny, let own, let package {
             #expect(write < deny)
-            #expect(deny < allow)
+            #expect(deny < own)
+            #expect(deny < package)
         }
-        // Every token keeps both rules.
+        // Every token keeps the rules, and adds its allow before the deny.
         for changed in [profile(gatePort: 4321), profile(readsHome: true),
                         profile(screenshotFolder: URL(fileURLWithPath: "/topnotch-test/home/Desktop"))] {
-            #expect(lines(changed).filter { $0.contains("shared-tmp") } == text.filter { $0.contains("shared-tmp") })
+            let changed = lines(changed)
+            #expect(changed.filter { $0.contains("shared-tmp") } == text.filter { $0.contains("shared-tmp") })
+            let tokenAllows = changed.indices.filter { changed[$0].hasPrefix("(allow file-read*") && !text.contains(changed[$0]) }
+            let close = changed.firstIndex(of: closeLine)
+            #expect(close != nil)
+            if let close { #expect(tokenAllows.allSatisfy { $0 < close }) }
         }
     }
 
@@ -137,18 +143,15 @@ struct SandboxProfileTests {
         let base = lines(profile())
         let changed = lines(profile(readsHome: true))
         let homeAllow = #"(allow file-read* (subpath "/topnotch-test/home") (subpath "/Volumes"))"#
-        let supportDeny = #"(deny file-read* (subpath "/topnotch-test/home/support") (literal "/topnotch-test/home/Library/Preferences/dev.topnotch.Test.plist"))"#
-        #expect(changed.filter { !base.contains($0) } == [homeAllow, supportDeny])
+        #expect(changed.filter { !base.contains($0) } == [homeAllow])
         #expect(base.allSatisfy { changed.contains($0) })
         let home = changed.firstIndex(of: homeAllow)
-        let support = changed.firstIndex(of: supportDeny)
-        let own = changed.firstIndex(of: ownReadsLine)
+        let close = changed.firstIndex(of: closeLine)
         let readDeny = changed.firstIndex(of: "(deny file-read*)")
-        #expect(home != nil && support != nil && own != nil && readDeny != nil)
-        if let home, let support, let own, let readDeny {
+        #expect(home != nil && close != nil && readDeny != nil)
+        if let home, let close, let readDeny {
             #expect(readDeny < home)
-            #expect(home < support)
-            #expect(support < own)
+            #expect(home < close)
         }
         #expect(changed.contains(metadataLine))
     }
@@ -156,10 +159,76 @@ struct SandboxProfileTests {
     @Test func screenshotsTokenAllowsReadAndWriteInThatFolderOnly() {
         let base = lines(profile())
         let changed = lines(profile(screenshotFolder: URL(fileURLWithPath: "/topnotch-test/home/Desktop")))
-        let added = changed.filter { !base.contains($0) }
-        #expect(added == [#"(allow file-read* file-write* (subpath "/topnotch-test/home/Desktop"))"#])
+        let screenshotAllow = #"(allow file-read* file-write* (subpath "/topnotch-test/home/Desktop"))"#
+        #expect(changed.filter { !base.contains($0) } == [screenshotAllow])
         #expect(base.allSatisfy { changed.contains($0) })
         #expect(changed.last == metadataLine)
+        let allow = changed.firstIndex(of: screenshotAllow)
+        let close = changed.firstIndex(of: closeLine)
+        #expect(allow != nil && close != nil)
+        if let allow, let close { #expect(allow < close, "the screenshot folder never reopens TopNotch's folders") }
+    }
+
+    // MARK: allowsRead
+
+    @Test func allowsReadFollowsTheProfile() {
+        let plain = profile()
+        #expect(plain.allowsRead("/topnotch-test/home/support/BlockData/hello/own.png"))
+        #expect(plain.allowsRead("/topnotch-test/home/support/Blocks/Hello.topblock/Contents/Info.plist"))
+        #expect(plain.allowsRead("/topnotch-test/shared-tmp/TopNotch/Blocks/hello/a.png"))
+        #expect(plain.allowsRead("/System/Library/CoreServices/SystemVersion.plist"))
+        #expect(!plain.allowsRead("relative.png"))
+        #expect(!plain.allowsRead("/topnotch-test/home/Documents/note"))
+        #expect(!plain.allowsRead("/topnotch-test/shared-tmp/other-app.png"), "the shared temporary folder is not readable")
+        #expect(!plain.allowsRead("/topnotch-test/shared-tmp/TopNotch/Blocks/other/a.png"))
+        #expect(!plain.allowsRead("/topnotch-test/home/support/BlockData/hello-other/a.png"))
+
+        let reading = profile(readsHome: true)
+        #expect(reading.allowsRead("/topnotch-test/home/Documents/note"))
+        #expect(reading.allowsRead("/Volumes/Disk/file"))
+        #expect(!reading.allowsRead("/topnotch-test/home/support/Approvals.json"))
+        #expect(!reading.allowsRead("/topnotch-test/home/support/BlockData/other/secret"))
+        #expect(!reading.allowsRead("/topnotch-test/home/Library/Preferences/dev.topnotch.Test.plist"))
+        #expect(!reading.allowsRead("/topnotch-test/shared-tmp/TopNotch/Drops/UUID/drop.png"))
+        #expect(!reading.allowsRead("/topnotch-test/shared-tmp/other-app.png"))
+
+        let screenshots = profile(screenshotFolder: URL(fileURLWithPath: "/topnotch-test/home"))
+        #expect(screenshots.allowsRead("/topnotch-test/home/Desktop/Screenshot.png"))
+        #expect(!screenshots.allowsRead("/topnotch-test/home/support/Approvals.json"))
+        #expect(!screenshots.allowsRead("/topnotch-test/home/Library/Preferences/dev.topnotch.Test.plist"))
+    }
+
+    /// A1: a screenshot folder set to the home folder contains TopNotch's
+    /// support folder and the preferences file; neither opens, for reads or writes.
+    @Test func aScreenshotFolderAtHomeKeepsTopNotchsFoldersClosed() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folders = try makeFolders(in: root, data: "home/support/BlockData/probe")
+        var profile = folders.profile()
+        profile.screenshotFolder = folders.home
+        let approvals = folders.support.appending(path: "Approvals.json")
+        try Data("{}".utf8).write(to: approvals)
+        let preferences = folders.home.appending(path: "Library/Preferences/dev.topnotch.Test.plist")
+        try FileManager.default.createDirectory(at: preferences.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: preferences)
+        let drops = folders.shared.appending(path: "TopNotch/Drops")
+        try FileManager.default.createDirectory(at: drops, withIntermediateDirectories: true)
+        let dropped = drops.appending(path: "dropped")
+        try Data("x".utf8).write(to: dropped)
+        let screenshot = folders.home.appending(path: "Screenshot.png")
+        try Data("x".utf8).write(to: screenshot)
+
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", approvals.path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", approvals.path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", folders.support.appending(path: "new").path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", preferences.path]) != 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", dropped.path]) != 0)
+        // The screenshot folder itself and the block's own data stay open.
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/bin/cat", screenshot.path]) == 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", folders.home.appending(path: "Renamed.png").path]) == 0)
+        #expect(try run("/usr/bin/sandbox-exec", ["-p", profile.text, "/usr/bin/touch", folders.data.appending(path: "own").path]) == 0)
+        #expect(!profile.allowsRead(approvals.path))
+        #expect(profile.allowsRead(screenshot.path))
     }
 
     @Test func profileRunsUnderSandboxExec() throws {

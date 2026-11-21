@@ -8,26 +8,34 @@ public struct SettingsRootView: View {
     private let runtime: NotchRuntime
     private let settings: BlockSettings
     private let installer: (any BlockInstalling)?
+    private let consent: ScreenshotFolderConsent?
     @State private var selection: SettingsPane?
 
-    /// - Parameter installer: installs, updates and removes blocks from the
-    ///   Blocks page. Nil hides those buttons.
-    public init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil) {
-        self.init(runtime: runtime, settings: settings, installer: installer, selection: .general)
+    /// - Parameters:
+    ///   - installer: installs, updates and removes blocks from the
+    ///     Blocks page. Nil hides those buttons.
+    ///   - consent: the screenshot folder answer, see `SettingsWindowController`.
+    public init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil,
+                consent: ScreenshotFolderConsent? = nil) {
+        self.init(runtime: runtime, settings: settings, installer: installer, consent: consent, selection: .general)
     }
 
     /// Opens on a chosen pane. Internal, for checking a pane without clicking.
-    init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil, selection: SettingsPane) {
+    init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil,
+         consent: ScreenshotFolderConsent? = nil, selection: SettingsPane) {
         self.runtime = runtime
         self.settings = settings
         self.installer = installer
+        self.consent = consent
         _selection = State(initialValue: selection)
     }
 
     public var body: some View {
         // Built here, inside `body`, so a block's health and info are read
         // live: the page redraws when a stand-in's observable state changes.
-        let entries = runtime.blocks.map { BlockEntry(block: $0, installer: installer) }
+        let entries = runtime.blocks.map {
+            BlockEntry(block: $0, installer: installer, runtime: runtime, consent: consent)
+        }
         NavigationSplitView {
             List(selection: $selection) {
                 Label("General", systemImage: "gearshape").tag(SettingsPane.general)
@@ -51,7 +59,7 @@ public struct SettingsRootView: View {
                     BlockPane(block: block, runtime: runtime, settings: settings)
                 }
             case .general, nil:
-                GeneralPane(runtime: runtime)
+                GeneralPane(runtime: runtime, consent: consent)
             }
         }
         .frame(minWidth: 560, minHeight: 420)
@@ -113,17 +121,33 @@ struct BlockEntry: Identifiable {
     }
 
     /// Reads the block's state now. Call it inside `body` so changes redraw.
+    /// - Parameters:
+    ///   - runtime, consent: with both, a turned-on block that listens to
+    ///     screenshots while the screenshot folder is refused gets
+    ///     `screenshotFolderNotice`, as its source does not run.
     @MainActor
-    init(block: any NotchBlock, installer: (any BlockInstalling)?, home: String = NSHomeDirectory()) {
+    init(block: any NotchBlock, installer: (any BlockInstalling)?, runtime: NotchRuntime? = nil,
+         consent: ScreenshotFolderConsent? = nil, home: String = NSHomeDirectory()) {
+        let folderRefused = consent?.isRefused == true
+            && runtime?.isSubscribed(block.id, to: ScreenshotCaptured.self) == true
+        let notices = [folderRefused ? Self.screenshotFolderNotice : nil, block.notice].compactMap { $0 }
         self.init(id: block.id, title: block.title, info: block.info, health: block.health,
                   isRemovable: installer?.canRemove(block.id) ?? false,
                   canTurnOn: installer?.canTurnOn(block.id) ?? true,
-                  usage: block.usage, review: block.review, notice: block.notice,
+                  usage: block.usage, review: block.review,
+                  notice: notices.isEmpty ? nil : notices.joined(separator: "\n"),
                   canReview: installer != nil, home: home)
     }
 
-    /// The footer of the Blocks page's install section.
-    static let blocksFolderNote = "Blocks live in ~/Library/Application Support/TopNotch/Blocks"
+    /// Shown on a turned-on block that listens to screenshots while macOS
+    /// refuses the screenshot folder.
+    static let screenshotFolderNotice = "Screenshot folder access is off. Allow it in Settings > General."
+
+    /// The footer of the Blocks page's install section, such as
+    /// "Blocks live in ~/Library/Application Support/TopNotch/Blocks".
+    static func blocksFolderNote(_ folder: URL, home: String = NSHomeDirectory()) -> String {
+        "Blocks live in " + abbreviate(folder.path, home: home)
+    }
 
     /// The entries listed in the sidebar: every block that can run, not
     /// those waiting for review.
@@ -151,7 +175,8 @@ struct BlockEntry: Identifiable {
 
     /// A "Review…" button, for a block waiting for review.
     var offersReview: Bool { review != nil && canReview }
-    /// A block waiting for review has no on/off switch: it cannot run.
+    /// A block waiting for review has no on/off switch, but a "Review…"
+    /// button: it cannot run.
     var hasSwitch: Bool { review == nil }
     /// Nor Move Up and Move Down.
     var hasOrderControls: Bool { review == nil }
@@ -168,35 +193,22 @@ struct BlockEntry: Identifiable {
         return "\(memory) · \(String(format: "%.1f", usage.processorFraction * 100))% processor"
     }
 
-    /// Turns the block on from its stopped box, which clears the reason.
-    @MainActor
-    func turnOn(settings: BlockSettings, runtime: NotchRuntime) {
-        settings.setEnabled(id, true, in: runtime)
-    }
-
     /// Where the block comes from, its version, the trigger, the permissions
     /// and recent restarts on one line, such as
     /// "Built in · Taking a screenshot · Needs: Access to the screenshot folder"
     /// or "Installed from ~/dev/hello-block · 0.2 · Pointer hover · Restarted once".
     /// For a block waiting for review: its package, its version and "Off".
     var detail: String {
-        var parts: [String] = []
-        if review != nil {
-            switch info.source {
-            case let .installed(from): parts.append(abbreviated(from))
-            case let .development(path): parts.append(abbreviated(path))
-            case .builtIn, .bundled: break
-            }
-            if let version = info.version, !version.isEmpty { parts.append(version) }
-            parts.append("Off")
-            return parts.joined(separator: " · ")
+        let waiting = review != nil
+        // A block waiting for review shows only its package's path.
+        let source: String? = switch info.source {
+        case .builtIn, .bundled: waiting ? nil : "Built in"
+        case let .installed(from): (waiting ? "" : "Installed from ") + abbreviated(from)
+        case let .development(path): (waiting ? "" : "Development · ") + abbreviated(path)
         }
-        switch info.source {
-        case .builtIn, .bundled: parts.append("Built in")
-        case let .installed(from): parts.append("Installed from " + abbreviated(from))
-        case let .development(path): parts.append("Development · " + abbreviated(path))
-        }
+        var parts = [source].compactMap { $0 }
         if let version = info.version, !version.isEmpty { parts.append(version) }
+        if waiting { return (parts + ["Off"]).joined(separator: " · ") }
         if !info.trigger.isEmpty { parts.append(info.trigger) }
         if !info.permissions.isEmpty { parts.append("Needs: " + info.permissions.joined(separator: ", ")) }
         if case let .restarting(count) = health {
@@ -218,6 +230,10 @@ struct BlockEntry: Identifiable {
 
     /// `path` with the home folder written as "~".
     private func abbreviated(_ path: String) -> String {
+        Self.abbreviate(path, home: home)
+    }
+
+    private static func abbreviate(_ path: String, home: String) -> String {
         let home = home.hasSuffix("/") ? String(home.dropLast()) : home
         guard !home.isEmpty else { return path }
         if path == home { return "~" }
@@ -255,16 +271,16 @@ private struct BlocksPane: View {
         Form {
             Section {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    if entry.review != nil {
-                        reviewRow(entry)
-                    } else {
+                    if entry.hasSwitch {
                         row(entry)
                             .accessibilityLabel(entry.accessibilityLabel)
+                    } else {
+                        reviewRow(entry)
                     }
                     if let reason = entry.turnedOffReason {
                         ReasonBox(kind: .stopped, text: reason) {
                             if entry.offersTurnOn {
-                                Button("Turn On") { entry.turnOn(settings: settings, runtime: runtime) }
+                                Button("Turn On") { settings.setEnabled(entry.id, true, in: runtime) }
                             }
                         }
                     } else if let notice = entry.notice {
@@ -304,7 +320,9 @@ private struct BlocksPane: View {
                         Button("Install Block\u{2026}") { choosePackage() }
                     }
                 } footer: {
-                    Text(BlockEntry.blocksFolderNote)
+                    if let folder = installer?.blocksFolder {
+                        Text(BlockEntry.blocksFolderNote(folder))
+                    }
                 }
             }
         }
@@ -313,9 +331,11 @@ private struct BlocksPane: View {
         .sheet(item: $pending) { pending in
             BlockInstallSheet(summary: pending.summary, review: pending.isReview) {
                 self.pending = nil
+                // Only the build the sheet showed.
+                let hash = pending.summary.packageHash
                 switch pending.request {
-                case let .install(url): install(url)
-                case let .review(id): approve(id)
+                case let .install(url): install(url, expectedHash: hash)
+                case let .review(id): approve(id, expectedHash: hash)
                 }
             } cancel: {
                 self.pending = nil
@@ -418,9 +438,9 @@ private struct BlocksPane: View {
         }
     }
 
-    private func approve(_ id: BlockID) {
+    private func approve(_ id: BlockID, expectedHash: String) {
         do {
-            try installer?.approve(id)
+            try installer?.approve(id, expectedHash: expectedHash)
         } catch {
             failure = Failure(title: "The block was not approved", message: error.localizedDescription)
         }
@@ -447,9 +467,9 @@ private struct BlocksPane: View {
         }
     }
 
-    private func install(_ url: URL) {
+    private func install(_ url: URL, expectedHash: String) {
         do {
-            try installer?.install(url)
+            try installer?.install(url, expectedHash: expectedHash)
         } catch {
             failure = Failure(title: "The block was not installed", message: error.localizedDescription)
         }
@@ -526,6 +546,7 @@ private struct BlockPane: View {
 
 private struct GeneralPane: View {
     let runtime: NotchRuntime
+    let consent: ScreenshotFolderConsent?
     @State private var launchAtLogin = LaunchAtLogin()
 
     var body: some View {
@@ -543,7 +564,7 @@ private struct GeneralPane: View {
             }
 
             Section("Permissions") {
-                ForEach(PermissionRow.rows(in: runtime), id: \.self) { $0.view }
+                ForEach(PermissionRow.rows(in: runtime), id: \.self) { $0.view(consent: consent) }
             }
 
             Section("Logs") {

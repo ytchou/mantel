@@ -156,6 +156,32 @@ struct PackageValidatorTests {
         #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
     }
 
+    /// A5: a link anywhere in the package, not only the executable, must
+    /// stay inside it: the hash covers the link's text, not its target.
+    @Test func refusesAnyLinkLeavingThePackage() throws {
+        for (target, relative) in [("/usr/lib/libSystem.B.dylib", false), ("../../../outside.dylib", true),
+                                   ("/topnotch-missing/later.dylib", false)] {
+            let linked = try package(manifest())
+            let frameworks = linked.appending(path: "Contents/Frameworks")
+            try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: frameworks.appending(path: "Lib.dylib").path,
+                                                       withDestinationPath: target)
+            #expect(throws: BlockInstallError.executableOutsidePackage("Contents/Frameworks/Lib.dylib"),
+                    "\(target), relative: \(relative)") {
+                try PackageValidator.load(linked, source: Self.installed)
+            }
+        }
+
+        // A link to a file inside the package passes.
+        let inside = try package(manifest())
+        let frameworks = inside.appending(path: "Contents/Frameworks")
+        try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+        try Data("lib".utf8).write(to: frameworks.appending(path: "Real.dylib"))
+        try FileManager.default.createSymbolicLink(atPath: frameworks.appending(path: "Lib.dylib").path,
+                                                   withDestinationPath: "Real.dylib")
+        #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
+    }
+
     @Test func refusesDefaultThatDoesNotMatchType() throws {
         let stringToggle = manifest(settings: [SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .string("yes"))])
         #expect(try refusal(stringToggle) == .invalidSetting("loud"))

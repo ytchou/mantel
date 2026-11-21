@@ -37,8 +37,13 @@ struct InstallTests {
                 launcher: launcher.launcher,
                 defaults: defaults,
                 approvalsFile: approvalsFile,
-                register: { [runtime] block in runtime.register(block) },
-                replace: { [runtime] block in runtime.replace(block) },
+                // As the app wires them: on/off is the stored value, a block with none is on.
+                turnOn: { [runtime, defaults] id in
+                    defaults.set(true, forKey: "block.\(id.rawValue).enabled")
+                    runtime.setEnabled(id, true)
+                },
+                register: { [weak self, runtime] block in runtime.register(block, enabled: self?.isOn(block.id) ?? true) },
+                replace: { [weak self, runtime] block in runtime.replace(block, enabled: self?.isOn(block.id) ?? true) },
                 unregister: { [runtime] id in runtime.unregister(id) },
                 clearKeys: { [weak self, defaults] id in
                     self?.cleared.append(id)
@@ -52,6 +57,11 @@ struct InstallTests {
             )
             store.signatures = signatures
             return store
+        }
+
+        /// The stored on/off value, as `BlockSettings.isEnabled` reads it.
+        func isOn(_ id: BlockID) -> Bool {
+            defaults.object(forKey: "block.\(id.rawValue).enabled") == nil || defaults.bool(forKey: "block.\(id.rawValue).enabled")
         }
 
         /// A `<folder>/<Name>.topblock` bundle outside the store, with an executable script.
@@ -88,7 +98,7 @@ struct InstallTests {
         @discardableResult
         func launch(developmentPath: String? = nil) -> [any NotchBlock] {
             let blocks = store.standIns(developmentPath: developmentPath)
-            for block in blocks { runtime.register(block) }
+            for block in blocks { runtime.register(block, enabled: isOn(block.id)) }
             return blocks
         }
 
@@ -126,7 +136,8 @@ struct InstallTests {
         #expect(summary.name == "Hello")
         #expect(summary.version == "0.2")
         #expect(summary.contract == Contract.current)
-        #expect(summary.events == ["Pointer over the notch", "Volume changes"])
+        #expect(summary.eventEntries.map(\.name) == ["Pointer over the notch", "Volume changes"])
+        #expect(summary.packageHash == PackageHash.of(package))
         #expect(summary.newEvents.isEmpty)
         #expect(summary.permissions == ["Nothing special"])
         #expect(summary.sourcePath == package.path)
@@ -144,7 +155,6 @@ struct InstallTests {
 
         #expect(summary.eventEntries.count == order.count)
         #expect(summary.eventEntries == order.map { EventCatalog.entry(for: WireEvent(rawValue: $0)!) })
-        #expect(summary.eventEntries.map(\.name) == summary.events)
     }
 
     @Test func installCopiesRegistersAndTurnsOn() throws {
@@ -423,7 +433,7 @@ struct InstallTests {
         #expect(summary.signer == nil)
 
         // Approved with no switch: this build runs, with no signer recorded.
-        try setup.store.approve("hello")
+        try setup.store.approve("hello", expectedHash: summary.packageHash)
         #expect(setup.block("hello") != nil)
         #expect(setup.launcher.processes.count == 1)
         let approval = try #require(setup.approvals.approval(for: "hello"))
@@ -482,7 +492,8 @@ struct InstallTests {
         try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
         let next = setup.makeStore(checksRuntime: false)
         #expect(next.standIns(developmentPath: nil).first is PendingBlock)
-        #expect(throws: expected) { try next.approve("hello") }
+        let changed = PackageHash.of(setup.blocksRoot.appending(path: "hello.topblock"))
+        #expect(throws: expected) { try next.approve("hello", expectedHash: changed) }
 
         // The same signer updates.
         setup.signatures.set(.valid(signer: FakeSignatures.signer, teamID: ""))
@@ -578,7 +589,7 @@ struct InstallTests {
         #expect(summary.id == "hello")
         #expect(summary.signer == FakeSignatures.signer)
 
-        try setup.store.approve("hello")
+        try setup.store.approve("hello", expectedHash: summary.packageHash)
 
         let block = try #require(setup.block("hello"))
         #expect(setup.runtime.blocks.map(\.id) == ["other", "hello", "after"], "in the placeholder's place")
@@ -591,7 +602,9 @@ struct InstallTests {
         #expect(approval.hosts == ["api.example.com"])
         #expect(setup.defaults.object(forKey: "block.hello.signer") == nil)
         #expect(setup.store.canTurnOn("hello"))
-        #expect(throws: BlockInstallError.nothingToApprove("hello")) { try setup.store.approve("hello") }
+        #expect(throws: BlockInstallError.nothingToApprove("hello")) {
+            try setup.store.approve("hello", expectedHash: summary.packageHash)
+        }
         #expect(setup.relaunch().first is RemoteBlock, "the next launch runs it without asking")
     }
 
@@ -785,6 +798,122 @@ struct InstallTests {
         #expect(summary.sourcePath == dropped.path)
         #expect(summary.hosts == ["api.example.com"])
         #expect(throws: BlockInstallError.nothingToApprove("other")) { try setup.store.reviewSummary("other") }
+    }
+
+    // MARK: Review binds to the build shown (B3)
+
+    @Test func anInstallOfAPackageChangedAfterReviewIsRefused() throws {
+        let setup = Setup()
+        let package = try setup.package()
+        let summary = try setup.store.inspect(package)
+
+        try Setup.changeOneByte(in: package)
+
+        #expect(throws: BlockInstallError.changedDuringReview) {
+            try setup.store.install(package, expectedHash: summary.packageHash)
+        }
+        #expect(setup.installedPackages().isEmpty, "no package and no partial copy")
+        #expect(setup.runtime.blocks.isEmpty)
+        #expect(setup.approvals.approval(for: "hello") == nil)
+        #expect(setup.launcher.processes.isEmpty)
+    }
+
+    @Test func anApprovalOfAPackageChangedAfterReviewIsRefused() throws {
+        let setup = Setup()
+        let dropped = try setup.drop(try setup.package())
+        setup.launch()
+        let summary = try setup.store.reviewSummary("hello")
+
+        try Setup.changeOneByte(in: dropped)
+
+        #expect(throws: BlockInstallError.changedDuringReview) {
+            try setup.store.approve("hello", expectedHash: summary.packageHash)
+        }
+        #expect(setup.runtime.blocks.first is PendingBlock, "still waiting for review")
+        #expect(setup.approvals.approval(for: "hello") == nil)
+        #expect(setup.launcher.processes.isEmpty)
+        // Reviewed again, the build now there is approved.
+        try setup.store.approve("hello", expectedHash: try setup.store.reviewSummary("hello").packageHash)
+        #expect(setup.block("hello") != nil)
+    }
+
+    // MARK: "… and Turn On" (B4)
+
+    /// A block the owner turned off whose package then changed: "Approve and
+    /// Turn On" leaves it on, stored on, and running.
+    @Test func approvingAChangedBlockThatWasOffTurnsItOn() throws {
+        let setup = Setup()
+        let dropped = try setup.drop(try setup.package())
+        // Approved before, as another build; then turned off by the owner.
+        try setup.approvals.approve(id: "hello", hash: Self.otherBuild, signer: FakeSignatures.signer,
+                                    hosts: [], events: ["pointerHover"])
+        setup.defaults.set(false, forKey: "block.hello.enabled")
+        let pending = try #require(setup.launch().first as? PendingBlock)
+        #expect(pending.review == .changed)
+
+        try setup.store.approve("hello", expectedHash: PackageHash.of(dropped))
+
+        #expect(setup.block("hello") != nil)
+        #expect(setup.runtime.isEnabled("hello"))
+        #expect(setup.isOn("hello"), "stored on, so the next launch starts it too")
+        #expect(setup.launcher.processes.count == 1, "the block process was started")
+    }
+
+    /// "Install and Turn On" over a block waiting for review that was off
+    /// turns it on; "Update" keeps a block that is off, off.
+    @Test func installTurnsOnButAnUpdateKeepsOff() throws {
+        let setup = Setup()
+        try setup.drop(try setup.package(version: "0.1"))
+        setup.defaults.set(false, forKey: "block.hello.enabled")
+        #expect(setup.launch().first is PendingBlock)
+
+        try setup.store.install(try setup.package(version: "0.2"))
+        #expect(setup.runtime.isEnabled("hello"))
+        #expect(setup.isOn("hello"))
+        #expect(setup.launcher.processes.count == 1)
+
+        setup.defaults.set(false, forKey: "block.hello.enabled")
+        setup.runtime.setEnabled("hello", false)
+        try setup.store.install(try setup.package(version: "0.3"))
+        #expect(!setup.runtime.isEnabled("hello"))
+        #expect(!setup.isOn("hello"))
+        #expect(setup.launcher.processes.count == 1, "an update of a block that is off starts nothing")
+    }
+
+    // MARK: New events of a changed package (GS2)
+
+    @Test func aChangedPackageThatAddsAnEventMarksItNew() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(events: ["pointerHover"]))
+        #expect(setup.approvals.approval(for: "hello")?.events == ["pointerHover"])
+
+        // Rebuilt in place to also listen to screenshots: it waits as Changed.
+        let installed = setup.blocksRoot.appending(path: "hello.topblock")
+        var manifest = try bundleManifest(installed)
+        manifest.events = ["pointerHover", "screenshotCaptured"]
+        try Framing.encoder().encode(manifest).write(to: installed.appending(path: "Contents/Resources/manifest.json"))
+        let next = setup.makeStore(checksRuntime: false)
+        #expect((next.standIns(developmentPath: nil).first as? PendingBlock)?.review == .changed)
+
+        let summary = try next.reviewSummary("hello")
+
+        #expect(summary.newEvents == [EventCatalog.entry(for: .screenshotCaptured).name])
+    }
+
+    @Test func theFolderShownIsTheBlocksFolder() {
+        let setup = Setup()
+        #expect(setup.store.blocksFolder == setup.blocksRoot)
+    }
+
+    /// The SHA-256 of a build other than any package these tests make.
+    static let otherBuild = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}
+
+extension BlockStore {
+    /// Installs `url` as the sheet does after reading it: bound to the
+    /// build at `url` now.
+    func install(_ url: URL) throws {
+        try install(url, expectedHash: PackageHash.of(url))
     }
 }
 

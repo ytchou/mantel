@@ -37,10 +37,16 @@ public struct BlockClock: Sendable {
 ///
 /// It is the `Transport` to the block. `close()` ends the process: the socket
 /// closes (the kit exits when it sees that), then SIGTERM, then SIGKILL.
+///
+/// The block starts in a process group of its own, whose id is its pid.
+/// Signals go to the whole group, and once the block has exited the group
+/// gets SIGKILL, so child processes it started do not outlive it. A child
+/// that leaves the group (`setsid`, `setpgid`) is not reached: a written
+/// limit, as is that the resource watch counts the block's own process only.
 public final class BlockProcess: Transport, @unchecked Sendable {
-    // @unchecked: `pid` and `socket` are immutable; `lock` guards `exited`
-    // and is held for every `waitpid` and `kill`, so a signal never reaches a
-    // reused pid.
+    // @unchecked: `pid` and `socket` are immutable; `lock` guards `exited`,
+    // `exitActions` and `exitSource` and is held for every `waitpid` and
+    // `kill` of the block itself, so a signal never reaches a reused pid.
     /// The block's process id. Under a sandbox it is still the block's:
     /// `sandbox-exec` applies the profile and then execs the block in its
     /// own place, so the resource watch measures the block itself.
@@ -49,6 +55,8 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     private let lock = NSLock()
     private var exited = false
     private var exitSource: (any DispatchSourceProcess)?
+    /// Run once, after the process has exited and been reaped.
+    private var exitActions: [@Sendable () -> Void] = []
 
     static let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
@@ -103,8 +111,10 @@ public final class BlockProcess: Transport, @unchecked Sendable {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        // Only fds 0 to 3 reach the block.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        // Only fds 0 to 3 reach the block. A process group of its own (id =
+        // its pid), so its children can be signalled with it.
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
 
         let path = sandbox == nil ? executable.path : sandboxExec
         let arguments = sandbox.map { [sandboxExec, "-p", $0.text, executable.path] } ?? [executable.path]
@@ -168,12 +178,14 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     }
 
     /// Ends every process together and waits for them: each socket closes,
-    /// then after 0.5 s SIGTERM to those still running, then after 1 s more
-    /// SIGKILL. Blocks the caller for at most about 2.5 s in total, however
-    /// many processes; it returns as soon as all have exited. For app quit,
-    /// where waiting is the point.
+    /// then after 0.5 s SIGTERM to the groups of those still running, then
+    /// after 1 s more SIGKILL. Then SIGKILL to the group of each process
+    /// that has exited, for children left behind. Blocks the caller for at
+    /// most about 2.5 s in total, however many processes; it returns as soon
+    /// as all have exited. For app quit, where waiting is the point.
     public static func terminate(_ processes: [BlockProcess]) {
         for process in processes { process.socket.close() }
+        defer { for process in processes { process.killGroup() } }
         var running = waitForExit(processes, seconds: 0.5)
         guard !running.isEmpty else { return }
         for process in running { process.signal(SIGTERM) }
@@ -185,11 +197,38 @@ public final class BlockProcess: Transport, @unchecked Sendable {
         }
     }
 
+    /// Sends `signal` to the block's process group while the block runs.
     private func signal(_ signal: Int32) {
         lock.withLock {
             guard !exited else { return }
-            Darwin.kill(pid, signal)
+            Darwin.kill(-pid, signal)
         }
+    }
+
+    /// SIGKILL to what is left of the block's process group after the block
+    /// exited: its children. Nothing while the block still runs.
+    // The group's id is the block's pid. A pid is not reused while a process
+    // group with that id exists, so this reaches only the block's children;
+    // once the group is empty it fails with ESRCH. Left: a new process that
+    // got the pid after the group emptied and made its own group with it,
+    // in the moment between the check and the signal; a pid is not reused
+    // that fast in practice.
+    private func killGroup() {
+        lock.withLock {
+            guard exited else { return }
+            _ = Darwin.kill(-pid, SIGKILL)
+        }
+    }
+
+    /// Runs `action` once the process has exited and been reaped, at once
+    /// when it already has; on a background queue or the caller's thread.
+    func whenExited(_ action: @escaping @Sendable () -> Void) {
+        let now = lock.withLock { () -> Bool in
+            if exited { return true }
+            exitActions.append(action)
+            return false
+        }
+        if now { action() }
     }
 
     /// Waits up to `seconds` for the processes to exit. Returns those still running.
@@ -206,16 +245,18 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     /// Collects the exit status if the process has ended. True once exited.
     @discardableResult
     private func reap() -> Bool {
-        lock.withLock {
-            if exited { return true }
+        let (done, actions) = lock.withLock { () -> (Bool, [@Sendable () -> Void]) in
+            if exited { return (true, []) }
             var status: Int32 = 0
             let result = waitpid(pid, &status, WNOHANG)
-            if result == pid || (result == -1 && errno == ECHILD) {
-                exited = true
-                Self.log.info("block process \(self.pid) exited, status \(status)")
-            }
-            return exited
+            guard result == pid || (result == -1 && errno == ECHILD) else { return (false, []) }
+            exited = true
+            Self.log.info("block process \(self.pid) exited, status \(status)")
+            defer { exitActions = [] }
+            return (true, exitActions)
         }
+        for action in actions { action() }
+        return done
     }
 
     /// Reaps the process as soon as it exits, so it never lingers as a zombie.

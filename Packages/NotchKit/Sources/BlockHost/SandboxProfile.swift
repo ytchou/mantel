@@ -11,10 +11,11 @@ import Foundation
 /// temporary folder) is closed except the block's own folder inside it.
 /// `files.read` opens the home folder and other volumes (`/Volumes`), but
 /// never TopNotch's support folder (other blocks' packages and data, the
-/// approvals) or the app's preferences file. In SBPL the last matching rule
+/// approvals) or the app's preferences file, whatever a token opens: those
+/// are closed after every token's allow. In SBPL the last matching rule
 /// wins, so each allow follows the deny it narrows; but a rule for one
 /// operation (`file-read-metadata`) beats a wildcard (`file-read*`) in any
-/// order. The rules were measured on macOS 26.5 (`spikes/FINDINGS.md`,
+/// order. `allowsRead(_:)` answers the same question in the app. The rules were measured on macOS 26.5 (`spikes/FINDINGS.md`,
 /// "Sandbox rules, 21 Nov").
 ///
 /// Limits that remain:
@@ -42,6 +43,16 @@ import Foundation
 ///   Closing it needs thumbnails drawn by the app instead of the block.
 /// - `files.read` opens every mounted volume under `/Volumes` whole, not
 ///   only the home folder: files on external disks must stay readable.
+/// - System services can fetch from the network for a block, outside the
+///   network gate: `(deny network*)` covers the block's own process only.
+///   A background `URLSession` (run by `nsurlsessiond`) or LaunchServices
+///   opening a URL in another app reaches any host. Closing them needs
+///   their Mach services denied, which may break frameworks blocks use;
+///   that needs a follow-up spike.
+/// - A block's child processes inherit its sandbox and are ended with it
+///   (`BlockProcess` signals its process group), but a child that leaves
+///   the group (`setsid`, `setpgid`) is not ended, and the resource watch
+///   counts the block's own process only, not its children.
 struct SandboxProfile: Sendable, Equatable {
     /// The local port of the block's network gate, the only network the
     /// block reaches. Nil without hosts: no network at all.
@@ -49,7 +60,8 @@ struct SandboxProfile: Sendable, Equatable {
     /// `files.read`: allow reads in the home folder and under `/Volumes`,
     /// except TopNotch's folders.
     var readsHome: Bool
-    /// `files.screenshots`: read and write in this folder only.
+    /// `files.screenshots`: read and write in this folder, except TopNotch's
+    /// folders and the preferences file inside it.
     var screenshotFolder: URL?
     /// The `.topblock` package, readable.
     var package: URL
@@ -87,23 +99,19 @@ struct SandboxProfile: Sendable, Equatable {
     /// Measured: without
     /// `/private/var/db/eligibilityd` the model reports `deviceNotEligible`;
     /// without the root links `/etc`, `/var` and `/tmp` name lookups fail.
-    static let systemReadLocations = [
-        #"(literal "/")"#,
-        #"(literal "/etc")"#,
-        #"(literal "/var")"#,
-        #"(literal "/tmp")"#,
-        #"(subpath "/System")"#,
-        #"(subpath "/usr")"#,
-        #"(subpath "/bin")"#,
-        #"(subpath "/sbin")"#,
-        #"(subpath "/Library/Apple")"#,
-        #"(subpath "/Library/Preferences")"#,
-        #"(subpath "/private/etc")"#,
-        #"(subpath "/private/var/db/timezone")"#,
-        #"(subpath "/private/var/db/dyld")"#,
-        #"(subpath "/private/var/db/eligibilityd")"#,
-        #"(subpath "/dev")"#,
+    /// `literal` is the path itself only; otherwise everything below it too.
+    static let systemReadPaths: [(path: String, literal: Bool)] = [
+        ("/", true), ("/etc", true), ("/var", true), ("/tmp", true),
+        ("/System", false), ("/usr", false), ("/bin", false), ("/sbin", false),
+        ("/Library/Apple", false), ("/Library/Preferences", false), ("/private/etc", false),
+        ("/private/var/db/timezone", false), ("/private/var/db/dyld", false),
+        ("/private/var/db/eligibilityd", false), ("/dev", false),
     ]
+
+    /// `systemReadPaths` as SBPL filters.
+    static var systemReadLocations: [String] {
+        systemReadPaths.map { "(\($0.literal ? "literal" : "subpath") \(quoted($0.path)))" }
+    }
 
     var text: String {
         let home = Self.literal(home)
@@ -126,9 +134,6 @@ struct SandboxProfile: Sendable, Equatable {
         lines.append("(deny user-preference-read (preference-domain \(Self.quoted(preferenceDomain))))")
         lines.append("(deny file-write*)")
         lines.append("(allow file-write* (subpath \(data)) (subpath \(Self.literal(sharedTemporaryFolder))) (subpath \"/dev\"))")
-        // After the write allow above, which covers the shared folder.
-        lines.append("(deny file-read* file-write* (subpath \(Self.literal(appTemporaryFolder))))")
-        lines.append("(allow file-read* file-write* (subpath \(temporary)))")
         // Reads: an allow-list from here on.
         lines.append("(deny file-read*)")
         lines.append("(allow file-read* " + Self.systemReadLocations.joined(separator: " ") + ")")
@@ -144,21 +149,49 @@ struct SandboxProfile: Sendable, Equatable {
         lines.append("(allow file-read-metadata (subpath \(temporary)))")
         if readsHome {
             // Other volumes too: files on external disks stay readable, as
-            // before the allow-list. The deny below still wins there.
+            // before the allow-list. The closing deny below still wins there.
             lines.append("(allow file-read* (subpath \(home)) (subpath \"/Volumes\"))")
-            lines.append("(deny file-read* (subpath \(Self.literal(supportRoot))) (literal \(Self.literal(preferencesFile))))")
         }
-        // After the support folder's deny: the package and data folder are
-        // inside it in the app.
-        lines.append("(allow file-read* (subpath \(data)) (subpath \(package)) (subpath \(temporary)))")
         if let screenshotFolder {
             lines.append("(allow file-read* file-write* (subpath \(Self.literal(screenshotFolder))))")
         }
+        // After every allow a token adds, so no token reopens them (a
+        // screenshot folder set to the home folder contains all three):
+        // the app's temporary subtree, TopNotch's support folder and the
+        // preferences file. Then the block's own folders, inside them in
+        // the app, are opened again.
+        lines.append("(deny file-read* file-write* (subpath \(Self.literal(appTemporaryFolder))) "
+            + "(subpath \(Self.literal(supportRoot))) (literal \(Self.literal(preferencesFile))))")
+        lines.append("(allow file-read* file-write* (subpath \(data)) (subpath \(temporary)))")
+        lines.append("(allow file-read* (subpath \(package)))")
         // Always present, whatever the tokens: without metadata reads in the
         // home folder the on-device model (FoundationModels) reports
         // "Apple Intelligence not enabled". Probed on macOS 26, 2026-11-20.
         lines.append("(allow file-read-metadata (subpath \(home)))")
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// True when this profile lets the block read the file at `path`, an
+    /// absolute path, with symbolic links followed: the same rule as `text`.
+    /// The app uses it before it shows or drags out a file the block names,
+    /// and before it hands a dropped file over where it is, so it never
+    /// opens for the block what the sandbox closes. Metadata-only rules
+    /// (the shared temporary folder, the home folder) do not count.
+    func allowsRead(_ path: String) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let target = Self.resolvedPath(URL(fileURLWithPath: path))
+        func inside(_ url: URL) -> Bool { Self.isInside(target, Self.resolvedPath(url)) }
+        // In `text`'s order, last rule first.
+        if [dataFolder, temporaryFolder, package].contains(where: inside) { return true }
+        if [appTemporaryFolder, supportRoot, preferencesFile].contains(where: inside) { return false }
+        if let screenshotFolder, inside(screenshotFolder) { return true }
+        if readsHome, inside(home) || Self.isInside(target, "/Volumes") { return true }
+        return Self.systemReadPaths.contains { $0.literal ? target == $0.path : Self.isInside(target, $0.path) }
+    }
+
+    /// True when `path` is `root` or inside it.
+    static func isInside(_ path: String, _ root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 
     /// A quoted SBPL string for `url`'s path, with symbolic links resolved

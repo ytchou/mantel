@@ -304,10 +304,10 @@ private final class FakeInstaller: BlockInstalling {
         self.cannotRun = cannotRun
     }
     func inspect(_ url: URL) throws -> BlockPackageSummary {
-        BlockPackageSummary(id: "x", name: "X", version: "1", contract: 1, sourcePath: url.path)
+        BlockPackageSummary(id: "hello", name: "Hello", version: "0.2", contract: 1, sourcePath: url.path)
     }
-    func install(_ url: URL) throws {}
-    func approve(_ id: BlockID) throws {}
+    func install(_ url: URL, expectedHash: String) throws {}
+    func approve(_ id: BlockID, expectedHash: String) throws {}
     func remove(_ id: BlockID) throws {}
     func canRemove(_ id: BlockID) -> Bool { removable.contains(id) }
     func canTurnOn(_ id: BlockID) -> Bool { !cannotRun.contains(id) }
@@ -411,7 +411,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func summaryMarksNewEvents() {
     let update = BlockPackageSummary(id: "hello", name: "Hello", version: "0.3", contract: 1,
-                                     events: ["Pointer over the notch", "Volume changes"], newEvents: ["Volume changes"],
+                                     newEvents: ["Volume changes"],
                                      eventEntries: [hover, volume],
                                      permissions: [], sourcePath: "/tmp/Hello.topblock", installedVersion: "0.2")
     let text = InstallSheetText(update)
@@ -423,7 +423,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     #expect(text.keeps == "Its settings and data are kept.")
 
     let fresh = BlockPackageSummary(id: "hello", name: "Hello", version: "0.2", contract: 1,
-                                    events: ["Pointer over the notch"], eventEntries: [hover],
+                                    eventEntries: [hover],
                                     permissions: ["Reads the clipboard"], sourcePath: "/tmp/Hello.topblock")
     let freshText = InstallSheetText(fresh)
     #expect(freshText.events.map(\.name) == ["Pointer over the notch"])
@@ -755,7 +755,8 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     #expect(entry.turnedOffReason == reason)
     #expect(entry.offersTurnOn)
 
-    entry.turnOn(settings: settings, runtime: runtime)
+    // What the stopped box's "Turn On" does.
+    settings.setEnabled(entry.id, true, in: runtime)
 
     #expect(runtime.isEnabled("clock"))
     #expect(settings.isEnabled("clock"))
@@ -774,7 +775,61 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 }
 
 @Test func theFooterSaysWhereBlocksLive() {
-    #expect(BlockEntry.blocksFolderNote == "Blocks live in ~/Library/Application Support/TopNotch/Blocks")
+    let folder = URL(filePath: "/Users/test/Library/Application Support/TopNotch/Blocks", directoryHint: .isDirectory)
+    #expect(BlockEntry.blocksFolderNote(folder, home: "/Users/test")
+        == "Blocks live in ~/Library/Application Support/TopNotch/Blocks")
+    let elsewhere = URL(filePath: "/Volumes/Work/Blocks", directoryHint: .isDirectory)
+    #expect(BlockEntry.blocksFolderNote(elsewhere, home: "/Users/test") == "Blocks live in /Volumes/Work/Blocks")
+}
+
+// MARK: - Screenshot folder consent
+
+/// "Allow access" records the answer and reports it, which the app wires
+/// to the source coordinator's `evaluate`: the watcher starts once allowed.
+@MainActor
+@Test func anAnswerUpdatesTheConsentAndReportsIt() {
+    let consent = ScreenshotFolderConsent()
+    var reports = 0
+    consent.onChange = { reports += 1 }
+    #expect(!consent.isGranted)
+    #expect(!consent.isRefused, "no answer yet")
+
+    consent.record(.denied)
+    #expect(!consent.isGranted)
+    #expect(consent.isRefused)
+    #expect(reports == 1)
+
+    consent.record(.granted)
+    #expect(consent.isGranted)
+    #expect(!consent.isRefused)
+    #expect(reports == 2)
+}
+
+/// Design error table: the screenshot folder refused, the source does not
+/// start, and the blocks that need it say why.
+@MainActor
+@Test func aBlockThatNeedsTheRefusedScreenshotFolderSaysWhy() {
+    let runtime = NotchRuntime()
+    let consent = ScreenshotFolderConsent()
+    let listener = ScreenshotListener("rename")
+    let off = ScreenshotListener("rename-copy")
+    let other = InfoBlock("shelf", info: BlockInfo())
+    runtime.register(listener)
+    runtime.register(off, enabled: false)
+    runtime.register(other)
+    let notice = "Screenshot folder access is off. Allow it in Settings > General."
+
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == nil,
+            "no notice before macOS answers")
+
+    consent.record(.denied)
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == notice)
+    #expect(BlockEntry(block: off, installer: nil, runtime: runtime, consent: consent).notice == nil,
+            "a block that is off needs nothing")
+    #expect(BlockEntry(block: other, installer: nil, runtime: runtime, consent: consent).notice == nil)
+
+    consent.record(.granted)
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == nil)
 }
 
 @MainActor
