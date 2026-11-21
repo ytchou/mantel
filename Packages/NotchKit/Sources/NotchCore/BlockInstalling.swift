@@ -30,6 +30,13 @@ public extension BlockInstalling {
     func canTurnOn(_ id: BlockID) -> Bool { true }
 }
 
+/// UserDefaults keys shared by the module that installs blocks and the
+/// settings window, which never import each other.
+public enum BlockDefaultsKey {
+    /// The "Allow blocks without a signature" switch; off when nothing is stored.
+    public static let allowUnsigned = "block.allowUnsigned"
+}
+
 /// What a package says about itself, shown before the user confirms an install.
 public struct BlockPackageSummary: Sendable, Equatable {
     public var id: BlockID
@@ -47,6 +54,14 @@ public struct BlockPackageSummary: Sendable, Equatable {
     public var sourcePath: String
     /// Version already installed, or `nil` when the block is not installed.
     public var installedVersion: String?
+    /// What the block may do from inside its sandbox, in the user's words,
+    /// such as "Use the network". Empty for the default profile.
+    public var access: [String]
+    /// Who signed the package, such as a developer name or team. `nil` when
+    /// it is not signed or signed ad hoc.
+    public var signer: String?
+    /// True when the package has a valid signature that is not ad hoc.
+    public var isSigned: Bool { signer != nil }
 
     public init(
         id: BlockID,
@@ -57,7 +72,9 @@ public struct BlockPackageSummary: Sendable, Equatable {
         newEvents: [String] = [],
         permissions: [String] = [],
         sourcePath: String,
-        installedVersion: String? = nil
+        installedVersion: String? = nil,
+        access: [String] = [],
+        signer: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -68,6 +85,8 @@ public struct BlockPackageSummary: Sendable, Equatable {
         self.permissions = permissions
         self.sourcePath = sourcePath
         self.installedVersion = installedVersion
+        self.access = access
+        self.signer = signer
     }
 }
 
@@ -97,6 +116,16 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case idInUse(String)
     /// The package chosen to update one block is a different block.
     case differentBlock(expected: String, found: String)
+    /// The package's signature is broken: it was changed after signing.
+    case badSignature(String)
+    /// The package is not signed, or signed ad hoc, and unsigned blocks are not allowed.
+    case unsigned
+    /// The update is signed by someone other than the installed block.
+    case differentSigner(installed: String, found: String)
+    /// The package is in the old flat format, from before blocks were bundles.
+    case oldPackageFormat
+    /// The manifest asks for access this version of TopNotch does not know.
+    case unknownAccess(String)
 
     public var errorDescription: String? {
         switch self {
@@ -127,6 +156,16 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "A block with the id \"\(id)\" is already running in TopNotch, for example as the development block. Quit TopNotch and open it without that block, or ask the block's author to choose a different id."
         case let .differentBlock(expected, found):
             return "This package is the block \"\(found)\", not \"\(expected)\", so it cannot update \"\(expected)\". Choose the package of \"\(expected)\", or use Install Block\u{2026} to add \"\(found)\"."
+        case let .badSignature(detail):
+            return "The block's signature is not valid (\(detail)). The package may have been changed after it was signed. Ask the block's author for a new copy."
+        case .unsigned:
+            return "This block is not signed, so TopNotch cannot tell who made it. Ask the block's author for a signed package, or turn on \"Allow blocks without a signature\" on the Blocks page if you trust it."
+        case let .differentSigner(installed, found):
+            return "This update is signed by \"\(found)\", but the installed block is signed by \"\(installed)\", so it was not installed. Get the update from the block's original author, or remove the block first if you trust the new signer."
+        case .oldPackageFormat:
+            return "This block uses the old package format, which this version of TopNotch no longer runs. Ask the block's author to package it again with the current package-block.sh."
+        case let .unknownAccess(token):
+            return "The block asks for access \"\(token)\", which this version of TopNotch does not know. Update TopNotch, or ask the block's author for a matching version."
         }
     }
 }

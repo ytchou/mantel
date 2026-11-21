@@ -2,7 +2,7 @@ import BlockKit
 import BlockKitTesting
 import Foundation
 import Testing
-@testable import NowPlaying
+@testable import NowPlayingCore
 
 // The block's behaviour, ported from the in-app block's tests. Each test runs
 // the block over `FakeHost`, as the app would, and some also check
@@ -55,7 +55,7 @@ private struct Shown {
 
 private func presents(_ host: FakeHost) -> [Shown] {
     host.received.compactMap {
-        if case let .present(priority, peek, _, _, opensAt, seconds, dismissIfNotShown) = $0 {
+        if case let .present(priority, peek, _, _, opensAt, seconds, dismissIfNotShown, _, _) = $0 {
             Shown(priority: priority, peek: peek, opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown)
         } else { nil }
     }
@@ -69,7 +69,7 @@ private func updates(_ host: FakeHost) -> [ViewNode] {
 private func latestTree(_ host: FakeHost) -> ViewNode? {
     host.received.reduce(nil) { tree, message in
         switch message {
-        case let .present(_, peek, _, _, _, _, _): peek?.root ?? tree
+        case let .present(_, peek, _, _, _, _, _, _, _): peek?.root ?? tree
         case let .update(peek, _, _): peek ?? tree
         default: tree
         }

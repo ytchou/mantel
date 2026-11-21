@@ -1,12 +1,9 @@
 import AppKit
 import BlockHost
-import DemoBlock
 import EventSources
 import NotchCore
 import NotchShell
 import PlatformServices
-import RenameBlock
-import ShelfBlock
 import SwiftUI
 
 /// Thin app target. It only starts the process and wires the modules together;
@@ -35,34 +32,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dataRoot: BlockStore.defaultDataRoot,
         // Built into Contents/Resources/Blocks by the "Build bundled blocks" phase.
         bundledRoot: Bundle.main.resourceURL?.appending(path: "Blocks"),
+        // The folder `files.screenshots` opens: the one the screenshot watcher reads.
+        screenshotFolder: { ScreenshotFolder.current() },
         defaults: .standard,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
-        // A block installed from the Blocks page joins like one found at launch.
-        register: { [settings, runtime] block in runtime.register(block, enabled: settings.isEnabled(block.id)) },
+        // A block installed from the Blocks page joins like one found at launch,
+        // then takes its place in the stored order (a new id goes last), which is stored.
+        register: { [settings, runtime] block in
+            runtime.register(block, enabled: settings.isEnabled(block.id))
+            settings.applyOrderAfterInstall(to: runtime)
+        },
         unregister: { [runtime] id in runtime.unregister(id) },
         clearKeys: { [settings] id in settings.clear(id) },
         // A package whose id the runtime already has is refused, as the runtime would drop it.
         isRegistered: { [runtime] id in runtime.blocks.contains { $0.id == id } }
     )
     private var shell: NotchShellController?
-    private var dragMonitor: DragMonitor?
-    private var screenshotWatcher: ScreenshotWatcher?
-    private var volumeWatcher: OutputVolumeWatcher?
-    private var playerWatchers: [PlayerNotificationWatcher] = []
-    private var systemNowPlayingWatcher: SystemNowPlayingWatcher?
+    private var sources: SourceCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        var blocks: [any NotchBlock] = [ShelfBlock(), RenameBlock()]
-        // The bundled blocks (now-playing), the installed blocks, then, with
-        // `-devBlock <path to .topblock>`, one block run from where it is.
-        blocks += blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
-        // `-demoBlock YES` adds the demo block, to try hover, click and drop.
-        if defaults.bool(forKey: "demoBlock") { blocks.append(DemoBlock()) }
+        // The bundled blocks (Shelf, Now Playing, Screenshot Names), the
+        // installed blocks, then, with `-devBlock <path to .topblock>`, one
+        // block run from where it is. Every block runs in its own process.
+        let blocks = blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         for block in blocks {
             runtime.register(block, enabled: settings.isEnabled(block.id))
         }
+        // The order the owner set on the Blocks page; with none, the order found above.
+        settings.applyOrder(to: runtime)
 
         // `-forcePill YES` tries the floating pill on a Mac with a notch.
         let shell = NotchShellController(runtime: runtime, forcePill: defaults.bool(forKey: "forcePill"))
@@ -71,26 +70,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shell.start()
         self.shell = shell
 
-        let dragMonitor = DragMonitor(runtime: runtime)
-        dragMonitor.start()
-        self.dragMonitor = dragMonitor
-
-        let screenshotWatcher = ScreenshotWatcher(runtime: runtime)
-        screenshotWatcher.start()
-        self.screenshotWatcher = screenshotWatcher
-
-        let volumeWatcher = OutputVolumeWatcher(runtime: runtime)
-        volumeWatcher.start()
-        self.volumeWatcher = volumeWatcher
-
-        playerWatchers = [.spotify, .music].map { PlayerNotificationWatcher(runtime: runtime, player: $0) }
-        playerWatchers.forEach { $0.start() }
-
+        // Each source runs only while an enabled block listens to its events.
+        // Blocks are registered above, so the ones turned on start here. The
+        // drag monitor also runs while an interactive presentation shows: the
+        // arbiter keeps it on screen during a drag only when it hears the drag.
+        let sources = SourceCoordinator(runtime: runtime)
+        sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self],
+                    whileInteractiveShows: true)
+        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self])
+        sources.add(OutputVolumeWatcher(runtime: runtime), for: [OutputVolumeChanged.self])
+        for player in [PlayerNotificationWatcher.Player.spotify, .music] {
+            sources.add(PlayerNotificationWatcher(runtime: runtime, player: player), for: [NowPlayingChanged.self])
+        }
         // Built into Contents/Frameworks by the "Build now-playing helper" phase.
         let helper = Bundle.main.privateFrameworksURL?.appending(path: "TopNotchNowPlaying.dylib")
-        let systemNowPlayingWatcher = SystemNowPlayingWatcher(runtime: runtime, helperURL: helper)
-        systemNowPlayingWatcher.start()
-        self.systemNowPlayingWatcher = systemNowPlayingWatcher
+        sources.add(SystemNowPlayingWatcher(runtime: runtime, helperURL: helper), for: [NowPlayingChanged.self])
+        self.sources = sources
 
         onboarding.showIfNeeded()
     }

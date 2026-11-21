@@ -25,7 +25,41 @@ public final class RemoteModel {
     /// to the images), so it knows which images to send again.
     @ObservationIgnored private var recency: [String] = []
 
-    public init() {}
+    // MARK: Items (contract version 2)
+
+    /// A click, double-click or menu entry on an `item`: its id and what was done.
+    @ObservationIgnored var onItemAction: @MainActor (String, ItemAction) -> Void = { _, _ in }
+    /// A drag-out of the `item` with this id is starting. Called in the same
+    /// main-actor turn that starts the dragging session, before it starts.
+    @ObservationIgnored var onDragBegan: @MainActor (String) -> Void = { _ in }
+    /// That drag ended; true only when it ended with an operation.
+    @ObservationIgnored var onDragEnded: @MainActor (String, Bool) -> Void = { _, _ in }
+
+    /// The dragging source of every drag-out; see `ItemDragSource`.
+    @ObservationIgnored let dragSource = ItemDragSource()
+    /// Whether a file path may go on the drag pasteboard. The stand-in allows
+    /// only paths its block's sandbox could read; other file entries are left out.
+    @ObservationIgnored var mayDragFile: @MainActor (String) -> Bool = { _ in true }
+
+    /// Reduce Motion, injected for tests; nil follows the system setting.
+    @ObservationIgnored var reduceMotion: Bool?
+
+    public init() {
+        dragSource.onEnd = { [weak self] id, succeeded in self?.onDragEnded(id, succeeded) }
+    }
+
+    /// Whether `sweep` and a draining `progress` move: not with Reduce Motion.
+    func animates(systemReduceMotion: Bool) -> Bool {
+        !(reduceMotion ?? systemReduceMotion)
+    }
+
+    /// Starts a drag-out of the item `id`: tells the stand-in, then gives the
+    /// source for the dragging session.
+    func beginItemDrag(_ id: String) -> ItemDragSource {
+        dragSource.begin(id)
+        onDragBegan(id)
+        return dragSource
+    }
 
     public func tree(for slot: RemoteSlot) -> ViewNode? {
         switch slot {

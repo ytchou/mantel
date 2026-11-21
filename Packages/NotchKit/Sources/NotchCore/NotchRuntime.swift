@@ -12,13 +12,30 @@ public final class NotchRuntime {
     /// What the notch shows now. Observable; the shell redraws when it changes.
     public private(set) var state: NotchState = .idle
 
-    /// Registered blocks, in registration order.
+    /// Registered blocks, highest rank first. Between two presentations of
+    /// equal priority, the block earlier in this list gets the notch. A new
+    /// block goes to the end; `move(_:to:)` changes the order.
     public private(set) var blocks: [any NotchBlock] = []
+
+    /// Called once each time the set of event types with at least one
+    /// subscriber among enabled blocks changes, and each time
+    /// `isShowingInteractive` changes. Read `hasSubscribers(for:)` and
+    /// `isShowingInteractive` to see the new state.
+    @ObservationIgnored public var onDemandChanged: (@MainActor () -> Void)?
+
+    /// True while the notch shows an `interactive` presentation. The arbiter
+    /// keeps it from being displaced during a drag only while the drag
+    /// monitor runs, so the monitor also runs while this is true.
+    public var isShowingInteractive: Bool { showedInteractive }
 
     /// Contexts of enabled blocks.
     @ObservationIgnored private var contexts: [BlockID: RuntimeContext] = [:]
     @ObservationIgnored private var arbiter = Arbiter()
     @ObservationIgnored private var isPointerInside = false
+    /// Event types with at least one subscriber, as last reported.
+    @ObservationIgnored private var demand: Set<ObjectIdentifier> = []
+    /// Whether an interactive presentation was on screen, as last reported.
+    @ObservationIgnored private var showedInteractive = false
 
     /// Time since the runtime was created, on the injected clock.
     private let now: @Sendable () -> Duration
@@ -45,7 +62,37 @@ public final class NotchRuntime {
     public func register(_ block: any NotchBlock, enabled: Bool = true) {
         guard !blocks.contains(where: { $0.id == block.id }) else { return }
         blocks.append(block)
+        rankChanged()
         if enabled { activate(block) }
+    }
+
+    /// Move a block to `index` in `blocks`, which is its rank. An index past
+    /// the end moves it last. An unknown id does nothing.
+    public func move(_ id: BlockID, to index: Int) {
+        guard let from = blocks.firstIndex(where: { $0.id == id }) else { return }
+        let block = blocks.remove(at: from)
+        blocks.insert(block, at: min(max(index, 0), blocks.count))
+        rankChanged()
+    }
+
+    /// Put the blocks in `ids` first, in that order, then every other block
+    /// in its current relative order. Unknown ids are ignored. Re-ranks once.
+    public func setOrder(_ ids: [BlockID]) {
+        var rest = blocks
+        var ordered: [any NotchBlock] = []
+        for id in ids {
+            guard let index = rest.firstIndex(where: { $0.id == id }) else { continue }
+            ordered.append(rest.remove(at: index))
+        }
+        let next = ordered + rest
+        guard next.map(\.id) != blocks.map(\.id) else { return }
+        blocks = next
+        rankChanged()
+    }
+
+    private func rankChanged() {
+        arbiter.setRank(blocks.map(\.id), at: now())
+        applyArbiter()
     }
 
     public func isEnabled(_ id: BlockID) -> Bool { contexts[id] != nil }
@@ -58,6 +105,7 @@ public final class NotchRuntime {
             activate(block)
         } else {
             contexts.removeValue(forKey: id)?.close()
+            subscriptionsChanged()
             arbiter.dismiss(id, at: now())
             applyArbiter()
             block.deactivate()
@@ -70,6 +118,7 @@ public final class NotchRuntime {
         guard blocks.contains(where: { $0.id == id }) else { return }
         setEnabled(id, false)
         blocks.removeAll { $0.id == id }
+        rankChanged()
     }
 
     private func activate(_ block: any NotchBlock) {
@@ -79,6 +128,29 @@ public final class NotchRuntime {
     }
 
     // MARK: Events
+
+    /// True when an enabled block subscribes to events of `type`.
+    public func hasSubscribers(for type: any NotchEvent.Type) -> Bool {
+        demand.contains(ObjectIdentifier(type))
+    }
+
+    /// A block subscribed to `type`. Adds it to the demand; reports a change
+    /// only when no enabled block listened to it before.
+    fileprivate func subscribed(to type: ObjectIdentifier) {
+        guard demand.insert(type).inserted else { return }
+        onDemandChanged?()
+    }
+
+    /// Recompute which event types have subscribers; report a change once.
+    fileprivate func subscriptionsChanged() {
+        var next: Set<ObjectIdentifier> = []
+        for context in contexts.values {
+            for (type, handlers) in context.handlers where !handlers.isEmpty { next.insert(type) }
+        }
+        guard next != demand else { return }
+        demand = next
+        onDemandChanged?()
+    }
 
     /// Deliver an event to every enabled block subscribed to its type.
     public func publish<E: NotchEvent>(_ event: E) {
@@ -103,6 +175,15 @@ public final class NotchRuntime {
         arbiter.setPointerInside(isInside, at: now())
         applyArbiter()
         publish(PointerHoverChanged(isInside: isInside))
+    }
+
+    /// A system drag started or ended. Starts or ends the arbiter's drag
+    /// interaction. The drag source calls it before it publishes
+    /// `DragSessionStarted` or `DragSessionEnded`, so the state is set before
+    /// any block hears the event.
+    public func dragSessionChanged(active: Bool) {
+        arbiter.setDragActive(active, at: now())
+        applyArbiter()
     }
 
     /// Forward input to the block that owns the notch. Dropped when idle.
@@ -140,6 +221,11 @@ public final class NotchRuntime {
             state = next
         }
         scheduleTimer()
+        let interactive = state.presentation?.priority == .interactive
+        if interactive != showedInteractive {
+            showedInteractive = interactive
+            onDemandChanged?()
+        }
     }
 
     private func scheduleTimer() {
@@ -186,6 +272,13 @@ private final class RuntimeContext: BlockContext {
         handlers[ObjectIdentifier(type), default: []].append { event in
             if let event = event as? E { handler(event) }
         }
+        runtime?.subscribed(to: ObjectIdentifier(type))
+    }
+
+    func unsubscribeAll() {
+        guard isActive, !handlers.isEmpty else { return }
+        handlers = [:]
+        runtime?.subscriptionsChanged()
     }
 
     func present(_ presentation: Presentation) {

@@ -19,7 +19,7 @@ import os
 public final class SystemNowPlayingWatcher {
     private let runtime: NotchRuntime
     private let helperURL: URL?
-    private var process: Process?
+    private(set) var process: Process?
     private var input: Pipe?
     private var translator = SystemNowPlayingTranslator()
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "nowplaying")

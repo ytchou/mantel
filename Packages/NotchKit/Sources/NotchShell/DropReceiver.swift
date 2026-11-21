@@ -16,10 +16,6 @@ final class DropTargetView: NSView {
     private var dragKinds: Set<DropKind> = []
 
     private static let readClasses: [AnyClass] = [NSFilePromiseReceiver.self, NSURL.self, NSString.self]
-    /// Promised files are written here. Emptied when the shell starts.
-    static let dropRoot = FileManager.default.temporaryDirectory
-        .appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
-
     private let promiseQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "TopNotch.promises"
@@ -57,7 +53,9 @@ final class DropTargetView: NSView {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let accepted = acceptedKinds()
         let drop = PendingDrop(deliver: onDrop)
-        let directory = Self.dropRoot.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        // Promised files are written here; the block's stand-in moves them
+        // into the block's own temporary folder.
+        let directory = DropFolder.root.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         // Promise first: image drags can carry a promise and a URL on the same
         // item, and the file is what is wanted. Each item is read as the first
         // class that can read it.

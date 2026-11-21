@@ -20,8 +20,8 @@ public final class DragMonitor {
     private let runtime: NotchRuntime
     private let pasteboard = NSPasteboard(name: .drag)
     private var machine = DragStateMachine()
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private(set) var globalMonitor: Any?
+    private(set) var localMonitor: Any?
     private var timer: Timer?
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "drag")
 
@@ -84,9 +84,11 @@ public final class DragMonitor {
         case .started:
             let kinds = currentKinds()
             log.debug("drag session started kinds=\(kinds.count)")
+            runtime.dragSessionChanged(active: true)
             runtime.publish(DragSessionStarted(kinds: kinds))
         case .ended:
             log.debug("drag session ended")
+            runtime.dragSessionChanged(active: false)
             runtime.publish(DragSessionEnded())
         case nil:
             break

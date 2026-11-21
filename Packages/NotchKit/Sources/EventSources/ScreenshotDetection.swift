@@ -4,7 +4,7 @@ import Foundation
 // events. Measured in the naming spike (`spikes/FINDINGS.md`, results table C).
 
 /// Where macOS saves screenshots.
-enum ScreenshotFolder {
+public enum ScreenshotFolder {
     static let defaultsDomain = "com.apple.screencapture"
     static let defaultsKey = "location"
 
@@ -30,7 +30,7 @@ enum ScreenshotFolder {
 
     /// Read the user's setting now. Synchronises first, so a change made with
     /// `defaults write` or the Screenshot app since the last read is seen.
-    static func current() -> URL {
+    public static func current() -> URL {
         let domain = defaultsDomain as CFString
         CFPreferencesAppSynchronize(domain)
         let location = CFPreferencesCopyAppValue(defaultsKey as CFString, domain) as? String

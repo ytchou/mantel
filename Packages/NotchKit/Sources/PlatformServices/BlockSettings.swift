@@ -25,8 +25,9 @@ final class EnablementSignal {
     var revision = 0
 }
 
-/// Remembers which blocks are on. UserDefaults keys "block.<id>.enabled";
-/// a block with no stored value is on.
+/// Remembers which blocks are on, their order, and whether unsigned packages
+/// are allowed. UserDefaults keys "block.<id>.enabled" (a block with no
+/// stored value is on), "block.order" and "block.allowUnsigned".
 @MainActor
 public final class BlockSettings {
     private let defaults: UserDefaults
@@ -58,11 +59,76 @@ public final class BlockSettings {
         Log.platform.info("Block \(id.rawValue, privacy: .public) turned \(enabled ? "on" : "off", privacy: .public)")
     }
 
+    // MARK: Order
+
+    static let orderKey = "block.order"
+
+    /// The blocks' rank, highest first, as stored in "block.order". Ids of
+    /// blocks that are not registered may appear; registered blocks missing
+    /// from it rank last. Empty with nothing stored: no id is ranked in code,
+    /// so the blocks keep the order they were added in (bundled blocks by
+    /// package name, then installed blocks in install order).
+    public var order: [BlockID] {
+        (defaults.stringArray(forKey: Self.orderKey) ?? []).map { BlockID(rawValue: $0) }
+    }
+
+    public func setOrder(_ ids: [BlockID]) {
+        defaults.set(ids.map(\.rawValue), forKey: Self.orderKey)
+    }
+
+    /// Puts the runtime's blocks in the stored order. Blocks not in it keep
+    /// their registration order after the others. Call once all blocks are
+    /// registered at launch; it stores nothing. After an install, call
+    /// `applyOrderAfterInstall(to:)` instead.
+    public func applyOrder(to runtime: NotchRuntime) {
+        runtime.setOrder(order)
+    }
+
+    /// After a block installed from the Blocks page is registered: puts the
+    /// runtime's blocks in the stored order (the new block, not in it, goes
+    /// last) and stores the result. At launch installed blocks are found
+    /// sorted by id, so storing here is what keeps the install order.
+    public func applyOrderAfterInstall(to runtime: NotchRuntime) {
+        applyOrder(to: runtime)
+        storeOrder(of: runtime)
+    }
+
+    /// Moves a block to `index` in the runtime and stores the new order.
+    public func move(_ id: BlockID, to index: Int, in runtime: NotchRuntime) {
+        runtime.move(id, to: index)
+        storeOrder(of: runtime)
+        Log.platform.info("Block \(id.rawValue, privacy: .public) moved to \(index, privacy: .public)")
+    }
+
+    /// Stores the runtime's order. Stored ids of blocks not registered now
+    /// are kept, after the others.
+    private func storeOrder(of runtime: NotchRuntime) {
+        let ranked = runtime.blocks.map(\.id)
+        setOrder(ranked + order.filter { !ranked.contains($0) })
+    }
+
+    // MARK: Unsigned blocks
+
+    /// True when the owner allows packages without a valid signature.
+    /// "block.allowUnsigned"; off when nothing is stored.
+    public var allowsUnsigned: Bool { defaults.bool(forKey: BlockDefaultsKey.allowUnsigned) }
+
+    public func setAllowsUnsigned(_ allowed: Bool) {
+        defaults.set(allowed, forKey: BlockDefaultsKey.allowUnsigned)
+        Log.platform.info("Blocks without a signature \(allowed ? "allowed" : "refused", privacy: .public)")
+    }
+
+    // MARK: Remove
+
     /// Deletes every key of a removed block: its settings, "<id>.*", and the
-    /// app's keys for it, "block.<id>.*". Other blocks' keys are kept.
+    /// app's keys for it, "block.<id>.*", and takes it out of the stored
+    /// order. Other blocks' keys are kept.
     public func clear(_ id: BlockID) {
         for key in storedKeys(of: id) {
             defaults.removeObject(forKey: key)
+        }
+        if let stored = defaults.stringArray(forKey: Self.orderKey), stored.contains(id.rawValue) {
+            defaults.set(stored.filter { $0 != id.rawValue }, forKey: Self.orderKey)
         }
         EnablementSignal.shared.revision += 1
         Log.platform.info("Block \(id.rawValue, privacy: .public) settings cleared")

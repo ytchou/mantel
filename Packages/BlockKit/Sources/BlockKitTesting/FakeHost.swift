@@ -53,6 +53,31 @@ public final class FakeHost: @unchecked Sendable {
         try appSide.send(message, generation: generation)
     }
 
+    /// Sends one event numbered `seq`, as a version 2 app does.
+    public func event(_ payload: EventPayload, seq: Int, replay: Bool = false) throws {
+        try send(.event(payload: payload, replay: replay, seq: seq))
+    }
+
+    /// Drops these items on the block's presentation.
+    public func drop(_ items: [WireDrop]) throws {
+        try send(.input(input: .drop(items: items)))
+    }
+
+    /// A click, double-click or menu entry on the `item` with this id.
+    public func item(_ id: String, _ action: ItemAction) throws {
+        try send(.input(input: .item(id: id, action: action)))
+    }
+
+    /// The app started dragging the `item` with this id out.
+    public func dragBegan(_ id: String) throws {
+        try send(.input(input: .dragBegan(id: id)))
+    }
+
+    /// That drag ended.
+    public func dragEnded(_ id: String, succeeded: Bool) throws {
+        try send(.input(input: .dragEnded(id: id, succeeded: succeeded)))
+    }
+
     /// Closes the connection, as the app does when it quits.
     public func close() { appSide.close() }
 
@@ -61,6 +86,16 @@ public final class FakeHost: @unchecked Sendable {
 
     /// Every frame the block has sent, with generations.
     public var receivedEnvelopes: [Envelope<BlockToHost>] { lock.withLock { frames } }
+
+    /// The paths of each `preview` the block asked for, in order.
+    public var previews: [[String]] {
+        received.compactMap { if case let .preview(paths) = $0 { paths } else { nil } }
+    }
+
+    /// Each `settingNote` the block sent, in order.
+    public var notes: [SettingNote] {
+        received.compactMap { if case let .settingNote(key, text) = $0 { SettingNote(key: key, text: text) } else { nil } }
+    }
 
     /// The error that ended the block's stream, if a frame did not decode.
     public var streamError: (any Error)? { lock.withLock { failure } }
@@ -86,5 +121,15 @@ public final class FakeHost: @unchecked Sendable {
             if found.count >= count || clock.now >= deadline { return found }
             try? await Task.sleep(for: .milliseconds(5))
         }
+    }
+}
+
+/// A `settingNote` a block sent: the note setting's key and its new text.
+public struct SettingNote: Hashable, Sendable {
+    public var key: String
+    public var text: String
+    public init(key: String, text: String) {
+        self.key = key
+        self.text = text
     }
 }

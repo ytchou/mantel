@@ -387,3 +387,172 @@ private final class FakeInstaller: BlockInstalling {
     #expect(freshText.keeps == nil)
     #expect(freshText.permissions == "Reads the clipboard")
 }
+
+// MARK: - Order, access, signer, the switch
+
+@MainActor
+@Test func orderIsStoredAndRestored() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let runtime = NotchRuntime()
+    for id: BlockID in ["shelf", "nowplaying", "rename"] { runtime.register(FakeBlock(id)) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+
+    settings.move("rename", to: 0, in: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["rename", "shelf", "nowplaying"])
+
+    // At the next launch, blocks register in any order; a new one is not in the stored list.
+    let relaunched = NotchRuntime()
+    for id: BlockID in ["hello", "shelf", "nowplaying", "rename"] { relaunched.register(FakeBlock(id)) }
+    BlockSettings(defaults: defaults, domain: name).applyOrder(to: relaunched)
+
+    #expect(relaunched.blocks.map(\.id) == ["rename", "shelf", "nowplaying", "hello"])
+}
+
+/// The app's register closure for a block installed after launch: register,
+/// then apply the stored order again. A block the order ranks first, such as
+/// one reinstalled after it was refused, goes first now, not only at the next launch.
+@MainActor
+@Test func applyingTheOrderAfterALateRegistrationRanksTheNewBlock() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["hello", "shelf", "nowplaying"])
+    let runtime = NotchRuntime()
+    for id: BlockID in ["shelf", "nowplaying"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("hello"))
+    #expect(runtime.blocks.map(\.id) == ["shelf", "nowplaying", "hello"], "register alone puts it last")
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["hello", "shelf", "nowplaying"])
+}
+
+/// No id is ranked by name in code: with nothing stored, the blocks keep the
+/// order they were registered in (bundled by package name, then installed).
+@MainActor
+@Test func withNothingStoredTheRegistrationOrderIsKept() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    #expect(settings.order.isEmpty)
+
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf", "hello"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "hello"])
+    #expect(defaults.object(forKey: "block.order") == nil, "applying the order at launch stores nothing")
+}
+
+@MainActor
+@Test func aStoredOrderWinsOverTheRegistrationOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["rename", "shelf"])
+    #expect(settings.order == ["rename", "shelf"])
+
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying"])
+}
+
+/// The app's register closure for a block installed from the Blocks page:
+/// the new block goes last and the order is stored, so the install order
+/// survives a relaunch, where installed blocks are found sorted by id.
+@MainActor
+@Test func anInstallAppendsTheBlockAndStoresTheOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("zeta"))
+    settings.applyOrderAfterInstall(to: runtime)
+    runtime.register(FakeBlock("alpha"))
+    settings.applyOrderAfterInstall(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+
+    // At the next launch the installed blocks register sorted by id.
+    let relaunched = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf", "alpha", "zeta"] { relaunched.register(FakeBlock(id)) }
+    BlockSettings(defaults: defaults, domain: name).applyOrder(to: relaunched)
+
+    #expect(relaunched.blocks.map(\.id) == ["nowplaying", "rename", "shelf", "zeta", "alpha"])
+}
+
+/// An install keeps the owner's order: the new block goes after it, and
+/// stored ids of blocks not registered now are kept.
+@MainActor
+@Test func anInstallKeepsTheStoredOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["rename", "gone", "shelf", "nowplaying"])
+    let runtime = NotchRuntime()
+    for id: BlockID in ["nowplaying", "rename", "shelf"] { runtime.register(FakeBlock(id)) }
+    settings.applyOrder(to: runtime)
+
+    runtime.register(FakeBlock("hello"))
+    settings.applyOrderAfterInstall(to: runtime)
+
+    #expect(runtime.blocks.map(\.id) == ["rename", "shelf", "nowplaying", "hello"])
+    #expect(defaults.stringArray(forKey: "block.order") == ["rename", "shelf", "nowplaying", "hello", "gone"])
+}
+
+@Test func installSheetListsAccessAndSigner() {
+    let signed = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
+                                     permissions: ["Old free text"], sourcePath: "/tmp/Hello.topblock",
+                                     access: ["Use the network", "Read files you choose"],
+                                     signer: "Jane Developer")
+    let signedText = InstallSheetText(signed)
+    #expect(signedText.access == ["Use the network", "Read files you choose"])
+    #expect(signedText.signature == "Signed by Jane Developer")
+    #expect(signedText.signatureWarning == nil)
+
+    let unsigned = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
+                                       sourcePath: "/tmp/Hello.topblock")
+    let unsignedText = InstallSheetText(unsigned)
+    #expect(unsignedText.access.isEmpty)
+    #expect(unsignedText.signature == "Not signed")
+    #expect(unsignedText.signatureWarning == "TopNotch cannot tell who made this block or whether it was changed. Install it only if you built it or trust where it came from.")
+}
+
+@MainActor
+@Test func allowUnsignedSwitchWritesItsKey() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    #expect(!settings.allowsUnsigned)
+
+    settings.setAllowsUnsigned(true)
+    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == true)
+    #expect(BlockSettings(defaults: defaults, domain: name).allowsUnsigned)
+
+    settings.setAllowsUnsigned(false)
+    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == false)
+    #expect(!settings.allowsUnsigned)
+}
+
+@MainActor
+@Test func removingABlockRemovesItFromTheOrder() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults, domain: name)
+    settings.setOrder(["shelf", "hello", "nowplaying", "rename"])
+
+    settings.clear("hello")
+
+    #expect(defaults.stringArray(forKey: "block.order") == ["shelf", "nowplaying", "rename"])
+    #expect(settings.order == ["shelf", "nowplaying", "rename"])
+}

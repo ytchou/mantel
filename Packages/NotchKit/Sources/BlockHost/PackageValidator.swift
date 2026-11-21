@@ -15,23 +15,62 @@ enum PackageValidator {
     // time; if they grow or become dynamic, build this set from the built-in
     // blocks' ids plus the fixed prefixes, in one place the app also reads.
     static let reservedIDs: Set<String> = [
-        "shelf", "rename", "demo", "nowplaying", "block", "onboarding", "com", "apple", "ns",
+        "shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns",
     ]
 
-    /// Reads `manifest.json` in `package` and checks it. Returns the manifest
-    /// when the package may run.
+    /// The package's `manifest.json`: `Contents/Resources/manifest.json`.
+    /// `codesign` seals it with the executable.
+    static func manifestURL(in package: URL) -> URL {
+        package.appending(path: "Contents/Resources/manifest.json")
+    }
+
+    /// The folder the manifest's `executable` is relative to: `Contents/MacOS`.
+    static func executableFolder(in package: URL) -> URL {
+        package.appending(path: "Contents/MacOS", directoryHint: .isDirectory)
+    }
+
+    /// True for a package in the old flat format: `manifest.json` at the
+    /// top and no bundle manifest. Refused, with a message to package again.
+    static func isOldFormat(_ package: URL) -> Bool {
+        !FileManager.default.fileExists(atPath: manifestURL(in: package).path)
+            && FileManager.default.fileExists(atPath: package.appending(path: "manifest.json").path)
+    }
+
+    /// Reads the package's `manifest.json` and checks it. Returns the manifest
+    /// when the package may run. The signature is checked by `BlockStore`.
     static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
+        let manifest = try read(package)
+        try validate(manifest, package: package, source: source)
+        return manifest
+    }
+
+    /// Reads and decodes the package's `manifest.json`, without `validate`.
+    static func read(_ package: URL) throws(BlockInstallError) -> Manifest {
+        if isOldFormat(package) { throw .oldPackageFormat }
         let manifest: Manifest
+        let data: Data
         do {
-            let data = try Data(contentsOf: package.appending(path: "manifest.json"))
-            manifest = try Manifest.decode(data)
-        } catch let error as ManifestError {
-            throw .unreadableManifest(describe(error))
+            data = try Data(contentsOf: manifestURL(in: package))
         } catch {
             throw .unreadableManifest(error.localizedDescription)
         }
-        try validate(manifest, package: package, source: source)
+        do throws(ManifestError) {
+            manifest = try Manifest.decode(data)
+        } catch .invalidField("access") {
+            throw unknownAccess(in: data) ?? .unreadableManifest(describe(.invalidField("access")))
+        } catch {
+            throw .unreadableManifest(describe(error))
+        }
         return manifest
+    }
+
+    /// The first `access` token this app does not know, as a refusal.
+    private static func unknownAccess(in data: Data) -> BlockInstallError? {
+        struct Tokens: Decodable { var access: [String] }
+        guard let tokens = try? JSONDecoder().decode(Tokens.self, from: data),
+              let unknown = tokens.access.first(where: { Access(rawValue: $0) == nil })
+        else { return nil }
+        return .unknownAccess(unknown)
     }
 
     /// Checks the meaning of a decoded manifest against its package folder.
@@ -65,13 +104,15 @@ enum PackageValidator {
             let root = parent.path
             return child.path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
         }
-        let executable = package.appending(path: path)
+        let folder = executableFolder(in: package)
+        let executable = folder.appending(path: path)
         let resolved = executable.standardizedFileURL.path
-        // `appending(path:)` treats a leading "/" as relative, so an absolute
-        // path is refused on its own. The path is checked as written, then
-        // with symbolic links followed, so a link cannot lead outside.
-        guard !path.hasPrefix("/"),
-              isInside(executable.standardizedFileURL, package.standardizedFileURL),
+        // A file name in `Contents/MacOS`, as `package-block.sh` requires: no
+        // "/", and not "", "." or "..". Then, with symbolic links followed,
+        // the executable must still be inside the package, so neither a link
+        // as the executable nor `Contents/MacOS` itself can lead outside it.
+        guard !path.isEmpty, path != ".", path != "..", !path.contains("/"),
+              isInside(executable.standardizedFileURL, folder.standardizedFileURL),
               isInside(executable.resolvingSymlinksInPath(), package.resolvingSymlinksInPath())
         else {
             throw .executableOutsidePackage(path)

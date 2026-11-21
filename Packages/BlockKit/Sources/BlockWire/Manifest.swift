@@ -22,6 +22,9 @@ public struct Manifest: Codable, Hashable, Sendable {
     public var trigger: String
     /// Display-only text.
     public var permissions: [String]
+    /// What the block may do beyond the default sandbox. Contract version
+    /// 2; empty when the manifest has none.
+    public var access: [Access]
     /// Event names, as in `WireEvent`. Kept as text so the app can name an
     /// unknown event in its message.
     public var events: [String]
@@ -37,6 +40,7 @@ public struct Manifest: Codable, Hashable, Sendable {
         symbol: String = "",
         trigger: String = "",
         permissions: [String] = [],
+        access: [Access] = [],
         events: [String] = [],
         settings: [SettingSpec] = []
     ) {
@@ -49,12 +53,13 @@ public struct Manifest: Codable, Hashable, Sendable {
         self.symbol = symbol
         self.trigger = trigger
         self.permissions = permissions
+        self.access = access
         self.events = events
         self.settings = settings
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, contract, executable, summary, symbol, trigger, permissions, events, settings
+        case id, name, version, contract, executable, summary, symbol, trigger, permissions, access, events, settings
     }
 
     public init(from decoder: any Decoder) throws {
@@ -68,6 +73,14 @@ public struct Manifest: Codable, Hashable, Sendable {
         symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? ""
         trigger = try c.decodeIfPresent(String.self, forKey: .trigger) ?? ""
         permissions = try c.decodeIfPresent([String].self, forKey: .permissions) ?? []
+        // Read as text so an unknown token is named as the field, not an index.
+        let tokens = try c.decodeIfPresent([String].self, forKey: .access) ?? []
+        access = try tokens.map { token in
+            guard let value = Access(rawValue: token) else {
+                throw DecodingError.dataCorruptedError(forKey: .access, in: c, debugDescription: "unknown access token \(token)")
+            }
+            return value
+        }
         events = try c.decodeIfPresent([String].self, forKey: .events) ?? []
         settings = try c.decodeIfPresent([SettingSpec].self, forKey: .settings) ?? []
     }
@@ -92,6 +105,17 @@ public struct Manifest: Codable, Hashable, Sendable {
             .joined(separator: ".")
             .replacingOccurrences(of: ".[", with: "[")
     }
+}
+
+/// One thing a block may do beyond the default sandbox, named in the
+/// manifest's `access` list. An unknown token is refused.
+public enum Access: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Open outbound connections.
+    case network
+    /// Read files in the home folder.
+    case filesRead = "files.read"
+    /// Read and write in the screenshot folder.
+    case filesScreenshots = "files.screenshots"
 }
 
 public enum ManifestError: Error, Equatable, Sendable {

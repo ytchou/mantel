@@ -12,16 +12,17 @@ import os
 @MainActor
 public final class ScreenshotWatcher {
     private let runtime: NotchRuntime
-    private var scanner: ScreenshotFolderScanner?
+    private(set) var scanner: ScreenshotFolderScanner?
     private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "screenshots")
 
     public init(runtime: NotchRuntime) {
         self.runtime = runtime
     }
 
-    /// Start watching. Reads the screenshot folder setting again each time.
+    /// Start watching. Reads the screenshot folder setting each time it
+    /// starts after a stop; a second `start()` while watching does nothing.
     public func start() {
-        stop()
+        guard scanner == nil else { return }
         let folder = ScreenshotFolder.current()
         let runtime = self.runtime
         let log = self.log

@@ -12,8 +12,15 @@ struct InstallSheetText {
     /// One line per event; events the installed version did not listen to end in "(new)".
     let events: [String]
     let permissions: String
+    /// What the block may do from inside its sandbox, one line each. Shown in
+    /// place of `permissions` when not empty.
+    let access: [String]
+    /// "Signed by …" or "Not signed".
+    let signature: String
+    /// Shown under the signature when the package is not signed.
+    let signatureWarning: String?
     let source: String
-    let note = "Blocks run as their own process with your user account's access. Install only blocks you built or trust."
+    let note = "Blocks run as their own process, limited to the access listed above. Install only blocks you built or trust."
     /// The default button.
     let confirm: String
     /// What an update keeps, or nil for a new install.
@@ -27,6 +34,14 @@ struct InstallSheetText {
         let new = Set(summary.newEvents)
         events = summary.events.map { new.contains($0) ? "\($0) (new)" : $0 }
         permissions = summary.permissions.isEmpty ? "Nothing" : summary.permissions.joined(separator: ", ")
+        access = summary.access
+        if summary.isSigned {
+            signature = "Signed by \(summary.signer ?? "an unknown signer")"
+            signatureWarning = nil
+        } else {
+            signature = "Not signed"
+            signatureWarning = "TopNotch cannot tell who made this block or whether it was changed. Install it only if you built it or trust where it came from."
+        }
         source = summary.sourcePath
         confirm = isUpdate ? "Update" : "Install and Turn On"
         keeps = isUpdate ? "Its settings and data are kept." : nil
@@ -53,7 +68,17 @@ struct BlockInstallSheet: View {
                     LabeledContent("Version", value: text.version)
                     LabeledContent("Contract", value: text.contract)
                     LabeledContent("Listens to", value: text.events.isEmpty ? "Nothing" : text.events.joined(separator: "\n"))
-                    LabeledContent("Needs", value: text.permissions)
+                    if text.access.isEmpty {
+                        LabeledContent("Needs", value: text.permissions)
+                    } else {
+                        LabeledContent("Access", value: text.access.joined(separator: "\n"))
+                    }
+                    LabeledContent("Signature", value: text.signature)
+                    if let warning = text.signatureWarning {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     LabeledContent("From", value: text.source)
                 } header: {
                     Text(text.title).font(.headline)

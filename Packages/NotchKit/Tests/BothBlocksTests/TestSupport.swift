@@ -3,8 +3,9 @@ import Foundation
 import Synchronization
 @testable import BlockHost
 @testable import NotchCore
-@testable import RenameBlock
-@testable import ShelfBlock
+
+// The fixture: the three real blocks behind their stand-ins in one runtime.
+// The blocks themselves are started in `RealBlocks.swift`.
 
 /// A new empty folder under the system temporary folder.
 func makeFolder() throws -> URL {
@@ -21,198 +22,134 @@ func makeScreenshot(_ name: String, in folder: URL) throws -> URL {
     return url
 }
 
-struct NoTextReader: TextReading {
-    func readText(at url: URL) async throws -> [RecognizedLine] {
-        [RecognizedLine(text: "Payment Failed", box: CGRect(x: 0.1, y: 0.84, width: 0.5, height: 0.06))]
-    }
-}
-
-/// Holds every naming request until `open()` is called, then answers at once.
-final class Gate: Sendable {
-    private struct State {
-        var isOpen = false
-        var waiters: [CheckedContinuation<Void, Never>] = []
-    }
-    private let state = Mutex(State())
-
-    func wait() async {
-        await withCheckedContinuation { continuation in
-            let resumeNow = state.withLock { s -> Bool in
-                if s.isOpen { return true }
-                s.waiters.append(continuation)
-                return false
-            }
-            if resumeNow { continuation.resume() }
-        }
-    }
-
-    func open() {
-        let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
-            s.isOpen = true
-            defer { s.waiters = [] }
-            return s.waiters
-        }
-        waiters.forEach { $0.resume() }
-    }
-}
-
-struct GatedNamer: ScreenshotNaming {
-    let status: ModelStatus = .available
-    let gate: Gate
-    func suggestName(_ request: NamingRequest) async throws -> String {
-        await gate.wait()
-        return "payment failed dialog"
-    }
-}
-
-/// All blocks registered in one runtime, as the app does: shelf first, and
-/// now-playing as a stand-in whose process is `ScriptedNowPlaying`.
+/// All three blocks registered in one runtime, in the app's order with
+/// nothing stored on the Blocks page: bundled blocks by package name (Now
+/// Playing, Screenshot Names, Shelf). Each is a stand-in, as in the app,
+/// whose process is the real block run in this process over an in-memory
+/// connection (`InProcessBlock`).
+///
+/// A block answers in its own time, so every call that reaches a block
+/// (`publish`, `drop`, `hover`, `setEnabled`) returns only once the blocks
+/// handled it and the stand-ins handled their answers (`settle`).
 @MainActor
 struct Fixture {
     let runtime: NotchRuntime
     let clock: ManualClock
-    let shelf: ShelfBlock
-    let rename: RenameBlock
-    let nowPlaying: RemoteBlock
     let gate: Gate
+    /// Where the screenshots are taken.
     let folder: URL
+    /// The blocks' data folders, one per id.
+    let data: URL
+    /// The stand-ins, by id.
+    let standIns: [BlockID: RemoteBlock]
+    /// The block processes, in registration order.
+    private let blocks: [InProcessBlock]
 
-    /// `gateOpen: false` holds naming until `gate.open()`.
+    /// `gateOpen: false` holds the reading of screenshots until `gate.open()`.
     init(gateOpen: Bool = true) throws {
         folder = try makeFolder()
+        let data = try makeFolder()
+        self.data = data
         clock = ManualClock()
         runtime = NotchRuntime(clock: clock)
         gate = Gate()
         if gateOpen { gate.open() }
+        blocks = [.nowPlaying(), .rename(gate: gate), .shelf()]
         let suite = "BothBlocksTests-\(UUID().uuidString)"
-        shelf = ShelfBlock(directory: try makeFolder(), defaults: UserDefaults(suiteName: suite)!)
-        rename = RenameBlock(
-            reader: NoTextReader(),
-            namer: GatedNamer(gate: gate),
-            defaults: UserDefaults(suiteName: suite)!,
-            recentsURL: folder.appending(path: "state/recents.json")
-        )
-        runtime.register(shelf)
         let runtime = self.runtime
-        nowPlaying = RemoteBlock(
-            manifest: ScriptedNowPlaying.manifest,
-            packageURL: URL(fileURLWithPath: "/tmp/NowPlaying.topblock"),
-            source: .bundled,
-            dataFolder: folder.appending(path: "data/nowplaying"),
-            owner: { runtime.state.owner },
-            launcher: { _, generation in
-                let (app, block) = MemoryTransport.pair()
-                ScriptedNowPlaying.run(on: block, generation: generation)
-                return app
-            },
-            defaults: UserDefaults(suiteName: suite)!,
-            // A clock of its own that never moves: no heartbeat, and the
-            // runtime's clock holds only presentation timers.
-            clock: BlockClock(ManualClock())
-        )
-        runtime.register(rename)
-        runtime.register(nowPlaying)
+        var standIns: [BlockID: RemoteBlock] = [:]
+        for process in blocks {
+            let block = RemoteBlock(
+                manifest: process.manifest,
+                packageURL: URL(fileURLWithPath: "/tmp/\(process.manifest.executable).topblock"),
+                source: .bundled,
+                dataFolder: data.appending(path: process.manifest.id),
+                owner: { runtime.state.owner },
+                launcher: { _, generation in process.launch(generation: generation) },
+                defaults: UserDefaults(suiteName: suite)!,
+                // A clock of its own that never moves: no heartbeat, and the
+                // runtime's clock holds only presentation timers.
+                clock: BlockClock(ManualClock())
+            )
+            runtime.register(block)
+            standIns[block.id] = block
+        }
+        self.standIns = standIns
     }
 
-    /// Publishes an event the now-playing block listens to, and returns once
-    /// the scripted block has answered it and the stand-in has handled the answer.
-    func publishToNowPlaying<E: NotchEvent>(_ event: E) async {
-        await waitUntil { nowPlaying.isWelcomed }
-        let before = ScriptedNowPlaying.handledCount(in: nowPlaying)
+    /// Publishes an event, and returns once everything it caused is handled.
+    /// A drag event also sets the runtime's drag state first, as the drag
+    /// monitor does.
+    func publish<E: NotchEvent>(_ event: E) async {
+        if event is DragSessionStarted { runtime.dragSessionChanged(active: true) }
+        if event is DragSessionEnded { runtime.dragSessionChanged(active: false) }
         runtime.publish(event)
-        await waitUntil { ScriptedNowPlaying.handledCount(in: nowPlaying) > before }
+        await settle()
     }
 
-    func capture(_ url: URL) {
-        runtime.publish(ScreenshotCaptured(url: url, createdAt: Date()))
+    func capture(_ url: URL) async {
+        await publish(ScreenshotCaptured(url: url, createdAt: Date()))
     }
 
-    /// Where the shelf's file items point now.
-    var shelfFileNames: [String] {
-        shelf.store.stacks.flatMap(\.items).compactMap { shelf.store.fileURL(of: $0)?.lastPathComponent }
+    /// The pointer enters or leaves the notch; the shelf hears it.
+    func hover(_ isInside: Bool) async {
+        runtime.pointerHoverChanged(isInside: isInside)
+        await settle()
     }
-}
 
-/// Plays the now-playing block on the block's end of an in-memory
-/// connection, as the real block behaves: a new song or a volume change
-/// while a song plays presents the peek (standard priority, 3 s,
-/// `dismissIfNotShown`); the last player stopping dismisses; replayed events
-/// never present.
-///
-/// After each event it sends an `actions` frame whose one item id counts the
-/// events handled. Frames are handled in order, so once the stand-in shows
-/// that count, every frame the event caused has been handled too.
-enum ScriptedNowPlaying {
-    /// How long its peek stays; the real block's `TrackBlock.seconds`.
-    static let duration: Duration = .seconds(3)
+    /// Items dropped on the notch; the owner takes those its presentation accepts.
+    func drop(_ items: [DroppedItem]) async {
+        runtime.send(.drop(items))
+        await settle()
+    }
 
-    /// The real block's manifest, read from `Blocks/NowPlaying/manifest.json`,
-    /// so these tests follow it when it changes.
-    static let manifest: Manifest = {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // BothBlocksTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // NotchKit
-            .deletingLastPathComponent() // Packages
-            .deletingLastPathComponent() // repository root
-            .appending(path: "Blocks/NowPlaying/manifest.json")
-        do {
-            return try Manifest.decode(Data(contentsOf: url))
-        } catch {
-            fatalError("Could not read the now-playing manifest at \(url.path): \(error)")
+    /// Turns a block on or off; off returns once its process has ended.
+    func setEnabled(_ id: BlockID, _ enabled: Bool) async {
+        runtime.setEnabled(id, enabled)
+        if !enabled, let process = blocks.first(where: { $0.manifest.id == id.rawValue }) {
+            await waitUntil { !process.isRunning }
         }
-    }()
-
-    private static let handledPrefix = "handled-"
-
-    /// The number of events the script has answered, as the stand-in last heard.
-    @MainActor
-    static func handledCount(in block: RemoteBlock) -> Int {
-        block.actions.first.flatMap { Int($0.id.dropFirst(handledPrefix.count)) } ?? 0
+        await settle()
     }
 
-    static func run(on transport: MemoryTransport, generation: Int) {
-        let stream = transport.envelopes(of: HostToBlock.self)
-        Task {
-            func send(_ message: BlockToHost) { try? transport.send(message, generation: generation) }
-            send(.hello(contract: Contract.current, id: "nowplaying", version: "1.0.0"))
-            var song: String?
-            var handled = 0
-            let peek = ViewSlot(width: 380, height: 52, root: .text("Song", style: .title))
-            let show = BlockToHost.present(priority: .standard, peek: peek, wing: nil, expanded: nil, opensAt: .peek,
-                                           seconds: duration / .seconds(1), dismissIfNotShown: true)
-            do {
-                for try await envelope in stream {
-                    switch envelope.message {
-                    case let .ping(seq):
-                        send(.pong(seq: seq))
-                    case .quit:
-                        return
-                    case let .event(.nowPlaying(change), replay):
-                        if change.state == .playing {
-                            let current = "\(change.player)/\(change.title)/\(change.artist)"
-                            if current != song {
-                                song = current
-                                if !replay { send(show) }
-                            }
-                        } else {
-                            song = nil
-                            send(.dismiss)
-                        }
-                        handled += 1
-                        send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))
-                    case let .event(.outputVolume, replay):
-                        if song != nil, !replay { send(show) }
-                        handled += 1
-                        send(.actions(items: [ActionItem(id: "\(handledPrefix)\(handled)", title: "Handled", enabled: false)]))
-                    default:
-                        break
-                    }
-                }
-            } catch {
-                // The app closed the connection: the block is gone.
-            }
+    /// Waits until each enabled stand-in is welcomed, then until a round of
+    /// syncs (see `SyncedTransport`) passes in which the app sent no block
+    /// anything else: every block handled every message, and every stand-in
+    /// every answer.
+    func settle() async {
+        for _ in 0..<100 {
+            let live = blocks.filter { runtime.isEnabled(BlockID(rawValue: $0.manifest.id)) }
+            await waitUntil { live.allSatisfy { standIns[BlockID(rawValue: $0.manifest.id)]?.isWelcomed == true } }
+            let links = live.compactMap { $0.isRunning ? $0.link : nil }
+            let before = links.map(\.sentCount)
+            links.forEach { $0.sync() }
+            await waitUntil { links.allSatisfy(\.isSynced) }
+            if links.map(\.sentCount) == before { return }
         }
+    }
+
+    /// Waits until `condition` holds, then until everything settled.
+    func waitFor(_ condition: () -> Bool) async {
+        await waitUntil(condition)
+        await settle()
+    }
+
+    /// The names of the files in the screenshot folder, sorted.
+    var screenshotNames: [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
+    }
+
+    /// The items the shelf holds, as it stored them.
+    var shelfItemCount: Int { BlockState.shelfItemCount(dataFolder: data.appending(path: "shelf")) }
+
+    /// The rename block's new names, newest first, as it stored them.
+    var renamedNames: [String] { BlockState.renamedNames(dataFolder: data.appending(path: "rename")) }
+
+    /// The rename block's peek, as its stand-in holds it, encoded as JSON
+    /// so a test can look for a text in it.
+    var renamePeek: String {
+        guard let peek = standIns["rename"]?.model.peek, let json = try? JSONEncoder().encode(peek) else { return "" }
+        return String(decoding: json, as: UTF8.self)
     }
 }
 

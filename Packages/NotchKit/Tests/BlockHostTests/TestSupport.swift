@@ -71,9 +71,22 @@ final class FakeProcess: @unchecked Sendable {
         }
     }
 
+    /// The `seq` of each `event` message received so far, nil for none.
+    var eventSeqs: [Int?] {
+        received.compactMap { message -> Int?? in
+            if case let .event(_, _, seq) = message { return .some(seq) }
+            return nil
+        }
+    }
+
+    /// The `input` messages received so far.
+    var inputs: [WireInput] {
+        received.compactMap { if case let .input(input) = $0 { input } else { nil } }
+    }
+
     /// The `event` messages received so far.
     var events: [(payload: EventPayload, replay: Bool)] {
-        received.compactMap { if case let .event(payload, replay) = $0 { (payload, replay) } else { nil } }
+        received.compactMap { if case let .event(payload, replay, _) = $0 { (payload, replay) } else { nil } }
     }
 }
 
@@ -136,22 +149,34 @@ struct Rig {
     let defaults: UserDefaults
     let heartbeat: ManualClock
     let turnOffs = TurnOffs()
+    /// Stands in for the app's temporary folder, one per rig: the block's own
+    /// temporary folder and the drop folder are inside it.
+    let sharedTemporaryFolder: URL
+    var dropFolder: URL { sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory) }
     var process: FakeProcess { launcher.last! }
 
-    init(clock: ManualClock = ManualClock(), manifest: Manifest = helloManifest, defaults: UserDefaults = testDefaults()) {
+    init(
+        clock: ManualClock = ManualClock(), manifest: Manifest = helloManifest, defaults: UserDefaults = testDefaults(),
+        preview: @escaping @MainActor ([URL]) -> Void = { _ in }
+    ) {
         runtime = NotchRuntime(clock: clock)
         launcher = FakeLauncher()
         self.defaults = defaults
         heartbeat = ManualClock()
+        let shared = Self.newSharedTemporaryFolder()
+        sharedTemporaryFolder = shared
         block = Self.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: defaults,
-                             heartbeat: heartbeat, turnOffs: turnOffs)
+                             heartbeat: heartbeat, turnOffs: turnOffs, preview: preview, sharedTemporaryFolder: shared)
         runtime.register(block)
     }
 
     /// A stand-in wired like the rig's, not registered.
     static func standIn(
         manifest: Manifest = helloManifest, runtime: NotchRuntime, launcher: FakeLauncher,
-        defaults: UserDefaults, heartbeat: ManualClock = ManualClock(), turnOffs: TurnOffs = TurnOffs()
+        defaults: UserDefaults, heartbeat: ManualClock = ManualClock(), turnOffs: TurnOffs = TurnOffs(),
+        screenshotFolder: @escaping @MainActor () -> URL? = { nil },
+        preview: @escaping @MainActor ([URL]) -> Void = { _ in },
+        sharedTemporaryFolder: URL = Rig.newSharedTemporaryFolder()
     ) -> RemoteBlock {
         RemoteBlock(
             manifest: manifest,
@@ -160,13 +185,22 @@ struct Rig {
             dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-tests-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
             launcher: launcher.launcher,
+            screenshotFolder: screenshotFolder,
             defaults: defaults,
             clock: BlockClock(heartbeat),
             turnOff: { id in
                 turnOffs.ids.append(id)
                 runtime.setEnabled(id, false)
-            }
+            },
+            preview: preview,
+            sharedTemporaryFolder: sharedTemporaryFolder,
+            dropFolder: sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
         )
+    }
+
+    /// A new, unique folder in the real temporary folder.
+    nonisolated static func newSharedTemporaryFolder() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "topnotch-shared-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
     /// Lets the heartbeat take `count` steps of one second each.
@@ -187,10 +221,12 @@ func present(
     _ root: ViewNode = .text("Hi", style: .title),
     priority: Priority = .standard,
     seconds: Double? = 3,
-    dismissIfNotShown: Bool = false
+    dismissIfNotShown: Bool = false,
+    accepts: [DragStarted.Kind]? = nil,
+    answering: Int? = nil
 ) -> BlockToHost {
     .present(priority: priority, peek: slot(root), wing: nil, expanded: nil, opensAt: .peek,
-             seconds: seconds, dismissIfNotShown: dismissIfNotShown)
+             seconds: seconds, dismissIfNotShown: dismissIfNotShown, accepts: accepts, answering: answering)
 }
 
 // MARK: - Another block in the same runtime
@@ -299,6 +335,60 @@ final class ManualClock: Clock, Sendable {
     }
 }
 
+// MARK: - Packages
+
+/// Writes a `.topblock` bundle at `folder`: `manifest` in `Contents/Resources`
+/// and the executable in `Contents/MacOS`, copied from `executable` or, when
+/// nil, a small shell script with `mode`. Returns `Contents/MacOS`.
+@discardableResult
+func writeBundle(
+    at folder: URL, manifest: Manifest, executable: URL? = nil, writeExecutable: Bool = true, mode: Int = 0o755
+) throws -> URL {
+    let resources = folder.appending(path: "Contents/Resources")
+    let macOS = folder.appending(path: "Contents/MacOS")
+    try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    try Framing.encoder().encode(manifest).write(to: resources.appending(path: "manifest.json"))
+    guard writeExecutable else { return macOS }
+    let target = macOS.appending(path: manifest.executable)
+    if let executable {
+        try FileManager.default.copyItem(at: executable, to: target)
+    } else {
+        try Data("#!/bin/sh\n".utf8).write(to: target)
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: target.path)
+    }
+    return macOS
+}
+
+/// The manifest of a bundle written by `writeBundle`.
+func bundleManifest(_ folder: URL) throws -> Manifest {
+    try Manifest.decode(Data(contentsOf: folder.appending(path: "Contents/Resources/manifest.json")))
+}
+
+/// Signature results set by the test, the same for every package, except
+/// for results queued with `queue`, used first, one per check.
+final class FakeSignatures: SignatureChecking, @unchecked Sendable {
+    // @unchecked: `lock` guards `result` and `queued`.
+    private let lock = NSLock()
+    private var result: PackageSignature
+    private var queued: [PackageSignature] = []
+
+    static let signer = "Test Signer"
+
+    init(_ result: PackageSignature = .valid(signer: FakeSignatures.signer, teamID: "")) {
+        self.result = result
+    }
+
+    func set(_ result: PackageSignature) { lock.withLock { self.result = result } }
+
+    /// Results for the next checks, in order; then `result` again.
+    func queue(_ results: [PackageSignature]) { lock.withLock { queued += results } }
+
+    func check(_ bundle: URL) -> PackageSignature {
+        lock.withLock { queued.isEmpty ? result : queued.removeFirst() }
+    }
+}
+
 // MARK: - The fixture block executable
 
 /// Builds `.topblock` folders around the `FixtureBlock` executable that
@@ -323,16 +413,22 @@ enum Fixture {
                                    settings: [SettingSpec(key: "command", type: .choice, title: "Test command", default: .string("none"),
                                                           options: ["none", "crash", "hang", "ignorePing"].map { .init(value: $0, title: $0) })])
 
-    /// A temporary `Fixture.topblock` whose executable links to the built one.
-    static func package() throws -> URL {
+    /// A temporary `Fixture.topblock` bundle with a copy of the built
+    /// executable in `Contents/MacOS`. A copy, not a link: under the
+    /// sandbox the block reads only its own package, and the build folder
+    /// may be inside the home folder.
+    static func package(_ manifest: Manifest = Fixture.manifest) throws -> URL {
         guard let executable else { throw FixtureMissing() }
         let folder = FileManager.default.temporaryDirectory
             .appending(path: "topnotch-fixture-\(UUID().uuidString)")
             .appending(path: "Fixture.topblock")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Framing.encoder().encode(manifest).write(to: folder.appending(path: "manifest.json"))
-        try FileManager.default.createSymbolicLink(at: folder.appending(path: "FixtureBlock"), withDestinationURL: executable)
+        try writeBundle(at: folder, manifest: manifest, executable: executable)
         return folder
+    }
+
+    /// The executable inside a package made by `package()`.
+    static func executable(in package: URL) -> URL {
+        package.appending(path: "Contents/MacOS/FixtureBlock")
     }
 
     struct FixtureMissing: Error, CustomStringConvertible {

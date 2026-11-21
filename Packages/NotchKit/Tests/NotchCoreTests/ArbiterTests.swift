@@ -34,15 +34,105 @@ struct ArbiterTests {
     }
 
     // Rule 7
-    @Test func highestPriorityOwnsAndTieGoesToMostRecent() {
+    @Test func highestPriorityOwns() {
         var arbiter = Arbiter()
+        arbiter.setRank(["a", "b", "c"], at: .zero)
         arbiter.present(peekPresentation(.ambient), for: "a", at: .zero)
         arbiter.present(peekPresentation(.standard), for: "b", at: .zero)
         arbiter.present(peekPresentation(.ambient), for: "c", at: .zero)
         #expect(arbiter.state.owner == "b")
+    }
 
-        arbiter.present(peekPresentation(.standard), for: "c", at: .zero)
-        #expect(arbiter.state.owner == "c")
+    // Rule 7, ties
+    @Test func equalPriorityGoesToHigherRankNotMostRecent() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "a", at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "b", at: .seconds(1))
+        #expect(arbiter.state.owner == "a")
+
+        arbiter.dismiss("a", at: .seconds(2))
+        #expect(arbiter.state.owner == "b")
+        arbiter.present(peekPresentation(.standard), for: "a", at: .seconds(3))
+        #expect(arbiter.state.owner == "a")
+    }
+
+    // Guard
+    @Test func interactiveCountsOnlyDuringInteraction() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "a", at: .zero)
+        arbiter.present(peekPresentation(.interactive), for: "b", at: .zero)
+        #expect(arbiter.state.owner == "a")
+
+        // During a drag it is interactive again.
+        arbiter.setDragActive(true, at: .seconds(1))
+        #expect(arbiter.state.owner == "b")
+    }
+
+    // Guard, window after a drag
+    @Test func interactiveHoldsForTwentySecondsAfterDragEnds() {
+        #expect(Arbiter.interactionWindow == .seconds(20))
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.setDragActive(true, at: .zero)
+        arbiter.present(peekPresentation(.interactive), for: "b", at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "a", at: .seconds(1))
+        #expect(arbiter.state.owner == "b")
+
+        arbiter.setDragActive(false, at: .seconds(10))
+        #expect(arbiter.nextDeadline == .seconds(30))
+        arbiter.advance(to: .seconds(29))
+        #expect(arbiter.state.owner == "b")
+        arbiter.advance(to: .seconds(31))
+        #expect(arbiter.state.owner == "a")
+        #expect(arbiter.nextDeadline == nil)
+    }
+
+    // Guard, pointer on the owner
+    @Test func interactiveHoldsWhilePointerIsOnTheOwner() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.present(peekPresentation(.ambient), for: "b", at: .zero)
+        arbiter.setPointerInside(true, at: .seconds(1))
+        // Browsing: b turns interactive while the pointer is on it.
+        arbiter.present(peekPresentation(.interactive), for: "b", at: .seconds(1))
+        arbiter.present(peekPresentation(.standard), for: "a", at: .seconds(2))
+        #expect(arbiter.state.owner == "b")
+        #expect(arbiter.nextDeadline == nil)
+
+        arbiter.advance(to: .seconds(100))
+        #expect(arbiter.state.owner == "b")
+
+        arbiter.setPointerInside(false, at: .seconds(100))
+        #expect(arbiter.state.owner == "b")
+        #expect(arbiter.nextDeadline == .seconds(120))
+        arbiter.advance(to: .seconds(119))
+        #expect(arbiter.state.owner == "b")
+        arbiter.advance(to: .seconds(120))
+        #expect(arbiter.state.owner == "a")
+    }
+
+    // Guard, the pointer counts for the owner only
+    @Test func pointerOnTheNotchDoesNotMakeAWaitingBlockInteractive() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "a", at: .zero)
+        arbiter.setPointerInside(true, at: .seconds(1))
+        arbiter.present(peekPresentation(.interactive), for: "b", at: .seconds(2))
+        #expect(arbiter.state.owner == "a")
+    }
+
+    // Rank changes
+    @Test func setRankChangesTheOwnerAtOnce() {
+        var arbiter = Arbiter()
+        arbiter.setRank(["a", "b"], at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "a", at: .zero)
+        arbiter.present(peekPresentation(.standard), for: "b", at: .zero)
+        #expect(arbiter.state.owner == "a")
+
+        arbiter.setRank(["b", "a"], at: .seconds(1))
+        #expect(arbiter.state.owner == "b")
     }
 
     // Rule 8

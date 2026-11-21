@@ -39,7 +39,7 @@ public final class NotchShellController {
         guard !isStarted else { return }
         isStarted = true
         // Files from earlier drops are kept only until the next launch.
-        try? FileManager.default.removeItem(at: DropTargetView.dropRoot)
+        try? FileManager.default.removeItem(at: DropFolder.root)
 
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main

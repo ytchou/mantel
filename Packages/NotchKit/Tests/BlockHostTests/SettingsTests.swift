@@ -66,4 +66,19 @@ struct SettingsTests {
         #expect(Rig(manifest: none).block.settingsPane == nil)
         #expect(Rig().block.settingsPane != nil)
     }
+
+    @Test func settingNoteReplacesTheNoteText() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        #expect(SettingsForm(block: rig.block).noteText(for: "about", title: "A note") == "A note")
+
+        try rig.process.send(.settingNote(key: "about", text: "Model ready"))
+        await waitUntil { rig.block.notes["about"] != nil }
+        #expect(SettingsForm(block: rig.block).noteText(for: "about", title: "A note") == "Model ready")
+
+        // Only a declared note changes.
+        try rig.process.send(.settingNote(key: "loud", text: "Not a note"))
+        await settle()
+        #expect(rig.block.notes["loud"] == nil)
+    }
 }

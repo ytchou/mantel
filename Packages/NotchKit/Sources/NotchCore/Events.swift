@@ -22,8 +22,10 @@ public enum DropKind: Sendable, Hashable, CaseIterable {
 /// delivery, so a block never sees a promise. A folder is a `.file` whose URL
 /// is a directory.
 ///
-/// A file the shell wrote lives in a temporary folder that is emptied at the
-/// next launch. A block that keeps such a file must move or copy it.
+/// A file the shell wrote lives in `DropFolder.root`, which is emptied at the
+/// next launch; a block's stand-in moves it into that block's own temporary
+/// folder before forwarding it. A block that keeps such a file must move or
+/// copy it.
 public enum DroppedItem: Sendable, Hashable {
     case file(URL)
     case link(URL)

@@ -39,6 +39,8 @@ public final class OutputVolumeWatcher {
         self.runtime = runtime
     }
 
+    var isRunning: Bool { deviceListener != nil }
+
     public func start() {
         guard deviceListener == nil else { return }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in

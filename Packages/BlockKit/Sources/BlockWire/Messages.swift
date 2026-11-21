@@ -27,6 +27,11 @@ public enum BlockToHost: Codable, Hashable, Sendable {
     /// Ask for the notch. At least one slot is set. `seconds` is the only way
     /// to time a dismissal. With `dismissIfNotShown`, the app dismisses the
     /// presentation at once if it did not win the notch.
+    ///
+    /// Contract version 2: `accepts` lists the drop kinds the presentation
+    /// takes (none when nil); `answering` is the `seq` of the event this
+    /// present answers. The app drops a late answer that has
+    /// `dismissIfNotShown`.
     case present(
         priority: Priority,
         peek: ViewSlot?,
@@ -34,7 +39,9 @@ public enum BlockToHost: Codable, Hashable, Sendable {
         expanded: ViewSlot?,
         opensAt: Level,
         seconds: Double?,
-        dismissIfNotShown: Bool
+        dismissIfNotShown: Bool,
+        accepts: [DragStarted.Kind]? = nil,
+        answering: Int? = nil
     )
     /// Replace the trees of the current presentation. Sizes stay as presented.
     case update(peek: ViewNode?, wing: ViewNode?, expanded: ViewNode?)
@@ -46,6 +53,10 @@ public enum BlockToHost: Codable, Hashable, Sendable {
     case actions(items: [ActionItem])
     /// A line for the app's log.
     case log(text: String)
+    /// Contract version 2: show these files (absolute paths) in Quick Look.
+    case preview(paths: [String])
+    /// Contract version 2: replace the text of the `note` setting `key`.
+    case settingNote(key: String, text: String)
 }
 
 /// How strongly a presentation asks for the notch.
@@ -81,8 +92,9 @@ public enum HostToBlock: Codable, Hashable, Sendable {
     case ping(seq: Int)
     /// A system event the block listens to. `replay` is true when the app
     /// resends the latest event to a block that just started: the block
-    /// updates its state and does not present.
-    case event(payload: EventPayload, replay: Bool)
+    /// updates its state and does not present. Contract version 2: `seq`
+    /// numbers the event, for `present`'s `answering`.
+    case event(payload: EventPayload, replay: Bool, seq: Int? = nil)
     /// Whether the block's presentation is the one on screen.
     case owner(owns: Bool)
     /// The user clicked the block's view, or one of its buttons.
@@ -95,10 +107,28 @@ public enum HostToBlock: Codable, Hashable, Sendable {
     case quit
 }
 
-/// A click on the block's view.
+/// A click on the block's view, and (contract version 2) drops, `item`
+/// actions and the drags the app started from an `item`.
 public enum WireInput: Codable, Hashable, Sendable {
     case click
     case button(id: String)
+    /// Things dropped on a presentation that `accepts` their kind.
+    case drop(items: [WireDrop])
+    /// A click, double-click or menu entry on the `item` with this id.
+    case item(id: String, action: ItemAction)
+    /// A drag-out of the `item` with this id started. Sent before the
+    /// `dragStarted` event that the same drag causes.
+    case dragBegan(id: String)
+    /// That drag ended; `succeeded` is false when it was cancelled.
+    case dragEnded(id: String, succeeded: Bool)
+}
+
+/// What the user did on an `item`.
+public enum ItemAction: Codable, Hashable, Sendable {
+    case click
+    case doubleClick
+    /// The menu entry with this id.
+    case menu(id: String)
 }
 
 /// A setting's value: a toggle is a bool, a choice is a string.

@@ -6,8 +6,9 @@ import os
 import SwiftUI
 
 /// Starts one block process: the executable to run and its generation.
-/// Returns the transport to it. The real one is `BlockProcess.spawn`; tests
-/// return one end of `MemoryTransport.pair()`.
+/// Returns the transport to it. Tests return one end of
+/// `MemoryTransport.pair()`. A stand-in without one starts its block
+/// sandboxed, with `BlockProcess.spawn(executable:generation:sandbox:)`.
 public typealias BlockLauncher = @MainActor (_ executable: URL, _ generation: Int) throws -> any Transport
 
 /// The stand-in for a block that runs in its own process.
@@ -24,7 +25,9 @@ public final class RemoteBlock: NotchBlock {
     public var title: String { manifest.name }
     public var info: BlockInfo {
         BlockInfo(summary: manifest.summary, symbol: manifest.symbol.isEmpty ? "square.grid.2x2" : manifest.symbol,
-                  trigger: manifest.trigger, permissions: manifest.permissions,
+                  // The access the sandbox grants, in the user's words, after
+                  // what the author wrote: the Blocks page shows both.
+                  trigger: manifest.trigger, permissions: manifest.permissions + manifest.accessText,
                   version: manifest.version, source: source)
     }
 
@@ -43,13 +46,23 @@ public final class RemoteBlock: NotchBlock {
     public private(set) var actions: [BlockAction] = []
     /// Each declared setting's current value: stored, or the manifest default.
     public private(set) var settings: [String: SettingValue] = [:]
+    /// The text the block set for its `note` settings with `settingNote`,
+    /// by key. A note without one shows its manifest title.
+    public private(set) var notes: [String: String] = [:]
 
     @ObservationIgnored private let dataFolder: URL
+    /// The app's temporary folder. The block's sandbox closes its `TopNotch`
+    /// subtree, except for `temporaryFolder` inside it.
+    @ObservationIgnored private let sharedTemporaryFolder: URL
+    /// Where the shell writes promised files of a drop.
+    @ObservationIgnored private let dropFolder: URL
     @ObservationIgnored private let owner: @MainActor () -> BlockID?
-    @ObservationIgnored private let launcher: BlockLauncher
+    @ObservationIgnored private let launcher: BlockLauncher?
+    @ObservationIgnored private let screenshotFolder: @MainActor () -> URL?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let clock: BlockClock
     @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
+    @ObservationIgnored private let preview: @MainActor ([URL]) -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -60,6 +73,13 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var launchedAt: ContinuousClock.Instant?
     /// True once the current process has said a valid hello and was welcomed.
     @ObservationIgnored private(set) var isWelcomed = false
+    /// The contract version the current process said in `hello`. Version 2
+    /// messages go only to a version 2 block.
+    @ObservationIgnored private var contract = 1
+    /// The `seq` of the last event sent; one counter per stand-in.
+    @ObservationIgnored private var eventSeq = 0
+    /// When each of the last `sentTimesKept` events was sent, on `clock`, by `seq`.
+    @ObservationIgnored private var sentTimes: [Int: Duration] = [:]
     /// Events for the current process to send at `welcome`, in order: the
     /// replay of `latest` from the launch, then live events that arrived since.
     @ObservationIgnored private var pending: [(payload: EventPayload, replay: Bool)] = []
@@ -71,8 +91,12 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private var toldOwns = false
     /// True while an owner observation is armed, so re-activation never arms two.
     @ObservationIgnored private var observingOwner = false
-    /// Events subscribed to in the current context; an update adds new ones.
+    /// Events subscribed to in the current context; an update adds new ones
+    /// and, when it drops some, subscribes again from scratch.
     @ObservationIgnored private var subscribed: Set<WireEvent> = []
+    /// The screenshot folder the current process's sandbox opens, for
+    /// `files.screenshots`; nil without that access.
+    @ObservationIgnored private var launchedScreenshotFolder: URL?
 
     /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
@@ -91,25 +115,39 @@ public final class RemoteBlock: NotchBlock {
     /// - Parameters:
     ///   - manifest: the package's manifest, already checked.
     ///   - packageURL: the `.topblock` folder.
-    ///   - dataFolder: the folder the block may write to. Created when the block starts.
+    ///   - dataFolder: the folder the block may write to. Created at each launch of its process.
     ///   - owner: who owns the notch now, read inside observation tracking so
     ///     changes are pushed to the block. Pass `{ runtime.state.owner }`.
-    ///   - launcher: starts the process.
+    ///   - launcher: starts the process. Nil starts it under the sandbox
+    ///     profile built from the manifest's `access`.
+    ///   - screenshotFolder: the folder `files.screenshots` opens, read at
+    ///     each start; the app passes the folder the screenshot watcher uses.
     ///   - defaults: where the block's settings (`<id>.<key>`) and the reason
     ///     it was turned off (`block.<id>.failure`) are stored.
     ///   - clock: times the heartbeat and failures. Must stop while the Mac sleeps.
     ///   - turnOff: turns the block off after repeated failures. The app
     ///     passes a closure that calls `BlockSettings.setEnabled(id, false, in:)`.
+    ///   - preview: shows files in Quick Look, for the block's `preview`.
+    ///     Nil uses the system Quick Look panel.
+    ///   - sharedTemporaryFolder: the app's temporary folder. The block's own
+    ///     temporary folder is `<it>/TopNotch/Blocks/<id>/`. Tests pass their own.
+    ///   - dropFolder: where the shell writes promised files of a drop;
+    ///     dropped files inside it are moved into the block's own temporary
+    ///     folder. Tests pass their own.
     public init(
         manifest: Manifest,
         packageURL: URL,
         source: BlockSource,
         dataFolder: URL,
         owner: @escaping @MainActor () -> BlockID?,
-        launcher: @escaping BlockLauncher,
+        launcher: BlockLauncher? = nil,
+        screenshotFolder: @escaping @MainActor () -> URL? = { nil },
         defaults: UserDefaults = .standard,
         clock: BlockClock = .suspending,
-        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in }
+        turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
+        preview: (@MainActor ([URL]) -> Void)? = nil,
+        sharedTemporaryFolder: URL = FileManager.default.temporaryDirectory,
+        dropFolder: URL = DropFolder.root
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -117,21 +155,34 @@ public final class RemoteBlock: NotchBlock {
         self.packageURL = packageURL
         self.source = source
         self.dataFolder = dataFolder
+        self.sharedTemporaryFolder = sharedTemporaryFolder
+        self.dropFolder = dropFolder
         self.owner = owner
         self.launcher = launcher
+        self.screenshotFolder = screenshotFolder
         self.defaults = defaults
         self.clock = clock
         self.turnOff = turnOff
+        self.preview = preview ?? { FilePreview.shared.show($0) }
         // Turned off after failures, and not yet turned on again.
         health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
         settings = readSettings()
+        wireItemCallbacks()
+        model.mayDragFile = { [weak self] path in self?.readablePaths([path]).isEmpty == false }
     }
 
     /// Where the reason for the last turn-off is stored.
     static func failureKey(_ id: BlockID) -> String { "block.\(id.rawValue).failure" }
 
+    /// The block's own temporary folder and `TMPDIR`, inside the app's:
+    /// `<shared>/TopNotch/Blocks/<id>/`. Created at each launch of its
+    /// process. Only this block's sandbox opens it.
+    var temporaryFolder: URL {
+        sharedTemporaryFolder.appending(path: "TopNotch/Blocks/\(id.rawValue)", directoryHint: .isDirectory)
+    }
+
     /// The executable the manifest names, inside the package.
-    public var executableURL: URL { packageURL.appending(path: manifest.executable) }
+    public var executableURL: URL { PackageValidator.executableFolder(in: packageURL).appending(path: manifest.executable) }
 
     /// The running process's id, when the transport is a real process that
     /// has not exited.
@@ -173,13 +224,74 @@ public final class RemoteBlock: NotchBlock {
         endProcess()?.close()
         latest = [:]
         actions = []
+        notes = [:]
         model.clear()
     }
 
-    /// Forwards a click while this block owns the notch. Drops are not forwarded.
+    /// Forwards a click, and to a version 2 block a drop, while this block
+    /// owns the notch. The runtime passes only drops of kinds the
+    /// presentation `accepts`. Dropped files in the drop folder are moved
+    /// into the block's own temporary folder first; see `forwardedDrop`.
     public func handle(_ input: NotchInput) {
-        guard case .click = input, context?.ownsNotch == true, isWelcomed else { return }
-        send(.input(input: .click))
+        guard context?.ownsNotch == true, isWelcomed else { return }
+        switch input {
+        case .click:
+            send(.input(input: .click))
+        case let .drop(items):
+            guard contract >= 2 else { return }
+            let forwarded = items.compactMap { forwardedDrop($0) }
+            guard !forwarded.isEmpty else { return }
+            send(.input(input: .drop(items: forwarded)))
+        }
+    }
+
+    /// `item` as the block gets it. A file inside the drop folder, which the
+    /// block's sandbox cannot read, is moved to
+    /// `<temporaryFolder>/TopNotch/Drops/<path below the drop folder>` (its
+    /// `<uuid>` folder keeps names apart) and sent with that path. Inside the
+    /// block its own temporary folder is `TMPDIR`. Any other item passes
+    /// unchanged. Nil, with a log line, when the move fails.
+    // Moves on the main actor: a rename inside one volume, so it is quick.
+    // If drops ever cross volumes, move off the main actor before sending.
+    private func forwardedDrop(_ item: DroppedItem) -> WireDrop? {
+        guard case let .file(url) = item else { return Self.wireDrop(item) }
+        let root = Self.resolvedPath(dropFolder)
+        let source = Self.resolvedPath(url)
+        guard source.hasPrefix(root + "/") else { return Self.wireDrop(item) }
+        let relative = String(source.dropFirst(root.count + 1))
+        let target = temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+            .appending(path: relative, directoryHint: .notDirectory)
+        do {
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: url, to: target)
+        } catch {
+            log.error("\(self.id.rawValue, privacy: .public): dropped file \(source, privacy: .private) not moved, left out: \(error, privacy: .public)")
+            return nil
+        }
+        return .file(path: target.path)
+    }
+
+    static func wireDrop(_ item: DroppedItem) -> WireDrop {
+        switch item {
+        case let .file(url): .file(path: url.path)
+        case let .link(url): .link(url: url.absoluteString)
+        case let .text(text): .text(string: text)
+        }
+    }
+
+    /// Routes the item layer's clicks, menu entries and drags to `input`
+    /// frames. `dragBegan` is sent in the main-actor turn that starts the
+    /// dragging session, so it reaches the block before the drag monitor's
+    /// `dragStarted`: both go down the same socket.
+    private func wireItemCallbacks() {
+        model.onItemAction = { [weak self] id, action in self?.sendItemInput(.item(id: id, action: action)) }
+        model.onDragBegan = { [weak self] id in self?.sendItemInput(.dragBegan(id: id)) }
+        model.onDragEnded = { [weak self] id, succeeded in self?.sendItemInput(.dragEnded(id: id, succeeded: succeeded)) }
+    }
+
+    private func sendItemInput(_ input: WireInput) {
+        guard isWelcomed, contract >= 2 else { return }
+        send(.input(input: input))
     }
 
     /// The block's settings drawn from its manifest, or nil when it declares none.
@@ -224,7 +336,16 @@ public final class RemoteBlock: NotchBlock {
         self.manifest = manifest
         self.source = source
         settings = readSettings()
-        guard context != nil else { return }
+        notes = [:]
+        guard let context else { return }
+        // An update that drops events ends every subscription and makes them
+        // again, so the runtime no longer counts this block for the dropped
+        // ones and their sources can stop.
+        let events = Set(manifest.events.compactMap(WireEvent.init(rawValue:)))
+        if !subscribed.isSubset(of: events) {
+            context.unsubscribeAll()
+            subscribed = []
+        }
         subscribeToManifestEvents()
         launch()
     }
@@ -234,6 +355,7 @@ public final class RemoteBlock: NotchBlock {
     private func launch() {
         generation += 1
         isWelcomed = false
+        contract = 1
         toldOwns = false
         // Only events this version listens to; an update may drop some.
         pending = latest.values.sorted { $0.order < $1.order }.map(\.payload)
@@ -243,9 +365,19 @@ public final class RemoteBlock: NotchBlock {
         pingSeq = 0
         lastPong = 0
         lastAnswer = clock.now()
+        launchedScreenshotFolder = manifest.access.contains(.filesScreenshots) ? screenshotFolder() : nil
         let transport: any Transport
         do {
-            transport = try launcher(executableURL, generation)
+            // Before the process starts, for both paths: the sandbox profile
+            // names real paths, the block is told the data folder at
+            // `welcome`, and drops are moved into the temporary folder.
+            try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: temporaryFolder, withIntermediateDirectories: true)
+            if let launcher {
+                transport = try launcher(executableURL, self.generation)
+            } else {
+                transport = try spawnSandboxed()
+            }
         } catch {
             return handleFailure(reason: "\(manifest.name) could not start: \(error)")
         }
@@ -259,6 +391,26 @@ public final class RemoteBlock: NotchBlock {
         heartbeat = BlockProcess.heartbeat(clock: clock) { [weak self] in
             self?.heartbeatTick(generation: generation) ?? false
         }
+    }
+
+    /// Starts the block under the sandbox profile its manifest asks for.
+    /// `launch` has created the data and temporary folders: the profile
+    /// names real paths. The temporary folder is the block's own, inside the
+    /// app's `TopNotch` subtree, which the profile closes: other blocks'
+    /// temporary files and dropped files stay out of reach. Dropped files
+    /// reach the block by `forwardedDrop`.
+    private func spawnSandboxed() throws -> any Transport {
+        let profile = SandboxProfile(
+            network: manifest.access.contains(.network),
+            readsHome: manifest.access.contains(.filesRead),
+            screenshotFolder: launchedScreenshotFolder,
+            package: packageURL,
+            dataFolder: dataFolder,
+            temporaryFolder: temporaryFolder,
+            sharedTemporaryFolder: sharedTemporaryFolder,
+            home: FileManager.default.homeDirectoryForCurrentUser
+        )
+        return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
     }
 
     /// One heartbeat step: a hang when the process has not answered for
@@ -353,10 +505,13 @@ public final class RemoteBlock: NotchBlock {
         switch envelope.message {
         case let .hello(contract, blockID, version):
             hello(contract: contract, blockID: blockID, version: version)
-        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown):
+        case let .present(priority, peek, wing, expanded, opensAt, seconds, dismissIfNotShown, accepts, answering):
             guard isWelcomed else { return }
+            if dismissIfNotShown, let answering, isLate(answering) {
+                return log.info("\(self.id.rawValue, privacy: .public): present answering event \(answering) dropped: older than \(Self.answerWindow, privacy: .public)")
+            }
             present(priority: priority, peek: peek, wing: wing, expanded: expanded,
-                    opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown)
+                    opensAt: opensAt, seconds: seconds, dismissIfNotShown: dismissIfNotShown, accepts: accepts ?? [])
         case let .update(peek, wing, expanded):
             guard isWelcomed, validate([peek, wing, expanded]) else { return }
             model.setTrees(peek: peek, wing: wing, expanded: expanded)
@@ -379,6 +534,13 @@ public final class RemoteBlock: NotchBlock {
                     self?.perform(item.id, offeredBy: generation)
                 }
             }
+        case let .preview(paths):
+            guard isWelcomed else { return }
+            let urls = readablePaths(paths).map { URL(fileURLWithPath: $0) }
+            if !urls.isEmpty { preview(urls) }
+        case let .settingNote(key, text):
+            guard isWelcomed, manifest.settings.contains(where: { $0.key == key && $0.type == .note }) else { return }
+            notes[key] = text
         }
     }
 
@@ -412,14 +574,14 @@ public final class RemoteBlock: NotchBlock {
             let elapsed = launchedAt.duration(to: .now)
             log.info("\(self.id.rawValue, privacy: .public) \(version, privacy: .public) said hello after \(elapsed, privacy: .public), generation \(self.generation)")
         }
-        try? FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
         settings = readSettings()
+        self.contract = contract
         send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
         isWelcomed = true
         // The hang limit runs from here, no longer from the launch.
         lastAnswer = clock.now()
         for event in pending {
-            send(.event(payload: event.payload, replay: event.replay))
+            sendEvent(event.payload, replay: event.replay)
         }
         pending = []
         pushOwner()
@@ -427,7 +589,7 @@ public final class RemoteBlock: NotchBlock {
 
     private func present(
         priority: Priority, peek: ViewSlot?, wing: ViewSlot?, expanded: ViewSlot?,
-        opensAt: Level, seconds: Double?, dismissIfNotShown: Bool
+        opensAt: Level, seconds: Double?, dismissIfNotShown: Bool, accepts: [DragStarted.Kind]
     ) {
         guard let context else { return }
         guard peek != nil || wing != nil || expanded != nil else {
@@ -451,7 +613,8 @@ public final class RemoteBlock: NotchBlock {
             wing: content(wing, .wing),
             expanded: content(expanded, .expanded),
             opensAt: opensAt == .expanded ? .expanded : .peek,
-            duration: seconds.flatMap(Self.duration(seconds:))
+            duration: seconds.flatMap(Self.duration(seconds:)),
+            accepts: Set(accepts.map(Self.dropKind))
         ))
         // Exactly what an in-app block does to answer a change just made:
         // shown later it would answer nothing, so it does not wait.
@@ -481,6 +644,32 @@ public final class RemoteBlock: NotchBlock {
         return true
     }
 
+    private static func dropKind(_ kind: DragStarted.Kind) -> DropKind {
+        switch kind {
+        case .file: .file
+        case .link: .link
+        case .text: .text
+        }
+    }
+
+    // MARK: Late answers
+
+    /// How old the event a `present` answers may be, when the present has
+    /// `dismissIfNotShown`. Shown later than this it would answer nothing
+    /// the user still sees, so it is dropped. A present without
+    /// `dismissIfNotShown` is never dropped (a rename result may take 20 s).
+    static let answerWindow: Duration = .seconds(2)
+    /// How many events' send times are kept to judge late answers.
+    static let sentTimesKept = 32
+
+    /// True when event `seq` was sent more than `answerWindow` ago, or so
+    /// long ago that its time is no longer kept. A `seq` never sent is not late.
+    private func isLate(_ seq: Int) -> Bool {
+        guard seq > 0, seq <= eventSeq else { return false }
+        guard let sent = sentTimes[seq] else { return true }
+        return clock.now() - sent > Self.answerWindow
+    }
+
     private static func priority(_ priority: Priority) -> PresentationPriority {
         switch priority {
         case .ambient: .ambient
@@ -496,16 +685,77 @@ public final class RemoteBlock: NotchBlock {
         try? transport?.send(message, generation: generation)
     }
 
+    /// Sends an event, numbered for a version 2 block, and keeps its send time.
+    private func sendEvent(_ payload: EventPayload, replay: Bool) {
+        guard contract >= 2 else { return send(.event(payload: payload, replay: replay)) }
+        eventSeq += 1
+        sentTimes[eventSeq] = clock.now()
+        sentTimes[eventSeq - Self.sentTimesKept] = nil
+        send(.event(payload: payload, replay: replay, seq: eventSeq))
+    }
+
     private func received(_ payload: EventPayload) {
         // A subscription kept from before an update that dropped this event.
         guard manifest.events.contains(payload.name.rawValue) else { return }
+        if case .screenshotCaptured = payload, screenshotFolderMoved() {
+            // The sandbox opens the folder the process started with; a block
+            // told of a screenshot elsewhere could not rename it. A new process
+            // gets the new folder; this event waits for its `welcome`.
+            log.info("\(self.id.rawValue, privacy: .public): screenshot folder changed, restarting")
+            withdraw()
+            endProcess()?.close()
+            launch()
+        }
         remember(payload)
         if isWelcomed {
-            send(.event(payload: payload, replay: false))
+            sendEvent(payload, replay: false)
         } else if transport != nil {
             // Live, though it waits for `welcome`.
             pending.append((payload, false))
         }
+    }
+
+    /// True when a process is running under `files.screenshots` and the
+    /// screenshot folder is no longer the one it was started with.
+    private func screenshotFolderMoved() -> Bool {
+        guard transport != nil, manifest.access.contains(.filesScreenshots) else { return false }
+        return screenshotFolder()?.standardizedFileURL != launchedScreenshotFolder?.standardizedFileURL
+    }
+
+    // MARK: Paths the block may show
+
+    /// The paths of `paths` the block's sandbox could read, for `preview`
+    /// and for the files of an item drag-out, as `SandboxProfile` sets it:
+    /// inside its data folder, its own temporary folder, its package, or,
+    /// with `files.screenshots`, the screenshot folder its process started
+    /// with; never elsewhere in the app's `TopNotch` temporary subtree (other
+    /// blocks' files, dropped files); otherwise inside the app's temporary
+    /// folder, or any absolute path with `files.read`. Compared with symbolic
+    /// links followed. Dropped paths are logged.
+    func readablePaths(_ paths: [String]) -> [String] {
+        let readsAll = manifest.access.contains(.filesRead)
+        let own = ([dataFolder, temporaryFolder, packageURL]
+            + [launchedScreenshotFolder].compactMap { $0 }).map(Self.resolvedPath)
+        let closed = Self.resolvedPath(SandboxProfile.appTemporaryFolder(in: sharedTemporaryFolder))
+        let shared = Self.resolvedPath(sharedTemporaryFolder)
+        func isInside(_ target: String, _ root: String) -> Bool { target == root || target.hasPrefix(root + "/") }
+        return paths.filter { path in
+            guard path.hasPrefix("/") else {
+                log.error("\(self.id.rawValue, privacy: .public): relative path dropped: \(path, privacy: .private)")
+                return false
+            }
+            let target = Self.resolvedPath(URL(fileURLWithPath: path))
+            let allowed = own.contains { isInside(target, $0) }
+                || (!isInside(target, closed) && (readsAll || isInside(target, shared)))
+            if !allowed {
+                log.error("\(self.id.rawValue, privacy: .public): path outside what its sandbox reads dropped: \(path, privacy: .private)")
+            }
+            return allowed
+        }
+    }
+
+    private static func resolvedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     // MARK: Replay

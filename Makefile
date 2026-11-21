@@ -5,7 +5,7 @@ DERIVED := build
 APP     := $(DERIVED)/Build/Products/Debug/TopNotch.app
 PACKAGE := Packages/NotchKit
 # Every Swift package, tested in this order. A missing one is skipped.
-PACKAGES := Packages/NotchKit Packages/BlockKit Blocks/NowPlaying
+PACKAGES := Packages/NotchKit Packages/BlockKit Blocks/NowPlaying Blocks/Shelf Blocks/Rename
 
 .PHONY: build test run quit clean
 
