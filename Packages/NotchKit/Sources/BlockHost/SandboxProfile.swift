@@ -9,9 +9,9 @@ import Foundation
 /// own temporary folder, and what its tokens open. The app's `TopNotch`
 /// subtree of the temporary folder (dropped files and every block's
 /// temporary folder) is closed except the block's own folder inside it.
-/// `files.read` opens the home folder, but never TopNotch's support folder
-/// (other blocks' packages and data, the approvals) or the app's preferences
-/// file. In SBPL the last matching rule wins, so each allow follows the deny
+/// `files.read` opens the home folder and other volumes (`/Volumes`), but
+/// never TopNotch's support folder (other blocks' packages and data, the
+/// approvals) or the app's preferences file. In SBPL the last matching rule wins, so each allow follows the deny
 /// it narrows. The rules were measured on macOS 26.5 (`spikes/FINDINGS.md`,
 /// "Sandbox rules, 21 Nov").
 ///
@@ -35,11 +35,14 @@ import Foundation
 ///   it can name and learn whether it exists. Its Mach services stay open
 ///   because the Shelf block makes thumbnails with `QLThumbnailGenerator`.
 ///   Closing it needs thumbnails drawn by the app instead of the block.
+/// - `files.read` opens every mounted volume under `/Volumes` whole, not
+///   only the home folder: files on external disks must stay readable.
 struct SandboxProfile: Sendable, Equatable {
     /// The local port of the block's network gate, the only network the
     /// block reaches. Nil without hosts: no network at all.
     var gatePort: UInt16?
-    /// `files.read`: allow reads in the home folder, except TopNotch's folders.
+    /// `files.read`: allow reads in the home folder and under `/Volumes`,
+    /// except TopNotch's folders.
     var readsHome: Bool
     /// `files.screenshots`: read and write in this folder only.
     var screenshotFolder: URL?
@@ -125,7 +128,9 @@ struct SandboxProfile: Sendable, Equatable {
         lines.append("(deny file-read*)")
         lines.append("(allow file-read* " + Self.systemReadLocations.joined(separator: " ") + ")")
         if readsHome {
-            lines.append("(allow file-read* (subpath \(home)))")
+            // Other volumes too: files on external disks stay readable, as
+            // before the allow-list. The deny below still wins there.
+            lines.append("(allow file-read* (subpath \(home)) (subpath \"/Volumes\"))")
             lines.append("(deny file-read* (subpath \(Self.literal(supportRoot))) (literal \(Self.literal(preferencesFile))))")
         }
         // After the support folder's deny: the package and data folder are

@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The folder `files.screenshots` opens: the one the screenshot watcher reads.
         screenshotFolder: { ScreenshotFolder.current() },
         defaults: .standard,
+        // The owner's approvals, in the support folder the sandbox closes to blocks.
+        approvalsFile: BlockStore.defaultApprovalsFile,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
         // A block installed from the Blocks page joins like one found at launch,
@@ -44,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runtime.register(block, enabled: settings.isEnabled(block.id))
             settings.applyOrderAfterInstall(to: runtime)
         },
+        // An approved block takes its placeholder's place, on unless the owner turned it off.
+        replace: { [settings, runtime] block in runtime.replace(block, enabled: settings.isEnabled(block.id)) },
         unregister: { [runtime] id in runtime.unregister(id) },
         clearKeys: { [settings] id in settings.clear(id) },
         // A package whose id the runtime already has is refused, as the runtime would drop it.

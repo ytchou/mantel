@@ -31,3 +31,33 @@ struct SupervisorTests {
         #expect(reset.failed(at: .seconds(2)) == .restart)
     }
 }
+
+/// A block the resource watch stops is turned off at once, through the
+/// same path as repeated failures, without the failure count.
+@MainActor
+struct RunawayTests {
+    @Test func aStoppedRunawayIsTurnedOffNotRestarted() async throws {
+        let samples = FakeSamples()
+        let rig = Rig(samples: samples)
+        try await rig.process.start()
+
+        // One ordinary failure: restarted, counted by the supervisor.
+        rig.process.close()
+        await waitUntil { rig.launcher.processes.count == 2 }
+        try await rig.process.start()
+
+        samples.setMemory(600 * 1024 * 1024)
+        await rig.sample(samples)
+        await waitUntil { !rig.turnOffs.ids.isEmpty }
+        await settle()
+
+        let reason = "It was stopped because it used more than 500 MB of memory."
+        #expect(rig.turnOffs.ids == ["hello"])
+        #expect(rig.block.health == .turnedOff(reason: reason))
+        #expect(rig.defaults.string(forKey: RemoteBlock.failureKey("hello")) == reason)
+        // Not restarted, and not the "stopped 3 times" sentence.
+        #expect(rig.launcher.processes.count == 2)
+        #expect(rig.block.usage == nil)
+        #expect(rig.resourceClock.sleeperCount == 0)
+    }
+}

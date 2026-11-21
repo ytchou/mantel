@@ -127,10 +127,13 @@ struct SandboxProfileTests {
         }
     }
 
+    /// `files.read` opens the home folder and other volumes (`/Volumes`), as
+    /// before the read allow-list; the deny of TopNotch's folders follows,
+    /// so it wins even when the home folder is on another volume.
     @Test func filesReadOpensHomeButNotTopNotchsFolders() {
         let base = lines(profile())
         let changed = lines(profile(readsHome: true))
-        let homeAllow = #"(allow file-read* (subpath "/topnotch-test/home"))"#
+        let homeAllow = #"(allow file-read* (subpath "/topnotch-test/home") (subpath "/Volumes"))"#
         let supportDeny = #"(deny file-read* (subpath "/topnotch-test/home/support") (literal "/topnotch-test/home/Library/Preferences/dev.topnotch.Test.plist"))"#
         #expect(changed.filter { !base.contains($0) } == [homeAllow, supportDeny])
         #expect(base.allSatisfy { changed.contains($0) })

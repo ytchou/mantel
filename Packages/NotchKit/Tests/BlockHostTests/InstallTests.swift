@@ -21,6 +21,9 @@ struct InstallTests {
         let signatures = FakeSignatures()
         var blocksRoot: URL { root.appending(path: "Blocks") }
         var dataRoot: URL { root.appending(path: "BlockData") }
+        var approvalsFile: URL { root.appending(path: "Approvals.json") }
+        /// The approvals the store keeps, read from its file.
+        var approvals: ApprovalStore { ApprovalStore(file: approvalsFile) }
         lazy var store = makeStore()
 
         /// - Parameter checksRuntime: false for a second store that only scans
@@ -33,7 +36,9 @@ struct InstallTests {
                 bundledRoot: bundledRoot,
                 launcher: launcher.launcher,
                 defaults: defaults,
+                approvalsFile: approvalsFile,
                 register: { [runtime] block in runtime.register(block) },
+                replace: { [runtime] block in runtime.replace(block) },
                 unregister: { [runtime] id in runtime.unregister(id) },
                 clearKeys: { [weak self, defaults] id in
                     self?.cleared.append(id)
@@ -50,18 +55,56 @@ struct InstallTests {
         }
 
         /// A `<folder>/<Name>.topblock` bundle outside the store, with an executable script.
+        /// - Parameter hosts: when not empty, the manifest asks for `network` to reach them.
         func package(
             id: String = "hello", version: String = "0.2", events: [String] = ["pointerHover"],
-            contract: Int = Contract.current, folder: String = "hello-block"
+            contract: Int = Contract.current, folder: String = "hello-block", hosts: [String] = []
         ) throws -> URL {
             let url = root.appending(path: "source-\(UUID().uuidString)").appending(path: folder)
                 .appending(path: "Hello.topblock")
-            let manifest = Manifest(id: id, name: "Hello", version: version, contract: contract, executable: "HelloBlock",
+            var manifest = Manifest(id: id, name: "Hello", version: version, contract: contract, executable: "HelloBlock",
                                     summary: "Says hello.", trigger: "Pointer hover",
                                     permissions: ["Nothing special"], events: events,
                                     settings: [SettingSpec(key: "loud", type: .toggle, title: "Loud", default: .bool(false))])
+            if !hosts.isEmpty {
+                manifest.access = [.network]
+                manifest.hosts = hosts
+            }
             try writeBundle(at: url, manifest: manifest)
             return url
+        }
+
+        /// Copies `package` into the Blocks folder as `folder`, as the owner
+        /// would in Finder. Returns the copy.
+        @discardableResult
+        func drop(_ package: URL, as folder: String = "Hello.topblock") throws -> URL {
+            let copy = blocksRoot.appending(path: folder, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: blocksRoot, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: package, to: copy)
+            return copy
+        }
+
+        /// The app at launch: the store's stand-ins, registered in `runtime`.
+        @discardableResult
+        func launch(developmentPath: String? = nil) -> [any NotchBlock] {
+            let blocks = store.standIns(developmentPath: developmentPath)
+            for block in blocks { runtime.register(block) }
+            return blocks
+        }
+
+        /// What the next launch finds, from a new store over the same folders.
+        func relaunch() -> [any NotchBlock] {
+            makeStore(checksRuntime: false).standIns(developmentPath: nil)
+        }
+
+        /// Adds one byte to the executable of `package`, as a rebuild or a
+        /// tampering would change it.
+        nonisolated static func changeOneByte(in package: URL) throws {
+            let executable = package.appending(path: "Contents/MacOS/HelloBlock")
+            let handle = try FileHandle(forWritingTo: executable)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("#".utf8))
         }
 
         func installedPackages() -> [String] {
@@ -370,57 +413,97 @@ struct InstallTests {
 
     // MARK: Signature
 
-    @Test func unsignedInstallIsRefusedUntilTheSwitchIsOn() throws {
+    @Test func anUnsignedPackageIsApprovedForThatBuildOnly() throws {
         let setup = Setup()
-        for result: PackageSignature in [.unsigned, .adHoc] {
-            setup.signatures.set(result)
-            let package = try setup.package()
-            #expect(throws: BlockInstallError.unsigned) { try setup.store.inspect(package) }
-            #expect(throws: BlockInstallError.unsigned) { try setup.store.install(package) }
-        }
-        #expect(setup.installedPackages().isEmpty)
-        #expect(setup.runtime.blocks.isEmpty)
-
-        // A broken seal is refused whatever the switch says.
-        setup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
-        setup.signatures.set(.invalid(reason: "a file changed"))
-        #expect(throws: BlockInstallError.badSignature("a file changed")) { try setup.store.install(try setup.package()) }
-
-        setup.signatures.set(.adHoc)
-        let package = try setup.package()
-        let summary = try setup.store.inspect(package)
+        setup.signatures.set(.unsigned)
+        let dropped = try setup.drop(try setup.package())
+        #expect(setup.launch().first is PendingBlock)
+        let summary = try setup.store.inspect(dropped)
         #expect(!summary.isSigned)
         #expect(summary.signer == nil)
-        try setup.store.install(package)
-        #expect(setup.installedPackages() == ["hello.topblock"])
-        #expect(setup.defaults.object(forKey: BlockStore.signerKey("hello")) == nil)
+
+        // Approved with no switch: this build runs, with no signer recorded.
+        try setup.store.approve("hello")
+        #expect(setup.block("hello") != nil)
+        #expect(setup.launcher.processes.count == 1)
+        let approval = try #require(setup.approvals.approval(for: "hello"))
+        #expect(approval.signer == nil)
+        #expect(setup.relaunch().first is RemoteBlock, "the same build runs at the next launch")
+
+        // Rebuilt: another build, so it asks again.
+        try Setup.changeOneByte(in: dropped)
+        let again = try #require(setup.relaunch().first as? PendingBlock)
+        #expect(again.review == .changed)
+
+        // Ad hoc from the sheet: installed and approved in one step.
+        let adHoc = Setup()
+        adHoc.signatures.set(.adHoc)
+        try adHoc.store.install(try adHoc.package())
+        #expect(adHoc.block("hello") != nil)
+        #expect(adHoc.approvals.approval(for: "hello")?.signer == nil)
+
+        // A broken seal is refused whatever else is true.
+        let broken = Setup()
+        broken.signatures.set(.invalid(reason: "a file changed"))
+        #expect(throws: BlockInstallError.badSignature("a file changed")) { try broken.store.install(try broken.package()) }
+        #expect(broken.installedPackages().isEmpty)
     }
 
-    @Test func updateFromAnotherSignerIsRefused() async throws {
+    @Test func theOldSwitchHasNoEffect() throws {
+        let setup = Setup()
+        // The key the removed "Allow blocks without a signature" switch wrote.
+        setup.defaults.set(true, forKey: "block.allowUnsigned")
+        setup.signatures.set(.unsigned)
+        try setup.drop(try setup.package())
+
+        let blocks = setup.launch()
+
+        #expect(blocks.first is PendingBlock)
+        #expect(setup.launcher.processes.isEmpty)
+        #expect(setup.approvals.approval(for: "hello") == nil)
+    }
+
+    @Test func anUpdateFromAnotherSignerIsStillRefused() async throws {
         let setup = Setup()
         try setup.store.install(try setup.package(version: "0.2"))
         let block = try #require(setup.block("hello"))
+        #expect(setup.approvals.approval(for: "hello")?.signer == FakeSignatures.signer)
+        #expect(setup.defaults.object(forKey: "block.hello.signer") == nil, "the signer is kept in the approval")
 
         setup.signatures.set(.valid(signer: "Someone Else", teamID: ""))
         let newer = try setup.package(version: "0.3")
         let expected = BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "Someone Else")
         #expect(throws: expected) { try setup.store.inspect(newer) }
         #expect(throws: expected) { try setup.store.install(newer) }
-
-        // Unsigned, even with the switch on, does not replace a signed block.
-        setup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
-        setup.signatures.set(.unsigned)
-        #expect(throws: BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "no signature")) {
-            try setup.store.install(newer)
-        }
-
         #expect(block.manifest.version == "0.2")
         #expect(try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock")).version == "0.2")
+
+        // Changed on disk and signed by someone else: approving it is refused too.
+        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        let next = setup.makeStore(checksRuntime: false)
+        #expect(next.standIns(developmentPath: nil).first is PendingBlock)
+        #expect(throws: expected) { try next.approve("hello") }
 
         // The same signer updates.
         setup.signatures.set(.valid(signer: FakeSignatures.signer, teamID: ""))
         try setup.store.install(newer)
         #expect(block.manifest.version == "0.3")
+    }
+
+    @Test func anUnsignedUpdateOfASignedBlockIsStillRefused() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(version: "0.2"))
+        let block = try #require(setup.block("hello"))
+
+        for result: PackageSignature in [.unsigned, .adHoc] {
+            setup.signatures.set(result)
+            let newer = try setup.package(version: "0.3")
+            let expected = BlockInstallError.differentSigner(installed: FakeSignatures.signer, found: "no signature")
+            #expect(throws: expected) { try setup.store.inspect(newer) }
+            #expect(throws: expected) { try setup.store.install(newer) }
+        }
+        #expect(block.manifest.version == "0.2")
+        #expect(setup.approvals.approval(for: "hello")?.signer == FakeSignatures.signer)
     }
 
     /// The installed copy is checked too: a source changed between its check
@@ -435,7 +518,7 @@ struct InstallTests {
         }
         #expect(setup.installedPackages().isEmpty, "no package and no partial copy")
         #expect(setup.runtime.blocks.isEmpty)
-        #expect(setup.defaults.object(forKey: BlockStore.signerKey("hello")) == nil)
+        #expect(setup.approvals.approval(for: "hello") == nil)
 
         // The copy's seal is broken.
         setup.signatures.queue([.valid(signer: FakeSignatures.signer, teamID: ""), .invalid(reason: "a file changed")])
@@ -453,38 +536,168 @@ struct InstallTests {
         let setup = Setup()
         try setup.store.install(try setup.package())
 
-        // Changed on disk after install: the next launch refuses it.
+        // Its seal broken on disk after install: the next launch refuses it.
         setup.signatures.set(.invalid(reason: "a sealed resource is modified"))
-        let standIns = setup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
+        let standIns = setup.relaunch()
 
         let refused = try #require(standIns.first as? RefusedBlock)
         #expect(standIns.count == 1)
         let reason = try #require(BlockInstallError.badSignature("a sealed resource is modified").errorDescription)
         #expect(refused.health == .turnedOff(reason: reason))
-
-        // Unsigned at launch, with the switch off, is refused too.
-        let unsignedSetup = Setup()
-        unsignedSetup.defaults.set(true, forKey: BlockDefaultsKey.allowUnsigned)
-        unsignedSetup.signatures.set(.unsigned)
-        try unsignedSetup.store.install(try unsignedSetup.package())
-        unsignedSetup.defaults.set(false, forKey: BlockDefaultsKey.allowUnsigned)
-        let again = unsignedSetup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
-        #expect(again.first is RefusedBlock)
     }
 
-    @Test func signerIsStoredAndClearedOnRemove() throws {
+    // MARK: Approval
+
+    @Test func aPackageFoundInTheFolderIsPendingAndNotStarted() throws {
         let setup = Setup()
-        let package = try setup.package()
-        let summary = try setup.store.inspect(package)
-        #expect(summary.isSigned)
+        try setup.drop(try setup.package())
+
+        let blocks = setup.launch()
+
+        let pending = try #require(blocks.first as? PendingBlock)
+        #expect(blocks.count == 1)
+        #expect(pending.id == "hello")
+        #expect(pending.title == "Hello")
+        #expect(pending.review == .new)
+        #expect(pending.health == .turnedOff(reason: PendingBlock.reason(.new)))
+        #expect(setup.launcher.processes.isEmpty, "nothing started")
+        #expect(!setup.store.canTurnOn("hello"))
+        #expect(setup.store.canRemove("hello"))
+        #expect(setup.approvals.approval(for: "hello") == nil)
+    }
+
+    @Test func approvingAPendingBlockStartsIt() throws {
+        let setup = Setup()
+        let dropped = try setup.drop(try setup.package(hosts: ["api.example.com"]))
+        setup.runtime.register(OtherBlock())
+        setup.launch()
+        setup.runtime.register(OtherBlockAfter())
+        #expect(setup.runtime.blocks.map(\.id) == ["other", "hello", "after"])
+        // The sheet reviews the package where it is.
+        let summary = try setup.store.inspect(dropped)
+        #expect(summary.id == "hello")
         #expect(summary.signer == FakeSignatures.signer)
 
+        try setup.store.approve("hello")
+
+        let block = try #require(setup.block("hello"))
+        #expect(setup.runtime.blocks.map(\.id) == ["other", "hello", "after"], "in the placeholder's place")
+        #expect(block.packageURL.lastPathComponent == "Hello.topblock", "it runs where it was found")
+        #expect(setup.runtime.isEnabled("hello"))
+        #expect(setup.launcher.processes.count == 1, "the block process was started")
+        let approval = try #require(setup.approvals.approval(for: "hello"))
+        #expect(approval.hash == PackageHash.of(dropped))
+        #expect(approval.signer == FakeSignatures.signer)
+        #expect(approval.hosts == ["api.example.com"])
+        #expect(setup.defaults.object(forKey: "block.hello.signer") == nil)
+        #expect(setup.store.canTurnOn("hello"))
+        #expect(throws: BlockInstallError.nothingToApprove("hello")) { try setup.store.approve("hello") }
+        #expect(setup.relaunch().first is RemoteBlock, "the next launch runs it without asking")
+    }
+
+    @Test func installFromTheSheetApprovesInOneStep() throws {
+        let setup = Setup()
+        let package = try setup.package()
+
         try setup.store.install(package)
-        #expect(setup.defaults.string(forKey: BlockStore.signerKey("hello")) == FakeSignatures.signer)
-        #expect(setup.defaults.string(forKey: "block.hello.signer") == FakeSignatures.signer)
+
+        let block = try #require(setup.block("hello"))
+        #expect(setup.runtime.isEnabled("hello"))
+        #expect(setup.launcher.processes.count == 1)
+        let approval = try #require(setup.approvals.approval(for: "hello"))
+        #expect(approval.hash == PackageHash.of(block.packageURL))
+        #expect(approval.hash == PackageHash.of(package), "the copy is the build the owner chose")
+        #expect(approval.signer == FakeSignatures.signer)
+        #expect(setup.relaunch().first is RemoteBlock)
+    }
+
+    @Test func aChangedPackageIsPendingAgain() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package())
+        #expect(setup.launcher.processes.count == 1)
+
+        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        let blocks = setup.relaunch()
+        let relaunched = NotchRuntime()
+        for block in blocks { relaunched.register(block) }
+
+        let pending = try #require(blocks.first as? PendingBlock)
+        #expect(pending.review == .changed)
+        #expect(pending.health == .turnedOff(reason: PendingBlock.reason(.changed)))
+        #expect(setup.launcher.processes.count == 1, "nothing started after the change")
+    }
+
+    @Test func aDevelopmentBlockNeedsNoApproval() throws {
+        let setup = Setup()
+        setup.signatures.set(.unsigned)
+        let development = try setup.package()
+
+        let blocks = setup.launch(developmentPath: development.path)
+
+        let block = try #require(blocks.first as? RemoteBlock)
+        #expect(block.info.source == .development(path: development.path))
+        #expect(setup.launcher.processes.count == 1)
+        #expect(!FileManager.default.fileExists(atPath: setup.approvalsFile.path), "no record is written")
+    }
+
+    @Test func removeDeletesTheApproval() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package())
+        #expect(setup.approvals.approval(for: "hello") != nil)
 
         try setup.store.remove("hello")
-        #expect(setup.defaults.object(forKey: "block.hello.signer") == nil)
+
+        #expect(setup.approvals.approval(for: "hello") == nil)
+        #expect(setup.installedPackages().isEmpty)
+
+        // A pending block can be removed too, package and all.
+        let pending = Setup()
+        try pending.drop(try pending.package())
+        pending.launch()
+        try pending.store.remove("hello")
+        #expect(pending.installedPackages().isEmpty)
+        #expect(pending.runtime.blocks.isEmpty)
+    }
+
+    @Test func bundledBlocksStartWithoutApproval() throws {
+        let setup = Setup()
+        setup.signatures.set(.unsigned)
+        let bundled = setup.root.appending(path: "Bundled")
+        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: try setup.package(id: "nowplaying"), to: bundled.appending(path: "NowPlaying.topblock"))
+        let store = setup.makeStore(bundledRoot: bundled)
+
+        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
+
+        let block = try #require(setup.block("nowplaying"))
+        #expect(block.info.source == .bundled)
+        #expect(setup.launcher.processes.count == 1)
+        #expect(!FileManager.default.fileExists(atPath: setup.approvalsFile.path))
+    }
+
+    /// A block installed by an earlier version has its signer in the
+    /// preferences and no approval: it is approved once, as it is now, so
+    /// the owner's block keeps running.
+    @Test func anInstalledBlockFromAnEarlierVersionIsApprovedOnce() throws {
+        let setup = Setup()
+        let installed = try setup.drop(try setup.package(), as: "hello.topblock")
+        setup.defaults.set(FakeSignatures.signer, forKey: "block.hello.signer")
+
+        let blocks = setup.launch()
+
+        #expect(blocks.first is RemoteBlock)
+        #expect(setup.launcher.processes.count == 1)
+        let approval = try #require(setup.approvals.approval(for: "hello"))
+        #expect(approval.hash == PackageHash.of(installed))
+        #expect(approval.signer == FakeSignatures.signer)
+        #expect(setup.defaults.object(forKey: "block.hello.signer") == nil, "read once")
+
+        // Signed by someone else than the stored signer: refused, as before.
+        let other = Setup()
+        try other.drop(try other.package(), as: "hello.topblock")
+        other.defaults.set("Someone Else", forKey: "block.hello.signer")
+        #expect(other.launch().first is RefusedBlock)
+        #expect(other.approvals.approval(for: "hello") == nil)
     }
 
     @Test func summaryAndInfoShowAccessInTheUsersWords() throws {

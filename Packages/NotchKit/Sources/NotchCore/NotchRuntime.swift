@@ -66,6 +66,18 @@ public final class NotchRuntime {
         if enabled { activate(block) }
     }
 
+    /// Swap the registered block with `block.id` for `block`, in the same
+    /// place: the old one is turned off first, the new one turned on when
+    /// `enabled`. An id not registered is registered as by `register`.
+    public func replace(_ block: any NotchBlock, enabled: Bool = true) {
+        guard let index = blocks.firstIndex(where: { $0.id == block.id }) else {
+            return register(block, enabled: enabled)
+        }
+        setEnabled(block.id, false)
+        blocks[index] = block
+        if enabled { activate(block) }
+    }
+
     /// Move a block to `index` in `blocks`, which is its rank. An index past
     /// the end moves it last. An unknown id does nothing.
     public func move(_ id: BlockID, to index: Int) {

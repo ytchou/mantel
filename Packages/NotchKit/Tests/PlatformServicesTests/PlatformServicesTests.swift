@@ -299,6 +299,7 @@ private final class FakeInstaller: BlockInstalling {
         BlockPackageSummary(id: "x", name: "X", version: "1", contract: 1, sourcePath: url.path)
     }
     func install(_ url: URL) throws {}
+    func approve(_ id: BlockID) throws {}
     func remove(_ id: BlockID) throws {}
     func canRemove(_ id: BlockID) -> Bool { removable.contains(id) }
     func canTurnOn(_ id: BlockID) -> Bool { !cannotRun.contains(id) }
@@ -562,22 +563,6 @@ private final class FakeInstaller: BlockInstalling {
     #expect(unsignedText.access.isEmpty)
     #expect(unsignedText.signature == "Not signed")
     #expect(unsignedText.signatureWarning == "TopNotch cannot tell who made this block or whether it was changed. Install it only if you built it or trust where it came from.")
-}
-
-@MainActor
-@Test func allowUnsignedSwitchWritesItsKey() {
-    let (defaults, name) = makeDefaults()
-    defer { cleanUp(defaults, name) }
-    let settings = BlockSettings(defaults: defaults, domain: name)
-    #expect(!settings.allowsUnsigned)
-
-    settings.setAllowsUnsigned(true)
-    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == true)
-    #expect(BlockSettings(defaults: defaults, domain: name).allowsUnsigned)
-
-    settings.setAllowsUnsigned(false)
-    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == false)
-    #expect(!settings.allowsUnsigned)
 }
 
 @MainActor

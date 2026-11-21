@@ -14,7 +14,13 @@ public protocol BlockInstalling: AnyObject {
     /// an installed block with the same id.
     func install(_ url: URL) throws
 
-    /// Stop the block and delete its package, data folder and settings.
+    /// Approve the package of a block waiting for review, found in the
+    /// Blocks folder or changed since its last approval, and start it.
+    /// Checks the package again first and throws the refusal the user would
+    /// see on install.
+    func approve(_ id: BlockID) throws
+
+    /// Stop the block and delete its package, data folder, settings and approval.
     func remove(_ id: BlockID) throws
 
     /// True only for blocks the user installed.
@@ -28,13 +34,6 @@ public protocol BlockInstalling: AnyObject {
 
 public extension BlockInstalling {
     func canTurnOn(_ id: BlockID) -> Bool { true }
-}
-
-/// UserDefaults keys shared by the module that installs blocks and the
-/// settings window, which never import each other.
-public enum BlockDefaultsKey {
-    /// The "Allow blocks without a signature" switch; off when nothing is stored.
-    public static let allowUnsigned = "block.allowUnsigned"
 }
 
 /// What a package says about itself, shown before the user confirms an install.
@@ -99,7 +98,7 @@ public struct BlockPackageSummary: Sendable, Equatable {
 public enum BlockInstallError: LocalizedError, Equatable {
     /// The package was built for a contract version this app does not run.
     case unsupportedContract(found: Int, supported: ClosedRange<Int>)
-    /// The id belongs to a block built into the app.
+    /// The id is reserved by the app.
     case reservedID(String)
     /// The id is not lowercase letters, digits and hyphens.
     case invalidID(String)
@@ -123,7 +122,7 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case differentBlock(expected: String, found: String)
     /// The package's signature is broken: it was changed after signing.
     case badSignature(String)
-    /// The package is not signed, or signed ad hoc, and unsigned blocks are not allowed.
+    /// The package is not signed, or signed ad hoc.
     case unsigned
     /// The update is signed by someone other than the installed block.
     case differentSigner(installed: String, found: String)
@@ -136,6 +135,8 @@ public enum BlockInstallError: LocalizedError, Equatable {
     /// The manifest's `hosts` cannot be used; the detail says why, such as
     /// a bare `*`, or hosts without `network`.
     case invalidHosts(String)
+    /// No block with this id waits for review.
+    case nothingToApprove(String)
 
     public var errorDescription: String? {
         switch self {
@@ -145,7 +146,7 @@ public enum BlockInstallError: LocalizedError, Equatable {
                 : "supports contracts \(supported.lowerBound) to \(supported.upperBound)"
             return "This block was built for contract \(found), but this version of TopNotch \(supportedText). Ask the block's author for a matching version, or update TopNotch."
         case let .reservedID(id):
-            return "The block id \"\(id)\" belongs to a block built into TopNotch. Ask the block's author to choose a different id."
+            return "The block id \"\(id)\" is reserved by TopNotch. Ask the block's author to choose a different id."
         case let .invalidID(id):
             return "The block id \"\(id)\" is not valid. Ids use only lowercase letters, digits and hyphens. Ask the block's author to fix the id."
         case let .executableOutsidePackage(path):
@@ -169,7 +170,7 @@ public enum BlockInstallError: LocalizedError, Equatable {
         case let .badSignature(detail):
             return "The block's signature is not valid (\(detail)). The package may have been changed after it was signed. Ask the block's author for a new copy."
         case .unsigned:
-            return "This block is not signed, so TopNotch cannot tell who made it. Ask the block's author for a signed package, or turn on \"Allow blocks without a signature\" on the Blocks page if you trust it."
+            return "This block is not signed, so TopNotch cannot tell who made it. Ask the block's author for a signed package, or approve this build only if you built it or trust where it came from."
         case let .differentSigner(installed, found):
             return "This update is signed by \"\(found)\", but the installed block is signed by \"\(installed)\", so it was not installed. Get the update from the block's original author, or remove the block first if you trust the new signer."
         case .oldPackageFormat:
@@ -180,6 +181,8 @@ public enum BlockInstallError: LocalizedError, Equatable {
             return "The block asks to use the network but does not name the hosts it reaches, so TopNotch cannot limit it. Ask the block's author to list its hosts in the manifest."
         case let .invalidHosts(detail):
             return "The block's list of hosts cannot be used: \(detail). Ask the block's author to fix the manifest."
+        case let .nothingToApprove(id):
+            return "No block \"\(id)\" is waiting for review. Open the Blocks page again to see its current state."
         }
     }
 }

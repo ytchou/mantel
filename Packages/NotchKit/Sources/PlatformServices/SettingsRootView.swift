@@ -163,15 +163,12 @@ private struct BlocksPane: View {
     @State private var failure: Failure?
     /// The block waiting for the user to confirm Remove.
     @State private var removing: BlockEntry?
-    /// Mirrors "block.allowUnsigned", which is not observable.
-    @State private var allowUnsigned: Bool
 
     init(entries: [BlockEntry], runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)?) {
         self.entries = entries
         self.runtime = runtime
         self.settings = settings
         self.installer = installer
-        _allowUnsigned = State(initialValue: settings.allowsUnsigned)
     }
 
     var body: some View {
@@ -220,15 +217,6 @@ private struct BlocksPane: View {
                         Button("Install Block\u{2026}") { choosePackage() }
                     }
                 }
-            }
-            Section {
-                Toggle("Allow blocks without a signature", isOn: Binding(
-                    get: { allowUnsigned },
-                    set: { allowUnsigned = $0; settings.setAllowsUnsigned($0) }
-                ))
-            } footer: {
-                Text("Nobody vouches for an unsigned block, and it could have been changed by someone else, so turn this on only for blocks you built yourself.")
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)

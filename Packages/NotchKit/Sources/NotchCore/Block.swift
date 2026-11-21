@@ -92,6 +92,28 @@ public enum BlockHealth: Sendable, Equatable {
     case turnedOff(reason: String)
 }
 
+/// Why a block waits for the owner's review before it may run.
+public enum BlockReview: Sendable, Equatable {
+    /// Found in the Blocks folder and never approved.
+    case new
+    /// Approved once, but its package changed since.
+    case changed
+}
+
+/// What a block's process used at one sample. Shown on the Blocks page.
+public struct BlockUsage: Sendable, Equatable {
+    /// The process's memory footprint, in bytes.
+    public var memoryBytes: UInt64
+    /// Processor time since the previous sample over the time between them:
+    /// 1 is one core busy the whole time; more than 1 is several cores.
+    public var processorFraction: Double
+
+    public init(memoryBytes: UInt64, processorFraction: Double) {
+        self.memoryBytes = memoryBytes
+        self.processorFraction = processorFraction
+    }
+}
+
 /// What the runtime gives a block. It is the block's only way to reach the notch.
 @MainActor
 public protocol BlockContext: AnyObject {
@@ -142,11 +164,21 @@ public protocol NotchBlock: AnyObject {
 
     /// Whether the block is running as it should. Blocks in the app process are always `.ok`.
     var health: BlockHealth { get }
+
+    /// What the block's process used at the last sample. Nil for blocks in
+    /// the app process, and while the block is not running.
+    var usage: BlockUsage? { get }
+
+    /// Set while the block waits for the owner's review and never runs.
+    /// Nil for every block that may run.
+    var review: BlockReview? { get }
 }
 
 public extension NotchBlock {
     var info: BlockInfo { BlockInfo() }
     var health: BlockHealth { .ok }
+    var usage: BlockUsage? { nil }
+    var review: BlockReview? { nil }
     func deactivate() {}
     func handle(_ input: NotchInput) {}
     var actions: [BlockAction] { [] }

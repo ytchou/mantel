@@ -41,6 +41,9 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     // @unchecked: `pid` and `socket` are immutable; `lock` guards `exited`
     // and is held for every `waitpid` and `kill`, so a signal never reaches a
     // reused pid.
+    /// The block's process id. Under a sandbox it is still the block's:
+    /// `sandbox-exec` applies the profile and then execs the block in its
+    /// own place, so the resource watch measures the block itself.
     public let pid: pid_t
     private let socket: SocketTransport
     private let lock = NSLock()

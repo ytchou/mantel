@@ -168,19 +168,29 @@ struct BlockStoreTests {
         #expect(standIns.isEmpty)
     }
 
-    @Test func installedFolderMustBeNamedAfterItsId() throws {
+    @Test func aPackageUnderAnyFolderNameIsFound() throws {
         let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
-        // Named after another id: skipped.
-        try fixturePackage(id: "alpha", name: "beta", in: blocks)
-        // Not a valid id, or a reserved one: skipped.
-        try fixturePackage(id: "fixture", name: "Not An Id", in: blocks)
-        try fixturePackage(id: "shelf", name: "shelf", in: blocks)
-        // Named after its id: kept.
-        try fixturePackage(id: "gamma", name: "gamma", in: blocks)
+        // Named after the block's name, as the packaging script names it.
+        try fixturePackage(id: "weather-peek", name: "Weather Peek", in: blocks)
+        // A second package with the same id.
+        try fixturePackage(id: "weather-peek", name: "Weather Peek Copy", in: blocks)
 
-        let standIns = store(NotchRuntime(), blocksRoot: blocks).standIns(developmentPath: nil)
+        let store = store(NotchRuntime(), blocksRoot: blocks)
+        let standIns = store.standIns(developmentPath: nil)
 
-        #expect(standIns.map(\.id) == ["gamma"])
+        #expect(standIns.count == 2)
+        let pending = try #require(standIns.first as? PendingBlock)
+        #expect(pending.id == "weather-peek")
+        #expect(pending.review == .new)
+        #expect(pending.packageURL.lastPathComponent == "Weather Peek.topblock")
+        let duplicate = try #require(standIns.last as? RefusedBlock)
+        #expect(duplicate.packageURL.lastPathComponent == "Weather Peek Copy.topblock")
+        guard case let .turnedOff(reason) = duplicate.health else {
+            Issue.record("the second package is listed turned off")
+            return
+        }
+        #expect(reason.contains("\"weather-peek\""))
+        #expect(store.canRemove(duplicate.id), "the extra copy can be removed")
     }
 
     // MARK: Refused at launch

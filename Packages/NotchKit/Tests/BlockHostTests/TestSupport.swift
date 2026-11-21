@@ -148,6 +148,9 @@ struct Rig {
     let launcher: FakeLauncher
     let defaults: UserDefaults
     let heartbeat: ManualClock
+    /// The resource watch's clock, apart from `heartbeat`: a 30 s step on
+    /// the heartbeat's clock would read as a hang.
+    let resourceClock = ManualClock()
     let turnOffs = TurnOffs()
     /// Stands in for the app's temporary folder, one per rig: the block's own
     /// temporary folder and the drop folder are inside it.
@@ -157,7 +160,8 @@ struct Rig {
 
     init(
         clock: ManualClock = ManualClock(), manifest: Manifest = helloManifest, defaults: UserDefaults = testDefaults(),
-        preview: @escaping @MainActor ([URL]) -> Void = { _ in }
+        preview: @escaping @MainActor ([URL]) -> Void = { _ in },
+        samples: FakeSamples? = nil
     ) {
         runtime = NotchRuntime(clock: clock)
         launcher = FakeLauncher()
@@ -167,6 +171,12 @@ struct Rig {
         sharedTemporaryFolder = shared
         block = Self.standIn(manifest: manifest, runtime: runtime, launcher: launcher, defaults: defaults,
                              heartbeat: heartbeat, turnOffs: turnOffs, preview: preview, sharedTemporaryFolder: shared)
+        if let samples {
+            // The fake process gets a made-up id, so the watch starts.
+            block.watchedProcessID = { _ in 4242 }
+            block.resourceSampler = samples.sampler
+            block.resourceClock = BlockClock(resourceClock)
+        }
         runtime.register(block)
     }
 
@@ -201,6 +211,11 @@ struct Rig {
     /// A new, unique folder in the real temporary folder.
     nonisolated static func newSharedTemporaryFolder() -> URL {
         FileManager.default.temporaryDirectory.appending(path: "topnotch-shared-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    /// Lets the resource watch take one sample: one interval on its clock.
+    func sample(_ samples: FakeSamples) async {
+        await nextSample(resourceClock, samples)
     }
 
     /// Lets the heartbeat take `count` steps of one second each.
@@ -259,6 +274,50 @@ func waitUntil(_ condition: () -> Bool) async {
 @MainActor
 func settle() async {
     for _ in 0..<25 { try? await Task.sleep(for: .milliseconds(2)) }
+}
+
+// MARK: - Resource samples
+
+/// A process's use as the test sets it. Each sample returns the current
+/// value and is counted.
+final class FakeSamples: @unchecked Sendable {
+    // @unchecked: `lock` guards `current` and `count`.
+    private let lock = NSLock()
+    private var current: ResourceSample
+    private var count = 0
+
+    init(memoryBytes: UInt64 = 100 * 1024 * 1024) {
+        current = ResourceSample(memoryBytes: memoryBytes, processorNanoseconds: 0)
+    }
+
+    var calls: Int { lock.withLock { count } }
+
+    var sampler: ResourceSampler {
+        { [self] _ in
+            lock.withLock {
+                count += 1
+                return current
+            }
+        }
+    }
+
+    func setMemory(_ bytes: UInt64) { lock.withLock { current.memoryBytes = bytes } }
+
+    /// Adds the processor time of `fraction` of one core over one interval.
+    func busy(_ fraction: Double) {
+        let nanoseconds = UInt64(fraction * Double(ResourceWatch.interval.components.seconds) * 1e9)
+        lock.withLock { current.processorNanoseconds += nanoseconds }
+    }
+}
+
+/// Moves `clock` one watch interval once the watch sleeps on it, and waits
+/// for the sample.
+@MainActor
+func nextSample(_ clock: ManualClock, _ samples: FakeSamples) async {
+    let before = samples.calls
+    await waitUntil { clock.sleeperCount > 0 }
+    clock.advance(by: ResourceWatch.interval)
+    await waitUntil { samples.calls > before }
 }
 
 // MARK: - Clock
