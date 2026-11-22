@@ -12,9 +12,9 @@
 #
 # The bundle is then signed, so the signature seals the manifest with the
 # executable. The identity is taken from the BLOCK_SIGN_IDENTITY environment
-# variable; without it the bundle is signed ad hoc ("-"), which the app
-# accepts only for development blocks or with "Allow blocks without a
-# signature" on. Never write an identity into this file.
+# variable; without it the bundle is signed ad hoc ("-"). The app runs an
+# ad hoc package only after the owner approves that exact build, and never
+# as an update of a signed block. Never write an identity into this file.
 #
 # BLOCK_SIGN_TIMESTAMP, optional, sets codesign's secure timestamp: "none"
 # signs without one (no network needed, for local and offline builds); any
