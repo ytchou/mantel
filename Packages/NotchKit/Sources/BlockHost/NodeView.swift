@@ -23,8 +23,7 @@ public struct RemoteSlotView: View {
 
 /// Draws one `ViewNode` and its children. Fonts come from `NotchStyle`;
 /// sizes, spacing and padding come from the node, with `NotchStyle` values
-/// when a stack leaves them out. Looks and timings follow the in-app Shelf
-/// and Rename views they replace.
+/// when a stack leaves them out.
 public struct NodeView: View {
     let node: ViewNode
     let model: RemoteModel
@@ -108,8 +107,8 @@ public struct NodeView: View {
                     .frame(width: size, height: size)
                     .clipShape(shape)
             } else {
-                // The image never arrived or was evicted: draw the artwork
-                // placeholder, as the in-app blocks do.
+                // The image never arrived or was evicted: draw a plain
+                // placeholder of the same size and shape.
                 shape
                     .fill(.white.opacity(0.12))
                     .frame(width: size, height: size)
@@ -297,10 +296,10 @@ extension WireColor {
 
 /// A thin capsule bar filled from the left. Without a width it fills the
 /// width it is given, and is 5 pt high or less when given less. With
-/// `drainsOver` it empties linearly over that many seconds, as Rename's Undo
-/// bar did; still with Reduce Motion.
+/// `drainsOver` it empties linearly over that many seconds, also with
+/// Reduce Motion.
 ///
-/// Shortcut, as in the in-app Undo bar: a new view (a hover, a new
+/// Shortcut: a new view (a hover, a new
 /// presentation) drains again from `value`; the block is not told the time
 /// left. Fix by sending the remaining time if that proves confusing.
 private struct ProgressNode: View {
@@ -346,9 +345,8 @@ private struct ProgressNode: View {
 
 // MARK: - Sweep
 
-/// A 2 pt line that sweeps up and down its container, as Rename's scan line
-/// did: 0.8 s ease in and out, repeating. With Reduce Motion it stays in the
-/// middle.
+/// A 2 pt line that sweeps up and down its container: 0.8 s ease in and
+/// out, repeating. With Reduce Motion it stays in the middle.
 private struct SweepLine: View {
     let color: Color
     let model: RemoteModel
@@ -382,7 +380,7 @@ extension EnvironmentValues {
 
 /// A button from the wire. A disabled button is drawn at 0.4; `restOpacity`
 /// applies while the pointer is not on it, or, in an item's overlay, not on
-/// the item: Shelf's remove button brightened with its tile.
+/// the item: a remove button brightened with its tile.
 private struct ButtonNode: View {
     let id: String
     let title: String
@@ -437,7 +435,7 @@ private struct WireButtonStyle: ButtonStyle {
         case .capsule:
             NotchCapsuleButtonStyle(tint: Color(wire: color)).makeBody(configuration: configuration)
         case .accent:
-            // As Rename's Undo: 12 pt semibold on the accent, dimmer while pressed.
+            // As an Undo button: 12 pt semibold on the accent, dimmer while pressed.
             configuration.label
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(onAccent)
@@ -459,7 +457,7 @@ private struct WireButtonStyle: ButtonStyle {
     }
 
     /// Text on the accent: the accent at 17% brightness, which gives
-    /// Rename's dark amber on its amber. White on the system accent.
+    /// dark amber on amber. White on the system accent.
     private var onAccent: Color {
         if let labelColor { return Color(wire: labelColor) }
         guard let rgb = color?.rgb else { return .white }

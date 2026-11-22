@@ -25,7 +25,8 @@ struct Hello: Block {
     }
 
     /// Values from `NotchStyle` and the now-playing block's `PeekTree`
-    /// (`Blocks/NowPlaying`). The row spacing is left to the app's default.
+    /// (`blocks/nowplaying` in the topnotch-blocks repository). The row
+    /// spacing is left to the app's default.
     static func peek(hovers: Int) -> ViewNode {
         let volume = 0.5
         return .hstack(padding: .init(horizontal: 18), [

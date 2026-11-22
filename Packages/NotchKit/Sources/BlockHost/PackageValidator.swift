@@ -6,16 +6,13 @@ import NotchCore
 /// refusal is one `BlockInstallError` case whose text tells the owner what
 /// to do next.
 enum PackageValidator {
-    /// Ids that belong to blocks built into the app, the app's own key
-    /// prefixes (`block`, `onboarding`), and prefixes of common UserDefaults
-    /// keys (`com`, `apple`, `ns`) that Remove, which clears `<id>.*`, must
-    /// not touch. Only a bundled package may use one (now-playing ships that way).
-    // Hand-kept: a new built-in block or app key prefix must be added here by
-    // hand. Fine while the built-in blocks are a short list fixed at compile
-    // time; if they grow or become dynamic, build this set from the built-in
-    // blocks' ids plus the fixed prefixes, in one place the app also reads.
+    /// The app's own key prefixes (`block`, `onboarding`), and prefixes of
+    /// common UserDefaults keys (`com`, `apple`, `ns`) that Remove, which
+    /// clears `<id>.*`, must not touch. No package may use one.
+    // Hand-kept: a new app key prefix must be added here by hand. Fine while
+    // the prefixes are a short list fixed at compile time.
     static let reservedIDs: Set<String> = [
-        "shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns",
+        "block", "onboarding", "com", "apple", "ns",
     ]
 
     /// The package's `manifest.json`: `Contents/Resources/manifest.json`.
@@ -38,9 +35,9 @@ enum PackageValidator {
 
     /// Reads the package's `manifest.json` and checks it. Returns the manifest
     /// when the package may run. The signature is checked by `BlockStore`.
-    static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
+    static func load(_ package: URL) throws(BlockInstallError) -> Manifest {
         let manifest = try read(package)
-        try validate(manifest, package: package, source: source)
+        try validate(manifest, package: package)
         return manifest
     }
 
@@ -74,11 +71,11 @@ enum PackageValidator {
     }
 
     /// Checks the meaning of a decoded manifest against its package folder.
-    static func validate(_ manifest: Manifest, package: URL, source: BlockSource) throws(BlockInstallError) {
+    static func validate(_ manifest: Manifest, package: URL) throws(BlockInstallError) {
         guard Contract.supported.contains(manifest.contract) else {
             throw .unsupportedContract(found: manifest.contract, supported: Contract.supported)
         }
-        try checkID(manifest.id, source: source)
+        try checkID(manifest.id)
         try checkExecutable(manifest.executable, package: package)
         try checkLinks(in: package)
         if let unknown = manifest.events.first(where: { WireEvent(rawValue: $0) == nil }) {
@@ -103,17 +100,11 @@ enum PackageValidator {
         }
     }
 
-    /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
-    /// source is not bundled.
-    static func checkID(_ id: String, source: BlockSource) throws(BlockInstallError) {
+    /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved.
+    static func checkID(_ id: String) throws(BlockInstallError) {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
         guard !id.isEmpty, id.allSatisfy(allowed.contains) else { throw .invalidID(id) }
-        switch source {
-        case .builtIn, .bundled:
-            return
-        case .installed, .development:
-            if reservedIDs.contains(id) { throw .reservedID(id) }
-        }
+        if reservedIDs.contains(id) { throw .reservedID(id) }
     }
 
     private static func checkExecutable(_ path: String, package: URL) throws(BlockInstallError) {

@@ -15,8 +15,6 @@ struct PackageValidatorTests {
         .deletingLastPathComponent() // Packages
         .appending(path: "BlockKit/Examples/HelloBlock/manifest.json")
 
-    private static let installed = BlockSource.installed(from: "/tmp/Hello.topblock")
-
     /// A temporary `<Name>.topblock` bundle holding `manifest` and, unless
     /// told otherwise, an executable file at `Contents/MacOS/<manifest.executable>`.
     private func package(
@@ -47,13 +45,12 @@ struct PackageValidatorTests {
     /// The refusal for `manifest` in a package, or `nil` when it passes.
     private func refusal(
         _ manifest: Manifest,
-        source: BlockSource = PackageValidatorTests.installed,
         writeExecutable: Bool = true,
         executableMode: Int = 0o755
     ) throws -> BlockInstallError? {
         let url = try package(manifest, writeExecutable: writeExecutable, executableMode: executableMode)
         do {
-            _ = try PackageValidator.load(url, source: source)
+            _ = try PackageValidator.load(url)
             return nil
         } catch {
             return error
@@ -64,7 +61,7 @@ struct PackageValidatorTests {
         let hello = try Manifest.decode(Data(contentsOf: Self.helloManifestURL))
         let url = try package(hello)
 
-        let loaded = try PackageValidator.load(url, source: Self.installed)
+        let loaded = try PackageValidator.load(url)
 
         #expect(loaded == hello)
     }
@@ -80,14 +77,16 @@ struct PackageValidatorTests {
 
     @Test func refusesReservedIds() throws {
         // `com`, `apple` and `ns` start common UserDefaults keys, which Remove would clear.
-        for id in ["shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns"] {
-            #expect(try refusal(manifest(id: id)) == .reservedID(id), "\(id) is reserved for installed blocks")
-            #expect(try refusal(manifest(id: id), source: .development(path: "/tmp/Test.topblock")) == .reservedID(id),
-                    "\(id) is reserved for development blocks")
+        for id in ["block", "onboarding", "com", "apple", "ns"] {
+            // Installed and development packages alike.
+            #expect(try refusal(manifest(id: id)) == .reservedID(id), "\(id) is reserved for every package")
         }
-        #expect(try refusal(manifest(id: "nowplaying"), source: .bundled) == nil, "the bundled now-playing block passes")
-        let text = try #require(BlockInstallError.reservedID("shelf").errorDescription)
-        #expect(text.contains("\"shelf\""))
+        // The ids of the blocks that left the app are free.
+        for id in ["shelf", "rename", "nowplaying"] {
+            #expect(try refusal(manifest(id: id)) == nil, "\(id) is accepted")
+        }
+        let text = try #require(BlockInstallError.reservedID("onboarding").errorDescription)
+        #expect(text.contains("\"onboarding\""))
     }
 
     @Test func refusesBadIdCharacters() throws {
@@ -115,7 +114,7 @@ struct PackageValidatorTests {
         try Data("#!/bin/sh\n".utf8).write(to: tool)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
         #expect(throws: BlockInstallError.executableOutsidePackage("bin/Tool")) {
-            try PackageValidator.load(nested, source: Self.installed)
+            try PackageValidator.load(nested)
         }
     }
 
@@ -126,7 +125,7 @@ struct PackageValidatorTests {
         try FileManager.default.removeItem(at: macOS(linked))
         try FileManager.default.createSymbolicLink(at: macOS(linked), withDestinationURL: URL(fileURLWithPath: "/bin"))
         #expect(throws: BlockInstallError.executableOutsidePackage("sh")) {
-            try PackageValidator.load(linked, source: Self.installed)
+            try PackageValidator.load(linked)
         }
     }
 
@@ -136,7 +135,7 @@ struct PackageValidatorTests {
         try FileManager.default.createSymbolicLink(at: macOS(linked).appending(path: "HelloBlock"),
                                                    withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
         #expect(throws: BlockInstallError.executableOutsidePackage("HelloBlock")) {
-            try PackageValidator.load(linked, source: Self.installed)
+            try PackageValidator.load(linked)
         }
 
         // A folder in the path is a link to a folder outside the package.
@@ -144,7 +143,7 @@ struct PackageValidatorTests {
         try FileManager.default.createSymbolicLink(at: macOS(throughFolder).appending(path: "bin"),
                                                    withDestinationURL: URL(fileURLWithPath: "/bin"))
         #expect(throws: BlockInstallError.executableOutsidePackage("bin/sh")) {
-            try PackageValidator.load(throughFolder, source: Self.installed)
+            try PackageValidator.load(throughFolder)
         }
 
         // A link that stays inside the package is fine.
@@ -153,7 +152,7 @@ struct PackageValidatorTests {
         try Data("#!/bin/sh\n".utf8).write(to: real)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: real.path)
         try FileManager.default.createSymbolicLink(atPath: macOS(inside).appending(path: "Link").path, withDestinationPath: "Real")
-        #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
+        #expect(throws: Never.self) { try PackageValidator.load(inside) }
     }
 
     /// A5: a link anywhere in the package, not only the executable, must
@@ -168,7 +167,7 @@ struct PackageValidatorTests {
                                                        withDestinationPath: target)
             #expect(throws: BlockInstallError.executableOutsidePackage("Contents/Frameworks/Lib.dylib"),
                     "\(target), relative: \(relative)") {
-                try PackageValidator.load(linked, source: Self.installed)
+                try PackageValidator.load(linked)
             }
         }
 
@@ -179,7 +178,7 @@ struct PackageValidatorTests {
         try Data("lib".utf8).write(to: frameworks.appending(path: "Real.dylib"))
         try FileManager.default.createSymbolicLink(atPath: frameworks.appending(path: "Lib.dylib").path,
                                                    withDestinationPath: "Real.dylib")
-        #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
+        #expect(throws: Never.self) { try PackageValidator.load(inside) }
     }
 
     @Test func refusesDefaultThatDoesNotMatchType() throws {
@@ -248,7 +247,7 @@ struct PackageValidatorTests {
             .appending(path: "Empty.topblock")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        #expect(throws: BlockInstallError.self) { try PackageValidator.load(folder, source: Self.installed) }
+        #expect(throws: BlockInstallError.self) { try PackageValidator.load(folder) }
     }
 
     @Test func flatPackageIsRefusedAsOldFormat() throws {
@@ -262,7 +261,7 @@ struct PackageValidatorTests {
         try Data("#!/bin/sh\n".utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
-        #expect(throws: BlockInstallError.oldPackageFormat) { try PackageValidator.load(folder, source: Self.installed) }
+        #expect(throws: BlockInstallError.oldPackageFormat) { try PackageValidator.load(folder) }
         #expect(try #require(BlockInstallError.oldPackageFormat.errorDescription).contains("package-block.sh"))
     }
 
@@ -273,13 +272,13 @@ struct PackageValidatorTests {
         object["access"] = ["network", "camera"]
         try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
 
-        #expect(throws: BlockInstallError.unknownAccess("camera")) { try PackageValidator.load(url, source: Self.installed) }
+        #expect(throws: BlockInstallError.unknownAccess("camera")) { try PackageValidator.load(url) }
 
         // Known tokens pass; `network` names its hosts.
         object["access"] = ["network", "files.read", "files.screenshots"]
         object["hosts"] = ["api.example.com"]
         try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
-        let loaded = try PackageValidator.load(url, source: Self.installed)
+        let loaded = try PackageValidator.load(url)
         #expect(loaded.access == [.network, .filesRead, .filesScreenshots])
     }
 

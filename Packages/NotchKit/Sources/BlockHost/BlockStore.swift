@@ -7,10 +7,8 @@ import os
 /// removes the packages the user adds. The app makes one call to get the
 /// stand-ins, registers them, and calls `stopAll()` when it quits.
 ///
-/// Three kinds of package, in this order: the bundled blocks, shipped inside
-/// the app bundle (Shelf, Now Playing, Screenshot Names); the installed
-/// blocks in `blocksRoot`; and
-/// the development block, one package run from where it is, named with the
+/// Two kinds of package, in this order: the installed blocks in
+/// `blocksRoot`, and the development block, one package run from where it is, named with the
 /// `-devBlock <path>` launch argument. Every block runs sandboxed; only
 /// installed packages have their signature checked (see `checkSignature`)
 /// and need the owner's approval of their exact build (D9, D18): a package
@@ -21,8 +19,6 @@ public final class BlockStore: BlockInstalling {
     private let owner: @MainActor () -> BlockID?
     private let blocksRoot: URL
     private let dataRoot: URL
-    private let oldDataRoot: URL?
-    private let bundledRoot: URL?
     private let launcher: BlockLauncher?
     private let screenshotFolder: @MainActor () -> URL?
     private let defaults: UserDefaults
@@ -56,12 +52,6 @@ public final class BlockStore: BlockInstalling {
     ///   - blocksRoot: the folder of installed `.topblock` packages, under any
     ///     folder name; the id comes from the manifest.
     ///   - dataRoot: the folder holding one data folder per block.
-    ///   - oldDataRoot: the folder holding the data folders of the blocks that
-    ///     ran inside the app, moved into `dataRoot` once. Nil means
-    ///     `~/Library/Application Support/TopNotch` when `dataRoot` is the
-    ///     default one, and no move for any other `dataRoot`.
-    ///   - bundledRoot: the folder of `.topblock` packages shipped with the
-    ///     app; the app passes `Contents/Resources/Blocks`. Nil for none.
     ///   - launcher: starts block processes; nil starts each one sandboxed
     ///     from its manifest's `access`. Tests pass in-memory processes.
     ///   - screenshotFolder: the folder `files.screenshots` opens; the app
@@ -91,8 +81,6 @@ public final class BlockStore: BlockInstalling {
         owner: @escaping @MainActor () -> BlockID?,
         blocksRoot: URL,
         dataRoot: URL,
-        oldDataRoot: URL? = nil,
-        bundledRoot: URL? = nil,
         launcher: BlockLauncher? = nil,
         screenshotFolder: @escaping @MainActor () -> URL? = { nil },
         defaults: UserDefaults = .standard,
@@ -108,8 +96,6 @@ public final class BlockStore: BlockInstalling {
         self.owner = owner
         self.blocksRoot = blocksRoot
         self.dataRoot = dataRoot
-        self.oldDataRoot = oldDataRoot ?? (dataRoot == Self.defaultDataRoot ? SupportFolder.root : nil)
-        self.bundledRoot = bundledRoot
         self.launcher = launcher
         self.screenshotFolder = screenshotFolder
         self.defaults = defaults
@@ -146,19 +132,19 @@ public final class BlockStore: BlockInstalling {
     // Remove with `migratedApproval` two releases after approvals shipped.
     static func signerKey(_ id: String) -> String { "block.\(id).signer" }
 
-    /// The stand-ins to register, in order: the bundled blocks by folder
-    /// name, the installed blocks by id, then the development block.
+    /// The stand-ins to register, in order: the installed blocks by id, then
+    /// the development block. The owner's order on the Blocks page, stored at
+    /// each install, is applied after registration.
     /// `developmentPath` is a `.topblock` folder to run from where it is.
     ///
-    /// A bundled or development package that is missing, or that
+    /// A development package that is missing, or that
     /// `PackageValidator` refuses, is logged and left out. An installed
     /// package that is refused is listed as a `RefusedBlock`, turned off with
     /// the reason; one not approved as it is now as a `PendingBlock`. A
     /// package whose id an earlier one or the runtime already holds is
     /// logged and left out.
     public func standIns(developmentPath: String?) -> [any NotchBlock] {
-        var candidates: [any NotchBlock] = bundledBlocks()
-        candidates += installedBlocks()
+        var candidates: [any NotchBlock] = installedBlocks()
         if let developmentPath, let block = developmentBlock(at: developmentPath) {
             candidates.append(block)
         }
@@ -179,39 +165,7 @@ public final class BlockStore: BlockInstalling {
             Task { @MainActor [weak self] in self?.justVerified.removeAll() }
         }
         // Stand-ins start their processes only when registered, after this.
-        if let oldDataRoot {
-            Self.moveOldDataFolders(from: oldDataRoot, to: dataRoot,
-                                    for: Set(blocks.compactMap { ($0 as? RemoteBlock)?.id.rawValue }))
-        }
         return blocks
-    }
-
-    // MARK: Old data folders
-
-    /// The data folders of the blocks that ran inside the app, next to
-    /// `BlockData`, and the block id each now belongs to.
-    // Remove this table and `moveOldDataFolders` two releases after Shelf and
-    // Rename left the app: by then every Mac has moved its folders.
-    static let oldDataFolders: [(folder: String, id: String)] = [("Shelf", "shelf"), ("Rename", "rename")]
-
-    /// Moves each old data folder to `<dataRoot>/<id>`, once: only when the
-    /// target does not exist yet. Only for `ids`, the blocks found at this
-    /// launch, so a folder is moved only when its block is there to use it.
-    static func moveOldDataFolders(from oldRoot: URL, to dataRoot: URL, for ids: Set<String>) {
-        let files = FileManager.default
-        let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
-        for (folder, id) in oldDataFolders where ids.contains(id) {
-            let source = oldRoot.appending(path: folder, directoryHint: .isDirectory)
-            let target = dataRoot.appending(path: id, directoryHint: .isDirectory)
-            guard files.fileExists(atPath: source.path), !files.fileExists(atPath: target.path) else { continue }
-            do {
-                try files.createDirectory(at: dataRoot, withIntermediateDirectories: true)
-                try files.moveItem(at: source, to: target)
-                log.info("moved the old data folder \(folder, privacy: .public) to BlockData/\(id, privacy: .public)")
-            } catch {
-                log.error("moving the old data folder \(folder, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
     }
 
     /// Ends every block process this store started and waits for each to exit.
@@ -226,7 +180,7 @@ public final class BlockStore: BlockInstalling {
     public func inspect(_ url: URL) throws -> BlockPackageSummary {
         // Hashed first: confirming the sheet installs or approves only this build.
         let hash = PackageHash.of(url)
-        let manifest = try PackageValidator.load(url, source: .installed(from: url.path))
+        let manifest = try PackageValidator.load(url)
         try checkAvailable(manifest.id)
         let approval = approvals.approval(for: BlockID(rawValue: manifest.id))
         let signer = try checkSignature(url, pinned: approval?.signer)
@@ -279,7 +233,7 @@ public final class BlockStore: BlockInstalling {
     /// is turned on, as the sheet says; an update keeps its on/off state.
     public func install(_ url: URL, expectedHash: String) throws {
         let source = BlockSource.installed(from: url.path)
-        let manifest = try PackageValidator.load(url, source: source)
+        let manifest = try PackageValidator.load(url)
         let id = BlockID(rawValue: manifest.id)
         try checkAvailable(manifest.id)
         let previous = approvals.approval(for: id)
@@ -382,7 +336,7 @@ public final class BlockStore: BlockInstalling {
         // Hashed before the checks and again after: the build recorded is the one checked.
         let hash = PackageHash.of(package)
         guard hash == expectedHash else { throw BlockInstallError.changedDuringReview }
-        let manifest = try PackageValidator.load(package, source: source)
+        let manifest = try PackageValidator.load(package)
         guard manifest.id == id.rawValue else {
             throw BlockInstallError.differentBlock(expected: id.rawValue, found: manifest.id)
         }
@@ -538,8 +492,8 @@ public final class BlockStore: BlockInstalling {
     /// launch: a valid signature by `pinned`, the signer approved before,
     /// if there is one. An unsigned or ad hoc package passes, as the owner
     /// approves its exact build, but never as an update of a signed block.
-    /// A broken seal never passes. Bundled blocks are covered by the app's
-    /// own seal and development blocks have no rule; neither comes through here.
+    /// A broken seal never passes. Development blocks have no rule and do
+    /// not come through here.
     /// - Returns: the signer to record, or nil for an unsigned or ad hoc package.
     private func checkSignature(_ package: URL, pinned: String?) throws(BlockInstallError) -> String? {
         switch signatures.check(package) {
@@ -592,19 +546,11 @@ public final class BlockStore: BlockInstalling {
         made.contains { $0.id.rawValue == id } || refusedBlock(id) != nil || pendingBlock(id) != nil
     }
 
-    /// Refuses an id that a bundled or development block, or a block outside
+    /// Refuses an id that the development block, or a block outside
     /// this store, already has. An installed id passes: installing it updates.
     private func checkAvailable(_ id: String) throws(BlockInstallError) {
         if installedBlock(id) != nil || refusedBlock(id) != nil || pendingBlock(id) != nil { return }
         if isHeld(id) || isRegistered(BlockID(rawValue: id)) { throw .idInUse(id) }
-    }
-
-    /// Every `.topblock` folder in `bundledRoot`, sorted by name.
-    private func bundledBlocks() -> [RemoteBlock] {
-        guard let bundledRoot else { return [] }
-        return packages(in: bundledRoot, kind: "bundled")
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .compactMap { block(at: $0, source: .bundled, kind: "bundled") }
     }
 
     /// A package found in `blocksRoot`, with its manifest as read.
@@ -625,11 +571,11 @@ public final class BlockStore: BlockInstalling {
     /// other one is a `RefusedBlock` with the reason. A package whose id is
     /// not a valid one is logged and left out: Remove could clear other keys.
     private func installedBlocks() -> [any NotchBlock] {
-        let found = packages(in: blocksRoot, kind: "installed").compactMap { package -> Found? in
+        let found = packages(in: blocksRoot).compactMap { package -> Found? in
             let read = Result { () throws(BlockInstallError) in try PackageValidator.read(package) }
             let id = (try? read.get())?.id ?? package.deletingPathExtension().lastPathComponent
             do {
-                try PackageValidator.checkID(id, source: .installed(from: package.path))
+                try PackageValidator.checkID(id)
             } catch {
                 log.error("installed block at \(package.path, privacy: .public) skipped: \(id, privacy: .public) is not a block id")
                 return nil
@@ -665,7 +611,7 @@ public final class BlockStore: BlockInstalling {
         let source = BlockSource.installed(from: from)
         do throws(BlockInstallError) {
             let manifest = try found.read.get()
-            try PackageValidator.validate(manifest, package: package, source: source)
+            try PackageValidator.validate(manifest, package: package)
             // Checked again at every launch: a package changed on disk does not run.
             // Synchronous on the main actor: milliseconds for a few blocks. Move
             // the checks off the main actor, in parallel, once installed blocks
@@ -708,34 +654,30 @@ public final class BlockStore: BlockInstalling {
     /// Each package as `folder/<name>`, in `folder`'s form, as install forms
     /// its destination: `contentsOfDirectory(at:)` returns paths with
     /// symbolic links resolved (`/private/var/...` for `/var/...`).
-    private func packages(in folder: URL, kind: String) -> [URL] {
+    private func packages(in folder: URL) -> [URL] {
         guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
         do {
             return try FileManager.default.contentsOfDirectory(atPath: folder.path)
                 .filter { ($0 as NSString).pathExtension == "topblock" }
                 .map { folder.appending(path: $0, directoryHint: .isDirectory) }
         } catch {
-            log.error("no \(kind, privacy: .public) blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            log.error("no installed blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
 
+    /// A stand-in for the development package, or nil, logged, when it does not validate.
     private func developmentBlock(at path: String) -> RemoteBlock? {
         let package = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
-        return block(at: package, source: .development(path: package.path), kind: "development")
-    }
-
-    /// A stand-in for the package, or nil, logged, when it does not validate.
-    private func block(at package: URL, source: BlockSource, kind: String) -> RemoteBlock? {
         let manifest: Manifest
         do {
-            manifest = try PackageValidator.load(package, source: source)
+            manifest = try PackageValidator.load(package)
         } catch {
-            log.error("\(kind, privacy: .public) block at \(package.path, privacy: .public) not loaded: \(error.errorDescription ?? String(describing: error), privacy: .public)")
+            log.error("development block at \(package.path, privacy: .public) not loaded: \(error.errorDescription ?? String(describing: error), privacy: .public)")
             return nil
         }
-        log.info("\(kind, privacy: .public) block \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
-        return standIn(manifest: manifest, package: package, source: source)
+        log.info("development block \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
+        return standIn(manifest: manifest, package: package, source: .development(path: package.path))
     }
 
     /// Why an installed block does not start when its store is gone.

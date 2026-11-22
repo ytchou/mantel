@@ -311,7 +311,7 @@ public final class RemoteBlock: NotchBlock {
 
     /// `<temporaryFolder>/TopNotch/Drops`: dropped files the block gets.
     /// Inside the block its own temporary folder is `TMPDIR`. Emptied at
-    /// each launch: the Shelf block moves drops out of it at once.
+    /// each launch: a block is expected to move drops out of it at once.
     var dropsFolder: URL {
         temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
     }
@@ -882,8 +882,8 @@ public final class RemoteBlock: NotchBlock {
             duration: Self.duration(seconds: seconds, priority: priority),
             accepts: Set(accepts.map(Self.dropKind))
         ))
-        // Exactly what an in-app block does to answer a change just made:
-        // shown later it would answer nothing, so it does not wait.
+        // An answer to a change just made: shown later it would answer
+        // nothing, so it does not wait.
         if dismissIfNotShown, !context.ownsNotch { context.dismiss() }
     }
 
@@ -932,7 +932,7 @@ public final class RemoteBlock: NotchBlock {
     /// How old the event a `present` answers may be, when the present has
     /// `dismissIfNotShown`. Shown later than this it would answer nothing
     /// the user still sees, so it is dropped. A present without
-    /// `dismissIfNotShown` is never dropped (a rename result may take 20 s).
+    /// `dismissIfNotShown` is never dropped (a result may take 20 s).
     static let answerWindow: Duration = .seconds(2)
     /// How many events' send times are kept to judge late answers.
     static let sentTimesKept = 32
@@ -974,7 +974,7 @@ public final class RemoteBlock: NotchBlock {
         guard manifest.events.contains(payload.name.rawValue) else { return }
         if case .screenshotCaptured = payload, screenshotFolderMoved() {
             // The sandbox opens the folder the process started with; a block
-            // told of a screenshot elsewhere could not rename it. A new process
+            // told of a screenshot elsewhere could not write to it. A new process
             // gets the new folder; this event waits for its `welcome`.
             log.info("\(self.id.rawValue, privacy: .public): screenshot folder changed, restarting")
             withdraw()

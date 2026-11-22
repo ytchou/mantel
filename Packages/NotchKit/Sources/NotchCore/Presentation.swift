@@ -10,9 +10,9 @@ public enum NotchLevel: Sendable, Hashable {
 
 /// Who wins when several blocks want the notch. Higher wins.
 public enum PresentationPriority: Int, Sendable, Comparable, CaseIterable {
-    /// Standing information, such as "3 items on the shelf".
+    /// Standing information, such as "3 items held".
     case ambient = 0
-    /// A result the user should see, such as a finished rename.
+    /// A result the user should see, such as a finished task.
     case standard = 1
     /// The user is acting on the notch right now, such as during a drag.
     case interactive = 2

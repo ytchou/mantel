@@ -13,6 +13,7 @@ public final class SettingsWindowController {
     private let settings: BlockSettings
     private let installer: (any BlockInstalling)?
     private let consent: ScreenshotFolderConsent?
+    private let exampleURL: URL?
     private var window: NSWindow?
 
     /// - Parameters:
@@ -21,12 +22,14 @@ public final class SettingsWindowController {
     ///   - consent: the screenshot folder answer: updated by "Allow access"
     ///     on the General page, and read by the Blocks page to say why a
     ///     block that needs the folder does nothing.
+    ///   - exampleURL: the example block's package, offered by the empty Blocks page.
     public init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil,
-                consent: ScreenshotFolderConsent? = nil) {
+                consent: ScreenshotFolderConsent? = nil, exampleURL: URL? = nil) {
         self.runtime = runtime
         self.settings = settings
         self.installer = installer
         self.consent = consent
+        self.exampleURL = exampleURL
     }
 
     public func show() {
@@ -43,7 +46,7 @@ public final class SettingsWindowController {
             defer: false
         )
         let hosting = NSHostingView(rootView: SettingsRootView(runtime: runtime, settings: settings, installer: installer,
-                                                               consent: consent))
+                                                               consent: consent, exampleURL: exampleURL))
         // The window keeps the size it is given; see OnboardingController.show.
         hosting.sizingOptions = []
         window.contentView = hosting

@@ -28,12 +28,11 @@ struct InstallTests {
 
         /// - Parameter checksRuntime: false for a second store that only scans
         ///   the folders, so the blocks the first one registered do not count.
-        func makeStore(bundledRoot: URL? = nil, checksRuntime: Bool = true) -> BlockStore {
+        func makeStore(checksRuntime: Bool = true) -> BlockStore {
             let store = BlockStore(
                 owner: { [runtime] in runtime.state.owner },
                 blocksRoot: blocksRoot,
                 dataRoot: dataRoot,
-                bundledRoot: bundledRoot,
                 launcher: launcher.launcher,
                 defaults: defaults,
                 approvalsFile: approvalsFile,
@@ -184,8 +183,8 @@ struct InstallTests {
         #expect(throws: BlockInstallError.unsupportedContract(found: 99, supported: Contract.supported)) {
             try setup.store.install(package)
         }
-        let reserved = try setup.package(id: "shelf")
-        #expect(throws: BlockInstallError.reservedID("shelf")) { try setup.store.install(reserved) }
+        let reserved = try setup.package(id: "onboarding")
+        #expect(throws: BlockInstallError.reservedID("onboarding")) { try setup.store.install(reserved) }
 
         #expect(setup.installedPackages().isEmpty)
         #expect(setup.runtime.blocks.isEmpty)
@@ -309,29 +308,17 @@ struct InstallTests {
         #expect(await first.waitFor { $0 == .quit } != nil)
     }
 
-    @Test func bundledAndBuiltInCannotBeRemoved() throws {
+    @Test func builtInCannotBeRemoved() throws {
         let setup = Setup()
-        let bundled = setup.root.appending(path: "Bundled")
-        let nowPlaying = bundled.appending(path: "NowPlaying.topblock")
-        let source = try setup.package(id: "nowplaying")
-        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: source, to: nowPlaying)
-        let store = setup.makeStore(bundledRoot: bundled)
-        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
+        setup.runtime.register(OtherBlock())
 
-        for id: BlockID in ["nowplaying", "shelf"] {
-            #expect(!store.canRemove(id))
-            #expect(throws: BlockInstallError.notRemovable(id.rawValue)) { try store.remove(id) }
-        }
-        #expect(FileManager.default.fileExists(atPath: nowPlaying.path))
-        #expect(setup.runtime.blocks.map(\.id) == ["nowplaying"])
+        #expect(!setup.store.canRemove("other"))
+        #expect(throws: BlockInstallError.notRemovable("other")) { try setup.store.remove("other") }
+        #expect(setup.runtime.blocks.map(\.id) == ["other"])
     }
 
-    @Test func scanOrderIsBuiltInBundledInstalled() throws {
+    @Test func scanOrderIsInstalledById() throws {
         let setup = Setup()
-        let bundled = setup.root.appending(path: "Bundled")
-        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: try setup.package(id: "nowplaying"), to: bundled.appending(path: "NowPlaying.topblock"))
         // Installed in an order that is not sorted.
         try setup.store.install(try setup.package(id: "zeta"))
         try setup.store.install(try setup.package(id: "alpha"))
@@ -339,10 +326,28 @@ struct InstallTests {
         try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: "Notes"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: ".alpha.topblock.incoming-1"), withIntermediateDirectories: true)
 
-        let standIns = setup.makeStore(bundledRoot: bundled, checksRuntime: false).standIns(developmentPath: nil)
+        let standIns = setup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
 
-        #expect(standIns.map(\.id) == ["nowplaying", "alpha", "zeta"])
-        #expect(standIns.map(\.info.source).first == .bundled)
+        #expect(standIns.map(\.id) == ["alpha", "zeta"])
+    }
+
+    /// The ids of the blocks that left the app are free: a package with one
+    /// installs, waits for approval when dropped in the folder, and runs like any other.
+    @Test func aFormerlyBundledIdInstallsLikeAnyOther() throws {
+        let setup = Setup()
+        try setup.store.install(try setup.package(id: "shelf"))
+        #expect(setup.block("shelf") != nil)
+        #expect(setup.launcher.processes.count == 1)
+
+        let dropped = Setup()
+        let copy = try dropped.drop(try dropped.package(id: "shelf"))
+        let pending = try #require(dropped.launch().first as? PendingBlock)
+        #expect(pending.id == "shelf")
+        #expect(pending.review == .new)
+        #expect(dropped.launcher.processes.isEmpty)
+        try dropped.store.approve("shelf", expectedHash: try dropped.store.inspect(copy).packageHash)
+        #expect(dropped.block("shelf") != nil)
+        #expect(dropped.launcher.processes.count == 1)
     }
 
     // MARK: Ids are unique
@@ -670,22 +675,6 @@ struct InstallTests {
         try pending.store.remove("hello")
         #expect(pending.installedPackages().isEmpty)
         #expect(pending.runtime.blocks.isEmpty)
-    }
-
-    @Test func bundledBlocksStartWithoutApproval() throws {
-        let setup = Setup()
-        setup.signatures.set(.unsigned)
-        let bundled = setup.root.appending(path: "Bundled")
-        try FileManager.default.createDirectory(at: bundled, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: try setup.package(id: "nowplaying"), to: bundled.appending(path: "NowPlaying.topblock"))
-        let store = setup.makeStore(bundledRoot: bundled)
-
-        for block in store.standIns(developmentPath: nil) { setup.runtime.register(block) }
-
-        let block = try #require(setup.block("nowplaying"))
-        #expect(block.info.source == .bundled)
-        #expect(setup.launcher.processes.count == 1)
-        #expect(!FileManager.default.fileExists(atPath: setup.approvalsFile.path))
     }
 
     /// A block installed by an earlier version has its signer in the

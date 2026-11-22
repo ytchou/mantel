@@ -16,7 +16,7 @@ struct Arbiter {
     typealias Instant = Duration
 
     /// How long an interaction still counts after the pointer leaves or a
-    /// drag ends. Shelf waits 16 s for late drops, so this stays above that.
+    /// drag ends. A block may wait up to 16 s for late drops, so this stays above that.
     static let interactionWindow: Duration = .seconds(20)
 
     private struct Entry {
