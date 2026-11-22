@@ -155,7 +155,7 @@ struct Rig {
     /// Stands in for the app's temporary folder, one per rig: the block's own
     /// temporary folder and the drop folder are inside it.
     let sharedTemporaryFolder: URL
-    var dropFolder: URL { sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory) }
+    var dropFolder: URL { sharedTemporaryFolder.appending(path: "Mantel/Drops", directoryHint: .isDirectory) }
     var process: FakeProcess { launcher.last! }
 
     init(
@@ -190,9 +190,9 @@ struct Rig {
     ) -> RemoteBlock {
         RemoteBlock(
             manifest: manifest,
-            packageURL: URL(fileURLWithPath: "/tmp/Hello.topblock"),
-            source: .development(path: "/tmp/Hello.topblock"),
-            dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-tests-\(UUID().uuidString)"),
+            packageURL: URL(fileURLWithPath: "/tmp/Hello.mantelblock"),
+            source: .development(path: "/tmp/Hello.mantelblock"),
+            dataFolder: FileManager.default.temporaryDirectory.appending(path: "mantel-tests-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
             launcher: launcher.launcher,
             screenshotFolder: screenshotFolder,
@@ -204,13 +204,13 @@ struct Rig {
             },
             preview: preview,
             sharedTemporaryFolder: sharedTemporaryFolder,
-            dropFolder: sharedTemporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+            dropFolder: sharedTemporaryFolder.appending(path: "Mantel/Drops", directoryHint: .isDirectory)
         )
     }
 
     /// A new, unique folder in the real temporary folder.
     nonisolated static func newSharedTemporaryFolder() -> URL {
-        FileManager.default.temporaryDirectory.appending(path: "topnotch-shared-\(UUID().uuidString)", directoryHint: .isDirectory)
+        FileManager.default.temporaryDirectory.appending(path: "mantel-shared-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
     /// Lets the resource watch take one sample: one interval on its clock.
@@ -396,7 +396,7 @@ final class ManualClock: Clock, Sendable {
 
 // MARK: - Packages
 
-/// Writes a `.topblock` bundle at `folder`: `manifest` in `Contents/Resources`
+/// Writes a `.mantelblock` bundle at `folder`: `manifest` in `Contents/Resources`
 /// and the executable in `Contents/MacOS`, copied from `executable` or, when
 /// nil, a small shell script with `mode`. Returns `Contents/MacOS`.
 @discardableResult
@@ -450,14 +450,14 @@ final class FakeSignatures: SignatureChecking, @unchecked Sendable {
 
 // MARK: - The fixture block executable
 
-/// Builds `.topblock` folders around the `FixtureBlock` executable that
+/// Builds `.mantelblock` folders around the `FixtureBlock` executable that
 /// `swift build` puts next to the test bundle.
 enum Fixture {
     private final class Marker {}
 
-    /// The built `FixtureBlock`. `TOPNOTCH_FIXTURE_BLOCK` overrides the path.
+    /// The built `FixtureBlock`. `MANTEL_FIXTURE_BLOCK` overrides the path.
     static var executable: URL? {
-        if let path = ProcessInfo.processInfo.environment["TOPNOTCH_FIXTURE_BLOCK"] {
+        if let path = ProcessInfo.processInfo.environment["MANTEL_FIXTURE_BLOCK"] {
             return URL(fileURLWithPath: path)
         }
         // The test bundle sits in the build products folder, e.g.
@@ -472,15 +472,15 @@ enum Fixture {
                                    settings: [SettingSpec(key: "command", type: .choice, title: "Test command", default: .string("none"),
                                                           options: ["none", "crash", "hang", "ignorePing"].map { .init(value: $0, title: $0) })])
 
-    /// A temporary `Fixture.topblock` bundle with a copy of the built
+    /// A temporary `Fixture.mantelblock` bundle with a copy of the built
     /// executable in `Contents/MacOS`. A copy, not a link: under the
     /// sandbox the block reads only its own package, and the build folder
     /// may be inside the home folder.
     static func package(_ manifest: Manifest = Fixture.manifest) throws -> URL {
         guard let executable else { throw FixtureMissing() }
         let folder = FileManager.default.temporaryDirectory
-            .appending(path: "topnotch-fixture-\(UUID().uuidString)")
-            .appending(path: "Fixture.topblock")
+            .appending(path: "mantel-fixture-\(UUID().uuidString)")
+            .appending(path: "Fixture.mantelblock")
         try writeBundle(at: folder, manifest: manifest, executable: executable)
         return folder
     }
@@ -492,7 +492,7 @@ enum Fixture {
 
     struct FixtureMissing: Error, CustomStringConvertible {
         var description: String {
-            "FixtureBlock was not found next to the test bundle. Run the tests with `make test`, or set TOPNOTCH_FIXTURE_BLOCK to the built executable."
+            "FixtureBlock was not found next to the test bundle. Run the tests with `make test`, or set MANTEL_FIXTURE_BLOCK to the built executable."
         }
     }
 }

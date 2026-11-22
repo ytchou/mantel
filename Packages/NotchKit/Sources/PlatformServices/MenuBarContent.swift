@@ -3,7 +3,7 @@ import NotchCore
 import SwiftUI
 
 /// Content of the menu bar item's menu: one section per enabled block that has
-/// actions, then "Settings…", then "Quit TopNotch".
+/// actions, then "Settings…", then "Quit Mantel".
 public struct MenuBarContent: View {
     private let runtime: NotchRuntime
     private let openSettings: @MainActor () -> Void
@@ -27,7 +27,7 @@ public struct MenuBarContent: View {
         Button("Settings…") { openSettings() }
         .keyboardShortcut(",")
         Divider()
-        Button("Quit TopNotch") { NSApp.terminate(nil) }
+        Button("Quit Mantel") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }

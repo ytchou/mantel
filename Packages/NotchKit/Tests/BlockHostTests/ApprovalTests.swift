@@ -8,7 +8,7 @@ struct ApprovalTests {
     @Test func theHashCoversEveryFileInThePackage() throws {
         let root = temporaryFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let package = try makePackage(in: root, named: "Probe.topblock")
+        let package = try makePackage(in: root, named: "Probe.mantelblock")
         let before = PackageHash.of(package)
 
         // Neither the executable nor the manifest: a library beside them.
@@ -24,8 +24,8 @@ struct ApprovalTests {
     @Test func theHashIgnoresFolderNameAndFileDates() throws {
         let root = temporaryFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let package = try makePackage(in: root, named: "Probe.topblock")
-        let copy = root.appending(path: "Renamed.topblock")
+        let package = try makePackage(in: root, named: "Probe.mantelblock")
+        let copy = root.appending(path: "Renamed.mantelblock")
         try FileManager.default.copyItem(at: package, to: copy)
         let later = Date(timeIntervalSinceNow: 86_400)
         for path in try FileManager.default.subpathsOfDirectory(atPath: copy.path) {
@@ -76,7 +76,7 @@ struct ApprovalTests {
     @Test func anUnreadableFileMatchesNoApproval() throws {
         let root = temporaryFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let package = try makePackage(in: root, named: "Probe.topblock")
+        let package = try makePackage(in: root, named: "Probe.mantelblock")
         let approved = PackageHash.of(package)
         let library = package.appending(path: "Contents/Frameworks/libProbe.dylib")
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: library.path)
@@ -90,7 +90,7 @@ struct ApprovalTests {
     @Test func anUnlistableFolderMatchesNoApproval() throws {
         let root = temporaryFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let package = try makePackage(in: root, named: "Probe.topblock")
+        let package = try makePackage(in: root, named: "Probe.mantelblock")
         let approved = PackageHash.of(package)
         let folder = package.appending(path: "Contents/Frameworks")
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
@@ -101,7 +101,7 @@ struct ApprovalTests {
     }
 
     @Test func aMissingPackageMatchesNoApproval() {
-        let missing = temporaryFolder().appending(path: "Gone.topblock")
+        let missing = temporaryFolder().appending(path: "Gone.mantelblock")
         #expect(PackageHash.of(missing) != PackageHash.of(missing))
     }
 
@@ -141,7 +141,7 @@ struct ApprovalTests {
     // MARK: - Helpers
 
     private func temporaryFolder() -> URL {
-        FileManager.default.temporaryDirectory.appending(path: "topnotch-approval-\(UUID().uuidString)")
+        FileManager.default.temporaryDirectory.appending(path: "mantel-approval-\(UUID().uuidString)")
     }
 
     /// `<root>/<name>` with an executable, a manifest, a library and a

@@ -46,7 +46,7 @@ public final class NotchMenu: NSObject {
         }
         menu.addItem(item("Settings\u{2026}", openSettings))
         menu.addItem(.separator())
-        menu.addItem(item("Quit TopNotch") { NSApp.terminate(nil) })
+        menu.addItem(item("Quit Mantel") { NSApp.terminate(nil) })
         return menu
     }
 

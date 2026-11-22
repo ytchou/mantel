@@ -6,9 +6,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A10000000000000000000008"
-               BuildableName = "TopNotch.app"
-               BlueprintName = "TopNotch"
-               ReferencedContainer = "container:TopNotch.xcodeproj">
+               BuildableName = "Mantel.app"
+               BlueprintName = "Mantel"
+               ReferencedContainer = "container:Mantel.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -18,9 +18,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A10000000000000000000008"
-            BuildableName = "TopNotch.app"
-            BlueprintName = "TopNotch"
-            ReferencedContainer = "container:TopNotch.xcodeproj">
+            BuildableName = "Mantel.app"
+            BlueprintName = "Mantel"
+            ReferencedContainer = "container:Mantel.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>

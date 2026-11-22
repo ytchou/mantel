@@ -11,7 +11,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A10000000000000000000001 /* TopNotch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopNotch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000001 /* Mantel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mantel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000002 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -55,7 +55,7 @@
 		A10000000000000000000007 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000001 /* TopNotch.app */,
+				A10000000000000000000001 /* Mantel.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -63,9 +63,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A10000000000000000000008 /* TopNotch */ = {
+		A10000000000000000000008 /* Mantel */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A10000000000000000000020 /* Build configuration list for PBXNativeTarget "TopNotch" */;
+			buildConfigurationList = A10000000000000000000020 /* Build configuration list for PBXNativeTarget "Mantel" */;
 			buildPhases = (
 				A10000000000000000000009 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
@@ -80,12 +80,12 @@
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000003 /* App */,
 			);
-			name = TopNotch;
+			name = Mantel;
 			packageProductDependencies = (
 				A10000000000000000000011 /* NotchKit */,
 			);
-			productName = TopNotch;
-			productReference = A10000000000000000000001 /* TopNotch.app */;
+			productName = Mantel;
+			productReference = A10000000000000000000001 /* Mantel.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -103,7 +103,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A10000000000000000000021 /* Build configuration list for PBXProject "TopNotch" */;
+			buildConfigurationList = A10000000000000000000021 /* Build configuration list for PBXProject "Mantel" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -120,7 +120,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A10000000000000000000008 /* TopNotch */,
+				A10000000000000000000008 /* Mantel */,
 			);
 		};
 /* End PBXProject section */
@@ -150,12 +150,12 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Examples/Hello.topblock/Contents/MacOS/HelloBlock",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Examples/Hello.topblock/Contents/Resources/manifest.json",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Examples/Hello.mantelblock/Contents/MacOS/HelloBlock",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Examples/Hello.mantelblock/Contents/Resources/manifest.json",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n# The kit's example block, which onboarding and the empty Blocks page offer to\n# install: product HelloBlock from Packages/BlockKit, packaged into\n# Contents/Resources/Examples/Hello.topblock. It is not run from there; it is\n# installed like any other block, through the review sheet. Built for this\n# Mac, Debug, by a nested swift build with a cleared environment, so Xcode's\n# build settings do not leak into it, in its own scratch folder in the derived\n# data folder, outside the source tree. The phase always runs; swift build\n# itself skips the work when nothing changed.\nproduct=HelloBlock\nexamples=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Examples\"\nswift_build() {\n\tenv -i PATH=\"$PATH\" HOME=\"$HOME\" ${DEVELOPER_DIR:+DEVELOPER_DIR=\"$DEVELOPER_DIR\"} \\\n\t\tswift build -c debug --package-path \"$SRCROOT/Packages/BlockKit\" --scratch-path \"$BUILD_DIR/../../block-builds/BlockKit\" --product \"$product\" \"$@\"\n}\nswift_build\nbin=$(swift_build --show-bin-path)\n# Package and sign only when the executable or manifest changed: a new\n# signature on every build would break the app's seal when Xcode does not\n# sign the app again.\nmanifest=\"$SRCROOT/Packages/BlockKit/Examples/HelloBlock/manifest.json\"\npackaged=\"$examples/Hello.topblock\"\n# The stamp is per configuration: one shared stamp let a Release build make a\n# later Debug build skip a changed block.\nstamp=\"$TARGET_TEMP_DIR/$product.packaged\"\nif [ -x \"$packaged/Contents/MacOS/$product\" ] && cmp -s \"$bin/$product\" \"$stamp\" && cmp -s \"$manifest\" \"$packaged/Contents/Resources/manifest.json\"; then\n\techo \"Hello.topblock is up to date\"\n\texit 0\nfi\n# The script signs the whole bundle, with the app's identity. It names the\n# bundle after the manifest's name, so it packages into a folder of its own\n# and the bundle is moved to Hello.topblock; the signature does not cover the\n# folder name. No secure timestamp, so a build without network access still\n# signs.\nout=\"$TARGET_TEMP_DIR/packaging/$product\"\nrm -rf \"$out\"\nBLOCK_SIGN_TIMESTAMP=none BLOCK_SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$SRCROOT/Packages/BlockKit/Scripts/package-block.sh\" \"$bin/$product\" \"$manifest\" \"$out\"\nmkdir -p \"$examples\"\nrm -rf \"$packaged\"\nmv \"$out\"/*.topblock \"$packaged\"\ncp \"$bin/$product\" \"$stamp\"\n";
+			shellScript = "set -e\n# The kit's example block, which onboarding and the empty Blocks page offer to\n# install: product HelloBlock from Packages/BlockKit, packaged into\n# Contents/Resources/Examples/Hello.mantelblock. It is not run from there; it is\n# installed like any other block, through the review sheet. Built for this\n# Mac, Debug, by a nested swift build with a cleared environment, so Xcode's\n# build settings do not leak into it, in its own scratch folder in the derived\n# data folder, outside the source tree. The phase always runs; swift build\n# itself skips the work when nothing changed.\nproduct=HelloBlock\nexamples=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Examples\"\nswift_build() {\n\tenv -i PATH=\"$PATH\" HOME=\"$HOME\" ${DEVELOPER_DIR:+DEVELOPER_DIR=\"$DEVELOPER_DIR\"} \\\n\t\tswift build -c debug --package-path \"$SRCROOT/Packages/BlockKit\" --scratch-path \"$BUILD_DIR/../../block-builds/BlockKit\" --product \"$product\" \"$@\"\n}\nswift_build\nbin=$(swift_build --show-bin-path)\n# Package and sign only when the executable or manifest changed: a new\n# signature on every build would break the app's seal when Xcode does not\n# sign the app again.\nmanifest=\"$SRCROOT/Packages/BlockKit/Examples/HelloBlock/manifest.json\"\npackaged=\"$examples/Hello.mantelblock\"\n# The stamp is per configuration: one shared stamp let a Release build make a\n# later Debug build skip a changed block.\nstamp=\"$TARGET_TEMP_DIR/$product.packaged\"\nif [ -x \"$packaged/Contents/MacOS/$product\" ] && cmp -s \"$bin/$product\" \"$stamp\" && cmp -s \"$manifest\" \"$packaged/Contents/Resources/manifest.json\"; then\n\techo \"Hello.mantelblock is up to date\"\n\texit 0\nfi\n# The script signs the whole bundle, with the app's identity. It names the\n# bundle after the manifest's name, so it packages into a folder of its own\n# and the bundle is moved to Hello.mantelblock; the signature does not cover the\n# folder name. No secure timestamp, so a build without network access still\n# signs.\nout=\"$TARGET_TEMP_DIR/packaging/$product\"\nrm -rf \"$out\"\nBLOCK_SIGN_TIMESTAMP=none BLOCK_SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$SRCROOT/Packages/BlockKit/Scripts/package-block.sh\" \"$bin/$product\" \"$manifest\" \"$out\"\nmkdir -p \"$examples\"\nrm -rf \"$packaged\"\nmv \"$out\"/*.mantelblock \"$packaged\"\ncp \"$bin/$product\" \"$stamp\"\n";
 		};
 		A1000000000000000000000C /* Build now-playing helper */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -171,7 +171,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/TopNotchNowPlaying.dylib",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/MantelNowPlaying.dylib",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -274,7 +274,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000020 /* Build configuration list for PBXNativeTarget "TopNotch" */ = {
+		A10000000000000000000020 /* Build configuration list for PBXNativeTarget "Mantel" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A10000000000000000000032 /* Debug */,
@@ -283,7 +283,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A10000000000000000000021 /* Build configuration list for PBXProject "TopNotch" */ = {
+		A10000000000000000000021 /* Build configuration list for PBXProject "Mantel" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A10000000000000000000030 /* Debug */,

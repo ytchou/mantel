@@ -11,7 +11,7 @@ final class RefusedBlock: NotchBlock {
     let title: String
     let info: BlockInfo
     let health: BlockHealth
-    /// The installed `<id>.topblock` folder, deleted by Remove.
+    /// The installed `<id>.mantelblock` folder, deleted by Remove.
     let packageURL: URL
 
     /// - Parameters:

@@ -30,7 +30,7 @@ public final class BlockStore: BlockInstalling {
     private let clearKeys: @MainActor (BlockID) -> Void
     private let isRegistered: @MainActor (BlockID) -> Bool
     private let approvals: ApprovalStore
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "blocks")
     /// Every stand-in this store made, so `stopAll` can end their processes.
     private var made: [RemoteBlock] = []
     /// Stand-ins whose package was hashed against its approval moments ago:
@@ -49,7 +49,7 @@ public final class BlockStore: BlockInstalling {
     /// - Parameters:
     ///   - owner: who owns the notch now; pass `{ runtime.state.owner }`.
     ///     Each stand-in observes it to tell its block when it wins or loses the notch.
-    ///   - blocksRoot: the folder of installed `.topblock` packages, under any
+    ///   - blocksRoot: the folder of installed `.mantelblock` packages, under any
     ///     folder name; the id comes from the manifest.
     ///   - dataRoot: the folder holding one data folder per block.
     ///   - launcher: starts block processes; nil starts each one sandboxed
@@ -112,13 +112,13 @@ public final class BlockStore: BlockInstalling {
         self.isRegistered = isRegistered
     }
 
-    /// `~/Library/Application Support/TopNotch/Blocks`.
+    /// `~/Library/Application Support/Mantel/Blocks`.
     public nonisolated static var defaultBlocksRoot: URL { SupportFolder.root.appending(path: "Blocks") }
 
-    /// `~/Library/Application Support/TopNotch/BlockData`.
+    /// `~/Library/Application Support/Mantel/BlockData`.
     public nonisolated static var defaultDataRoot: URL { SupportFolder.root.appending(path: "BlockData") }
 
-    /// `~/Library/Application Support/TopNotch/Approvals.json`, which the
+    /// `~/Library/Application Support/Mantel/Approvals.json`, which the
     /// sandbox closes to every block.
     public nonisolated static var defaultApprovalsFile: URL { SupportFolder.root.appending(path: "Approvals.json") }
 
@@ -135,7 +135,7 @@ public final class BlockStore: BlockInstalling {
     /// The stand-ins to register, in order: the installed blocks by id, then
     /// the development block. The owner's order on the Blocks page, stored at
     /// each install, is applied after registration.
-    /// `developmentPath` is a `.topblock` folder to run from where it is.
+    /// `developmentPath` is a `.mantelblock` folder to run from where it is.
     ///
     /// A development package that is missing, or that
     /// `PackageValidator` refuses, is logged and left out. An installed
@@ -223,7 +223,7 @@ public final class BlockStore: BlockInstalling {
     /// Copies the package into the Blocks folder, approves that build and
     /// registers its stand-in, in one step: confirming the sheet is the
     /// owner's approval. The copy goes where the package with this id is,
-    /// or to `<blocksRoot>/<id>.topblock` for a new id. For an installed id
+    /// or to `<blocksRoot>/<id>.mantelblock` for a new id. For an installed id
     /// this is an update: the folder is replaced in one step and the
     /// existing stand-in takes the new package, keeping its place, settings
     /// and data. A package refused at launch, or waiting for review, is
@@ -243,11 +243,11 @@ public final class BlockStore: BlockInstalling {
             pendingBlock(manifest.id).map { ($0 as any NotchBlock, $0.packageURL) }
                 ?? refusedBlock(manifest.id).map { ($0 as any NotchBlock, $0.packageURL) }
         let destination = existing?.packageURL ?? placeholder?.package
-            ?? blocksRoot.appending(path: "\(manifest.id).topblock", directoryHint: .isDirectory)
+            ?? blocksRoot.appending(path: "\(manifest.id).mantelblock", directoryHint: .isDirectory)
         // Copied beside the destination first, so a failed copy leaves the
-        // installed version untouched. Its extension is not `.topblock`, so a
+        // installed version untouched. Its extension is not `.mantelblock`, so a
         // leftover is never scanned.
-        let incoming = blocksRoot.appending(path: ".\(manifest.id).topblock.incoming-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let incoming = blocksRoot.appending(path: ".\(manifest.id).mantelblock.incoming-\(UUID().uuidString)", directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(at: blocksRoot, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: url, to: incoming)
@@ -562,12 +562,12 @@ public final class BlockStore: BlockInstalling {
         var decoded: Manifest? { try? read.get() }
     }
 
-    /// Every `.topblock` folder in `blocksRoot`, under any folder name, sorted
+    /// Every `.mantelblock` folder in `blocksRoot`, under any folder name, sorted
     /// by id; the id comes from the manifest (D27). Each becomes a stand-in
     /// when its build is approved, a `PendingBlock` when it is not, and a
     /// `RefusedBlock` when the validator or the signature check refuses it.
     /// Of several packages with one id, the approved build is kept, else the
-    /// folder named `<id>.topblock`, else the first by folder name; each
+    /// folder named `<id>.mantelblock`, else the first by folder name; each
     /// other one is a `RefusedBlock` with the reason. A package whose id is
     /// not a valid one is logged and left out: Remove could clear other keys.
     private func installedBlocks() -> [any NotchBlock] {
@@ -658,7 +658,7 @@ public final class BlockStore: BlockInstalling {
         guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
         do {
             return try FileManager.default.contentsOfDirectory(atPath: folder.path)
-                .filter { ($0 as NSString).pathExtension == "topblock" }
+                .filter { ($0 as NSString).pathExtension == "mantelblock" }
                 .map { folder.appending(path: $0, directoryHint: .isDirectory) }
         } catch {
             log.error("no installed blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -681,7 +681,7 @@ public final class BlockStore: BlockInstalling {
     }
 
     /// Why an installed block does not start when its store is gone.
-    static let uncheckedReason = "TopNotch could not check this block's package."
+    static let uncheckedReason = "Mantel could not check this block's package."
 
     private func standIn(manifest: Manifest, package: URL, source: BlockSource) -> RemoteBlock {
         let block = RemoteBlock(

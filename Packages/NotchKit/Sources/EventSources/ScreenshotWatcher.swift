@@ -13,7 +13,7 @@ import os
 public final class ScreenshotWatcher {
     private let runtime: NotchRuntime
     private(set) var scanner: ScreenshotFolderScanner?
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "screenshots")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "screenshots")
 
     public init(runtime: NotchRuntime) {
         self.runtime = runtime
@@ -48,12 +48,12 @@ public final class ScreenshotWatcher {
 /// on `queue`, which is why the type is `@unchecked Sendable`.
 final class ScreenshotFolderScanner: @unchecked Sendable {
     let folder: URL
-    private let queue = DispatchQueue(label: "dev.topnotch.screenshots")
+    private let queue = DispatchQueue(label: "dev.mantel.screenshots")
     private let onScreenshot: @Sendable (URL, Date) -> Void
     private var tracker: ScreenshotTracker
     private var source: DispatchSourceFileSystemObject?
     private var isStopped = false
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "screenshots")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "screenshots")
 
     /// The screen-capture attribute or the file size can lag the file name
     /// slightly. Look again every 50 ms, for up to 2 s.

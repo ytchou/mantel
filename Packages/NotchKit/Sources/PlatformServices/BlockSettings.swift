@@ -6,7 +6,7 @@ import os
 /// Logger for this module. Each module or block uses its own category under
 /// the same subsystem, so Console.app can filter on the subsystem.
 enum Log {
-    static let subsystem = "dev.topnotch.TopNotch"
+    static let subsystem = "dev.mantel.Mantel"
     static let platform = Logger(subsystem: subsystem, category: "platform")
 }
 

@@ -3,14 +3,14 @@ import Foundation
 /// The sandbox profile a block process runs under, for
 /// `/usr/bin/sandbox-exec -p <text>`. On top of `(allow default)`: no network
 /// except the block's own network gate, no name lookups, no Apple events, no
-/// preference writes and no reads of TopNotch's preferences domain, no writes
+/// preference writes and no reads of Mantel's preferences domain, no writes
 /// outside the block's own folders, and reads only from an allow-list: the
 /// system locations a process needs, the block's package, data folder and
-/// own temporary folder, and what its tokens open. The app's `TopNotch`
+/// own temporary folder, and what its tokens open. The app's `Mantel`
 /// subtree of the temporary folder (dropped files and every block's
 /// temporary folder) is closed except the block's own folder inside it.
 /// `files.read` opens the home folder and other volumes (`/Volumes`), but
-/// never TopNotch's support folder (other blocks' packages and data, the
+/// never Mantel's support folder (other blocks' packages and data, the
 /// approvals) or the app's preferences file, whatever a token opens: those
 /// are closed after every token's allow. In SBPL the last matching rule
 /// wins, so each allow follows the deny it narrows; but a rule for one
@@ -26,7 +26,7 @@ import Foundation
 ///   ignores `TMPDIR` and frameworks (FoundationModels, Quick Look
 ///   thumbnails) write there. Reads there are closed outside the block's own
 ///   folder, so two blocks cannot pass files through it by reading. Metadata
-///   there stays readable outside the app's `TopNotch` subtree (whether a
+///   there stays readable outside the app's `Mantel` subtree (whether a
 ///   named file exists, its size and dates, not listings): Foundation needs
 ///   it to create folders and open files for writing.
 /// - Metadata of anything in the home folder stays readable (names, sizes,
@@ -34,7 +34,7 @@ import Foundation
 ///   enabled".
 /// - Other apps' preference domains stay readable through the preferences
 ///   service: denying every preference read breaks the on-device model.
-///   Nothing a block must not see is kept in TopNotch's own domain, which
+///   Nothing a block must not see is kept in Mantel's own domain, which
 ///   is closed.
 /// - Quick Look thumbnails ignore the read allow-list: the thumbnail service
 ///   reads the file, not the block, so a block can get a picture of any file
@@ -58,25 +58,25 @@ struct SandboxProfile: Sendable, Equatable {
     /// block reaches. Nil without hosts: no network at all.
     var gatePort: UInt16?
     /// `files.read`: allow reads in the home folder and under `/Volumes`,
-    /// except TopNotch's folders.
+    /// except Mantel's folders.
     var readsHome: Bool
-    /// `files.screenshots`: read and write in this folder, except TopNotch's
+    /// `files.screenshots`: read and write in this folder, except Mantel's
     /// folders and the preferences file inside it.
     var screenshotFolder: URL?
-    /// The `.topblock` package, readable.
+    /// The `.mantelblock` package, readable.
     var package: URL
     /// The block's data folder, readable and writable.
     var dataFolder: URL
     /// The block's own temporary folder and `TMPDIR`, readable and writable.
-    /// `<sharedTemporaryFolder>/TopNotch/Blocks/<block id>/`.
+    /// `<sharedTemporaryFolder>/Mantel/Blocks/<block id>/`.
     var temporaryFolder: URL
     /// The app's temporary folder, the per-user one. Writable, like the
-    /// data folder, not readable; its `TopNotch` subtree
+    /// data folder, not readable; its `Mantel` subtree
     /// (`appTemporaryFolder`) is closed outside `temporaryFolder`.
     var sharedTemporaryFolder: URL
     /// The owner's home folder.
     var home: URL
-    /// TopNotch's support folder, `~/Library/Application Support/TopNotch`:
+    /// Mantel's support folder, `~/Library/Application Support/Mantel`:
     /// installed packages, every block's data, the approvals. Closed even
     /// with `files.read`, except the block's own package and data folder.
     var supportRoot: URL
@@ -86,12 +86,12 @@ struct SandboxProfile: Sendable, Equatable {
     /// service.
     var preferenceDomain: String
 
-    /// `<sharedTemporaryFolder>/TopNotch`: the drop folder and every block's
+    /// `<sharedTemporaryFolder>/Mantel`: the drop folder and every block's
     /// temporary folder. No reads, no writes, except in `temporaryFolder`.
     var appTemporaryFolder: URL { Self.appTemporaryFolder(in: sharedTemporaryFolder) }
 
     static func appTemporaryFolder(in shared: URL) -> URL {
-        shared.appending(path: "TopNotch", directoryHint: .isDirectory)
+        shared.appending(path: "Mantel", directoryHint: .isDirectory)
     }
 
     /// What a process needs to read outside the home folder to start and to
@@ -157,7 +157,7 @@ struct SandboxProfile: Sendable, Equatable {
         }
         // After every allow a token adds, so no token reopens them (a
         // screenshot folder set to the home folder contains all three):
-        // the app's temporary subtree, TopNotch's support folder and the
+        // the app's temporary subtree, Mantel's support folder and the
         // preferences file. Then the block's own folders, inside them in
         // the app, are opened again.
         lines.append("(deny file-read* file-write* (subpath \(Self.literal(appTemporaryFolder))) "

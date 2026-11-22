@@ -15,7 +15,7 @@ struct InstallTests {
         let runtime = NotchRuntime()
         let launcher = FakeLauncher()
         let defaults = testDefaults()
-        let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-install-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appending(path: "mantel-install-\(UUID().uuidString)")
         var cleared: [BlockID] = []
         /// Every package counts as signed by `FakeSignatures.signer` until a test says otherwise.
         let signatures = FakeSignatures()
@@ -63,14 +63,14 @@ struct InstallTests {
             defaults.object(forKey: "block.\(id.rawValue).enabled") == nil || defaults.bool(forKey: "block.\(id.rawValue).enabled")
         }
 
-        /// A `<folder>/<Name>.topblock` bundle outside the store, with an executable script.
+        /// A `<folder>/<Name>.mantelblock` bundle outside the store, with an executable script.
         /// - Parameter hosts: when not empty, the manifest asks for `network` to reach them.
         func package(
             id: String = "hello", version: String = "0.2", events: [String] = ["pointerHover"],
             contract: Int = Contract.current, folder: String = "hello-block", hosts: [String] = []
         ) throws -> URL {
             let url = root.appending(path: "source-\(UUID().uuidString)").appending(path: folder)
-                .appending(path: "Hello.topblock")
+                .appending(path: "Hello.mantelblock")
             var manifest = Manifest(id: id, name: "Hello", version: version, contract: contract, executable: "HelloBlock",
                                     summary: "Says hello.", trigger: "Pointer hover",
                                     permissions: ["Nothing special"], events: events,
@@ -86,7 +86,7 @@ struct InstallTests {
         /// Copies `package` into the Blocks folder as `folder`, as the owner
         /// would in Finder. Returns the copy.
         @discardableResult
-        func drop(_ package: URL, as folder: String = "Hello.topblock") throws -> URL {
+        func drop(_ package: URL, as folder: String = "Hello.mantelblock") throws -> URL {
             let copy = blocksRoot.appending(path: folder, directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: blocksRoot, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: package, to: copy)
@@ -162,9 +162,9 @@ struct InstallTests {
 
         try setup.store.install(package)
 
-        #expect(setup.installedPackages() == ["hello.topblock"])
+        #expect(setup.installedPackages() == ["hello.mantelblock"])
         let block = try #require(setup.block("hello"))
-        #expect(block.packageURL.path == setup.blocksRoot.appending(path: "hello.topblock").path)
+        #expect(block.packageURL.path == setup.blocksRoot.appending(path: "hello.mantelblock").path)
         #expect(setup.runtime.isEnabled("hello"))
         #expect(setup.launcher.processes.count == 1, "the block process was started")
         #expect(block.info.source == .installed(from: package.path))
@@ -218,8 +218,8 @@ struct InstallTests {
         #expect(block.manifest.version == "0.3")
         #expect(block.info.version == "0.3")
         #expect(block.info.source == .installed(from: newer.path))
-        #expect(setup.installedPackages() == ["hello.topblock"])
-        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock"))
+        #expect(setup.installedPackages() == ["hello.mantelblock"])
+        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.mantelblock"))
         #expect(installed.version == "0.3")
         #expect(setup.defaults.bool(forKey: "hello.loud"))
         #expect(setup.defaults.object(forKey: "block.hello.enabled") != nil)
@@ -273,9 +273,9 @@ struct InstallTests {
         }
 
         #expect(block.manifest.version == "0.2")
-        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock"))
+        let installed = try bundleManifest(setup.blocksRoot.appending(path: "hello.mantelblock"))
         #expect(installed.version == "0.2")
-        #expect(setup.installedPackages() == ["hello.topblock"], "no temporary copy is left")
+        #expect(setup.installedPackages() == ["hello.mantelblock"], "no temporary copy is left")
         #expect(setup.launcher.processes.count == 1)
         #expect(block.isWelcomed, "the old version keeps running")
         #expect(!first.received.contains(.quit))
@@ -324,7 +324,7 @@ struct InstallTests {
         try setup.store.install(try setup.package(id: "alpha"))
         // Not a package, and a leftover temporary copy: both ignored.
         try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: "Notes"), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: ".alpha.topblock.incoming-1"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: setup.blocksRoot.appending(path: ".alpha.mantelblock.incoming-1"), withIntermediateDirectories: true)
 
         let standIns = setup.makeStore(checksRuntime: false).standIns(developmentPath: nil)
 
@@ -384,7 +384,7 @@ struct InstallTests {
     private func refusedHello(_ setup: Setup) throws {
         try FileManager.default.createDirectory(at: setup.blocksRoot, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: try setup.package(contract: 99),
-                                         to: setup.blocksRoot.appending(path: "hello.topblock"))
+                                         to: setup.blocksRoot.appending(path: "hello.mantelblock"))
     }
 
     @Test func refusedPackageCanBeRemoved() throws {
@@ -423,7 +423,7 @@ struct InstallTests {
         #expect(block.manifest.version == "0.4")
         #expect(setup.runtime.blocks.count == 1)
         #expect(store.canTurnOn("hello"))
-        #expect(setup.installedPackages() == ["hello.topblock"])
+        #expect(setup.installedPackages() == ["hello.mantelblock"])
     }
 
     // MARK: Signature
@@ -491,13 +491,13 @@ struct InstallTests {
         #expect(throws: expected) { try setup.store.inspect(newer) }
         #expect(throws: expected) { try setup.store.install(newer) }
         #expect(block.manifest.version == "0.2")
-        #expect(try bundleManifest(setup.blocksRoot.appending(path: "hello.topblock")).version == "0.2")
+        #expect(try bundleManifest(setup.blocksRoot.appending(path: "hello.mantelblock")).version == "0.2")
 
         // Changed on disk and signed by someone else: approving it is refused too.
-        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.mantelblock"))
         let next = setup.makeStore(checksRuntime: false)
         #expect(next.standIns(developmentPath: nil).first is PendingBlock)
-        let changed = PackageHash.of(setup.blocksRoot.appending(path: "hello.topblock"))
+        let changed = PackageHash.of(setup.blocksRoot.appending(path: "hello.mantelblock"))
         #expect(throws: expected) { try next.approve("hello", expectedHash: changed) }
 
         // The same signer updates.
@@ -545,7 +545,7 @@ struct InstallTests {
 
         // Both checks agree: installed.
         try setup.store.install(try setup.package())
-        #expect(setup.installedPackages() == ["hello.topblock"])
+        #expect(setup.installedPackages() == ["hello.mantelblock"])
     }
 
     @Test func changedPackageIsRefusedAtLaunch() throws {
@@ -598,7 +598,7 @@ struct InstallTests {
 
         let block = try #require(setup.block("hello"))
         #expect(setup.runtime.blocks.map(\.id) == ["other", "hello", "after"], "in the placeholder's place")
-        #expect(block.packageURL.lastPathComponent == "Hello.topblock", "it runs where it was found")
+        #expect(block.packageURL.lastPathComponent == "Hello.mantelblock", "it runs where it was found")
         #expect(setup.runtime.isEnabled("hello"))
         #expect(setup.launcher.processes.count == 1, "the block process was started")
         let approval = try #require(setup.approvals.approval(for: "hello"))
@@ -634,7 +634,7 @@ struct InstallTests {
         try setup.store.install(try setup.package())
         #expect(setup.launcher.processes.count == 1)
 
-        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        try Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.mantelblock"))
         let blocks = setup.relaunch()
         let relaunched = NotchRuntime()
         for block in blocks { relaunched.register(block) }
@@ -682,7 +682,7 @@ struct InstallTests {
     /// the owner's block keeps running.
     @Test func anInstalledBlockFromAnEarlierVersionIsApprovedOnce() throws {
         let setup = Setup()
-        let installed = try setup.drop(try setup.package(), as: "hello.topblock")
+        let installed = try setup.drop(try setup.package(), as: "hello.mantelblock")
         setup.defaults.set(FakeSignatures.signer, forKey: "block.hello.signer")
 
         let blocks = setup.launch()
@@ -696,7 +696,7 @@ struct InstallTests {
 
         // Signed by someone else than the stored signer: refused, as before.
         let other = Setup()
-        try other.drop(try other.package(), as: "hello.topblock")
+        try other.drop(try other.package(), as: "hello.mantelblock")
         other.defaults.set("Someone Else", forKey: "block.hello.signer")
         #expect(other.launch().first is RefusedBlock)
         #expect(other.approvals.approval(for: "hello") == nil)
@@ -877,7 +877,7 @@ struct InstallTests {
         #expect(setup.approvals.approval(for: "hello")?.events == ["pointerHover"])
 
         // Rebuilt in place to also listen to screenshots: it waits as Changed.
-        let installed = setup.blocksRoot.appending(path: "hello.topblock")
+        let installed = setup.blocksRoot.appending(path: "hello.mantelblock")
         var manifest = try bundleManifest(installed)
         manifest.events = ["pointerHover", "screenshotCaptured"]
         try Framing.encoder().encode(manifest).write(to: installed.appending(path: "Contents/Resources/manifest.json"))

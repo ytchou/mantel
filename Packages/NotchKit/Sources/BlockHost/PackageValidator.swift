@@ -2,7 +2,7 @@ import BlockWire
 import Foundation
 import NotchCore
 
-/// Checks a `.topblock` package before the app runs or installs it. Each
+/// Checks a `.mantelblock` package before the app runs or installs it. Each
 /// refusal is one `BlockInstallError` case whose text tells the owner what
 /// to do next.
 enum PackageValidator {

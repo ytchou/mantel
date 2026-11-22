@@ -149,7 +149,7 @@ struct BlockEntry: Identifiable {
     static let screenshotFolderNotice = "Screenshot folder access is off. Allow it in Settings > General."
 
     /// The footer of the Blocks page's install section, such as
-    /// "Blocks live in ~/Library/Application Support/TopNotch/Blocks".
+    /// "Blocks live in ~/Library/Application Support/Mantel/Blocks".
     static func blocksFolderNote(_ folder: URL, home: String = NSHomeDirectory()) -> String {
         "Blocks live in " + abbreviate(folder.path, home: home)
     }
@@ -324,7 +324,7 @@ private struct BlocksPane: View {
         ContentUnavailableView {
             Label("No Blocks Yet", systemImage: "square.grid.2x2")
         } description: {
-            Text("A block adds one thing to your notch. Put a .topblock package in ~/Library/Application Support/TopNotch/Blocks, or install one here.")
+            Text("A block adds one thing to your notch. Put a .mantelblock package in ~/Library/Application Support/Mantel/Blocks, or install one here.")
         } actions: {
             HStack {
                 ForEach(actions, id: \.self) { action in
@@ -389,7 +389,7 @@ private struct BlocksPane: View {
             if installer != nil {
                 Section {
                     HStack {
-                        Text("Add a block you built or trust, from a .topblock folder.")
+                        Text("Add a block you built or trust, from a .mantelblock folder.")
                         Spacer()
                         Button(EmptyBlocksAction.installBlock.title) { choosePackage() }
                     }
@@ -491,13 +491,13 @@ private struct BlocksPane: View {
         }
     }
 
-    /// Asks for a `.topblock` folder, then shows what it contains, or why it
+    /// Asks for a `.mantelblock` folder, then shows what it contains, or why it
     /// is refused. With `id`, from a row's "Update…", only that block's package is accepted.
     private func choosePackage(updating id: BlockID? = nil) {
         guard let installer else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose a Block"
-        panel.message = "Choose a .topblock folder."
+        panel.message = "Choose a .mantelblock folder."
         panel.prompt = "Choose"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false

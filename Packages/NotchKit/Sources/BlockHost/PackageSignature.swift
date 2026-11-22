@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// The code signature of a `.topblock` bundle, as the Security framework sees it.
+/// The code signature of a `.mantelblock` bundle, as the Security framework sees it.
 enum PackageSignature: Sendable, Equatable {
     /// A valid signature with a certificate. `teamID` is empty when the
     /// certificate has none.

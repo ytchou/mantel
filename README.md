@@ -1,21 +1,21 @@
-# TopNotch
+# Mantel
 
-TopNotch is a macOS app that turns the notch into an interactive surface.
+Mantel is a macOS app that turns the notch into an interactive surface.
 Each capability is a block: a small program that reacts to a system event,
 such as a screenshot taken or files dragged, and shows something in the
 notch.
 
-TopNotch is source-available, under the Sustainable Use License. The kit
+Mantel is source-available, under the Sustainable Use License. The kit
 for block authors is MIT. See [Licenses](#licenses).
 
 ## Blocks
 
-TopNotch ships with no blocks. On first launch, onboarding and the empty
+Mantel ships with no blocks. On first launch, onboarding and the empty
 Blocks page offer the example block (Hello), which installs through the
 same review sheet as any other block.
 
 The owner's blocks (Now Playing, Screenshot Names, Shelf) live in their own
-repository, [topnotch-blocks](https://github.com/ytchou/topnotch-blocks).
+repository, [mantel-blocks](https://github.com/ytchou/mantel-blocks).
 Its README says how to build, package and install them.
 
 To write a block, read [Packages/BlockKit/README.md](Packages/BlockKit/README.md).
@@ -34,7 +34,7 @@ Needs macOS 26, Xcode with Swift 6.2, and an Apple Development certificate.
    make test    # the unit tests of every package
    ```
 
-3. Open `build/Build/Products/Debug/TopNotch.app`, or run `make run`.
+3. Open `build/Build/Products/Debug/Mantel.app`, or run `make run`.
 
 The app is signed with a stable Apple Development certificate. macOS ties
 the permissions you grant to the signature, so ad hoc signing resets them
@@ -67,7 +67,7 @@ macOS 26. If Apple removes it, the sandbox needs another mechanism.
 
 - The app and everything else in this repository, except
   `Packages/BlockKit` and the root `Package.swift`: the Sustainable Use License, in
-  [LICENSE.md](LICENSE.md). You may use, change and share TopNotch for
+  [LICENSE.md](LICENSE.md). You may use, change and share Mantel for
   your own internal business purposes or for non-commercial or personal
   use. You may not sell it.
 - `Packages/BlockKit` (the kit, the wire protocol and the Hello example)

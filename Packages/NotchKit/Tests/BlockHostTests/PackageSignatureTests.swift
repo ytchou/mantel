@@ -42,10 +42,10 @@ struct PackageSignatureTests {
 
     // MARK: - Helpers
 
-    /// `<temp>/Probe.topblock` with an executable whose signature is removed.
+    /// `<temp>/Probe.mantelblock` with an executable whose signature is removed.
     private func makeBundle() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-signature-\(UUID().uuidString)")
-        let bundle = root.appending(path: "Probe.topblock")
+        let root = FileManager.default.temporaryDirectory.appending(path: "mantel-signature-\(UUID().uuidString)")
+        let bundle = root.appending(path: "Probe.mantelblock")
         let contents = bundle.appending(path: "Contents")
         let macOS = contents.appending(path: "MacOS")
         let resources = contents.appending(path: "Resources")
@@ -54,7 +54,7 @@ struct PackageSignatureTests {
 
         let info: [String: Any] = [
             "CFBundleExecutable": "Probe",
-            "CFBundleIdentifier": "com.example.topnotch.probe",
+            "CFBundleIdentifier": "com.example.mantel.probe",
             "CFBundleName": "Probe",
             "CFBundlePackageType": "BNDL",
             "CFBundleVersion": "1",

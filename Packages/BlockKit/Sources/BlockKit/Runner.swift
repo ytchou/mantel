@@ -15,12 +15,12 @@ public final class Runner: Sendable {
 
     /// `generation` is used for `hello`; after `welcome`, the block uses the
     /// welcome's generation. By default it is read from the
-    /// `TOPNOTCH_BLOCK_GENERATION` environment variable the app sets.
+    /// `MANTEL_BLOCK_GENERATION` environment variable the app sets.
     public init(block: any Block, transport: any Transport, generation: Int? = nil) {
         self.block = block
         self.transport = transport
         self.generation = generation
-            ?? ProcessInfo.processInfo.environment["TOPNOTCH_BLOCK_GENERATION"].flatMap(Int.init)
+            ?? ProcessInfo.processInfo.environment["MANTEL_BLOCK_GENERATION"].flatMap(Int.init)
             ?? 0
     }
 

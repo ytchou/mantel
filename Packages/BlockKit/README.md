@@ -1,11 +1,11 @@
-# BlockKit: write a TopNotch block
+# BlockKit: write a Mantel block
 
 A block is a small program that adds one thing to the notch. Every block
-runs as its own process, in a sandbox, and talks to TopNotch over the wire
+runs as its own process, in a sandbox, and talks to Mantel over the wire
 protocol in [PROTOCOL.md](PROTOCOL.md). This kit does the talking for you.
 
 This guide starts from an empty folder and ends with your block running in
-TopNotch. It needs macOS 26 and Swift 6.2. Step 5 also needs a TopNotch
+Mantel. It needs macOS 26 and Swift 6.2. Step 5 also needs a Mantel
 build: see the repository's [README](../../README.md).
 
 The kit, the protocol and the Hello example are MIT ([LICENSE](LICENSE)).
@@ -31,35 +31,35 @@ let package = Package(
         .executable(name: "MyHello", targets: ["MyHello"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ytchou/topnotch.git", from: "0.1.0"),
+        .package(url: "https://github.com/ytchou/mantel.git", from: "0.1.0"),
     ],
     targets: [
         // The block itself, in a library so the tests can run it.
         .target(name: "MyHelloCore", dependencies: [
-            .product(name: "BlockKit", package: "topnotch"),
+            .product(name: "BlockKit", package: "mantel"),
         ]),
         // The entry point only.
         .executableTarget(name: "MyHello", dependencies: [
             "MyHelloCore",
-            .product(name: "BlockKit", package: "topnotch"),
+            .product(name: "BlockKit", package: "mantel"),
         ]),
         .testTarget(name: "MyHelloTests", dependencies: [
             "MyHelloCore",
-            .product(name: "BlockKit", package: "topnotch"),
-            .product(name: "BlockKitTesting", package: "topnotch"),
+            .product(name: "BlockKit", package: "mantel"),
+            .product(name: "BlockKitTesting", package: "mantel"),
         ]),
     ]
 )
 ```
 
-The package is named `topnotch` after the repository; pass that as
+The package is named `mantel` after the repository; pass that as
 `package:`. It has three products: `BlockKit` (what a block writes
 against), `BlockKitTesting` (a fake app for tests) and `BlockWire` (the
 protocol types, which `BlockKit` already brings in).
 
 ## 2. Copy Hello
 
-Copy two files from this folder of the TopNotch repository:
+Copy two files from this folder of the Mantel repository:
 
 - `Examples/HelloBlock/Hello.swift` to `Sources/MyHelloCore/Hello.swift`;
 - `Examples/HelloBlock/manifest.json` to `manifest.json`, at the root of
@@ -88,7 +88,7 @@ await Hello.main()
 
 In `manifest.json`, set `"id": "my-hello"`, `"name": "My Hello"` and
 `"executable": "MyHello"` (the product name). Give every block its own id
-and name: `hello` is the example's id, and TopNotch shows the example as
+and name: `hello` is the example's id, and Mantel shows the example as
 installed while any block with that id is present.
 
 How a block is written:
@@ -137,22 +137,22 @@ swift test
 
 ## 4. Package and sign
 
-`swift build` checks the kit out into `.build/checkouts/topnotch`. The
+`swift build` checks the kit out into `.build/checkouts/mantel`. The
 packaging script is there:
 
 ```sh
 swift build --product MyHello
-.build/checkouts/topnotch/Packages/BlockKit/Scripts/package-block.sh \
+.build/checkouts/mantel/Packages/BlockKit/Scripts/package-block.sh \
   .build/debug/MyHello manifest.json build
 ```
 
-This makes `build/MyHello.topblock`, a signed bundle named after the
+This makes `build/MyHello.mantelblock`, a signed bundle named after the
 manifest's `name` without spaces:
 
 ```
-MyHello.topblock/Contents/Info.plist
-MyHello.topblock/Contents/MacOS/MyHello
-MyHello.topblock/Contents/Resources/manifest.json
+MyHello.mantelblock/Contents/Info.plist
+MyHello.mantelblock/Contents/MacOS/MyHello
+MyHello.mantelblock/Contents/Resources/manifest.json
 ```
 
 The script signs with the identity in `BLOCK_SIGN_IDENTITY`. List yours
@@ -160,7 +160,7 @@ with `security find-identity -v -p codesigning`:
 
 ```sh
 BLOCK_SIGN_IDENTITY="Apple Development: <your name> (<id>)" \
-  .build/checkouts/topnotch/Packages/BlockKit/Scripts/package-block.sh \
+  .build/checkouts/mantel/Packages/BlockKit/Scripts/package-block.sh \
   .build/debug/MyHello manifest.json build
 ```
 
@@ -174,11 +174,11 @@ builds.
 
 ## 5. Run it without installing
 
-In a TopNotch checkout:
+In a Mantel checkout:
 
 ```sh
 make build
-open build/Build/Products/Debug/TopNotch.app --args -devBlock ~/dev/my-hello/build/MyHello.topblock
+open build/Build/Products/Debug/Mantel.app --args -devBlock ~/dev/my-hello/build/MyHello.mantelblock
 ```
 
 The block runs from where it is, sandboxed, with no signature check and no
@@ -189,10 +189,10 @@ approval. Build, package and relaunch to try a change.
 1. Copy the package into the Blocks folder:
 
    ```sh
-   cp -R build/MyHello.topblock ~/Library/Application\ Support/TopNotch/Blocks/
+   cp -R build/MyHello.mantelblock ~/Library/Application\ Support/Mantel/Blocks/
    ```
 
-2. Quit TopNotch and open it again.
+2. Quit Mantel and open it again.
 3. Open Settings > Blocks. The block waits as New. Choose "Review…": the
    review sheet shows its signer, the events it listens to and what it may
    do. Choose "Approve and Turn On", and it runs.
@@ -200,7 +200,7 @@ approval. Build, package and relaunch to try a change.
 "Install Block…" on the same page does steps 1 to 3 in one go: it shows
 the same sheet and copies the package for you.
 
-TopNotch runs an installed block only with the owner's approval of its
+Mantel runs an installed block only with the owner's approval of its
 exact build, checked before every start. A package that changes after its
 approval waits as Changed. A package changed after signing is refused.
 
@@ -211,7 +211,7 @@ else, or an unsigned update of a signed block, is refused. To change
 signers, remove the block and install it again.
 
 "Remove" deletes the package, its data folder
-(`~/Library/Application Support/TopNotch/BlockData/<id>`) and its
+(`~/Library/Application Support/Mantel/BlockData/<id>`) and its
 settings.
 
 ## The manifest
@@ -267,7 +267,7 @@ The review sheet shows the owner what each listed event reveals. The
 payloads and the rules for a new event are in PROTOCOL.md under "Events".
 
 A block that renames a screenshot sets the extended attribute
-`com.topnotch.original-name` on the file, to the old name. A file with
+`com.mantel.original-name` on the file, to the old name. A file with
 this attribute is not reported as a new screenshot, so the renamed file
 does not come back as `screenshotCaptured`.
 
@@ -280,9 +280,9 @@ open. There is no network except the gate to the hosts in `hosts`, no name
 lookups, no Apple events, no preference writes, and no writes outside the
 block's data folder and the temporary folder.
 
-TopNotch's own folders are closed whatever the tokens: the support folder
-(`~/Library/Application Support/TopNotch`), the app's preferences, and the
-`TopNotch` folder inside the temporary folder. Only the block's own
+Mantel's own folders are closed whatever the tokens: the support folder
+(`~/Library/Application Support/Mantel`), the app's preferences, and the
+`Mantel` folder inside the temporary folder. Only the block's own
 folders in them stay open.
 
 The sandbox stops the plain cases, such as sending a file away or writing
@@ -297,6 +297,6 @@ macOS 26. If Apple removes it, the sandbox needs another mechanism.
 ## More examples
 
 The owner's blocks (Now Playing, Screenshot Names, Shelf) are in
-[topnotch-blocks](https://github.com/ytchou/topnotch-blocks). Each follows
+[mantel-blocks](https://github.com/ytchou/mantel-blocks). Each follows
 the layout above: a `<Name>Core` library, a `<Name>` executable, and tests
 over `FakeHost`.

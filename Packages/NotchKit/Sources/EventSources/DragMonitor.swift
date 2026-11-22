@@ -23,7 +23,7 @@ public final class DragMonitor {
     private(set) var globalMonitor: Any?
     private(set) var localMonitor: Any?
     private var timer: Timer?
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "drag")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "drag")
 
     private static let pollInterval: TimeInterval = 0.05
     private static let promiseTypes = Set(NSFilePromiseReceiver.readableDraggedTypes)

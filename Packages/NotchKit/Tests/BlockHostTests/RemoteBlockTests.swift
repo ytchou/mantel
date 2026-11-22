@@ -346,19 +346,19 @@ struct RemoteBlockTests {
 
     /// A real file in the block's own temporary folder, which its sandbox reads.
     private func temporaryFile(_ name: String, in rig: Rig) throws -> String {
-        let url = rig.block.temporaryFolder.appending(path: "topnotch-paths-\(UUID().uuidString)-\(name)")
+        let url = rig.block.temporaryFolder.appending(path: "mantel-paths-\(UUID().uuidString)-\(name)")
         try Data("x".utf8).write(to: url)
         return url.path
     }
 
-    /// The app's `TopNotch` temporary subtree holds other blocks' files and
+    /// The app's `Mantel` temporary subtree holds other blocks' files and
     /// the drop folder: closed. The block's own temporary folder inside it is
     /// open. The rest of the shared temporary folder is not readable to the
     /// sandbox, so it is not shown either.
     @Test func readablePathsTakeTheBlocksOwnTemporaryFolderNotOtherBlocks() throws {
         let rig = Rig()
         let own = try temporaryFile("own.png", in: rig)
-        let otherBlock = rig.sharedTemporaryFolder.appending(path: "TopNotch/Blocks/other")
+        let otherBlock = rig.sharedTemporaryFolder.appending(path: "Mantel/Blocks/other")
         try FileManager.default.createDirectory(at: otherBlock, withIntermediateDirectories: true)
         let shared = otherBlock.appending(path: "other-block.png")
         try Data("x".utf8).write(to: shared)
@@ -368,14 +368,14 @@ struct RemoteBlockTests {
         try FileManager.default.createDirectory(at: dropped.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("x".utf8).write(to: dropped)
 
-        #expect(rig.block.temporaryFolder.path.hasPrefix(rig.sharedTemporaryFolder.appending(path: "TopNotch/Blocks/hello").path))
+        #expect(rig.block.temporaryFolder.path.hasPrefix(rig.sharedTemporaryFolder.appending(path: "Mantel/Blocks/hello").path))
         #expect(rig.block.readablePaths([shared.path, dropped.path, own, otherApp.path]) == [own])
 
         // `files.read` opens the home folder, not the app's temporary subtree.
         var reading = helloManifest
         reading.access = [.filesRead]
         let readingRig = Rig(manifest: reading)
-        let readingShared = readingRig.sharedTemporaryFolder.appending(path: "TopNotch/Drops/UUID-1/drop.png")
+        let readingShared = readingRig.sharedTemporaryFolder.appending(path: "Mantel/Drops/UUID-1/drop.png")
         let readingOwn = try temporaryFile("own.png", in: readingRig)
         #expect(readingRig.block.readablePaths([readingShared.path, "/etc/hosts", readingOwn]) == ["/etc/hosts", readingOwn])
     }
@@ -425,13 +425,13 @@ struct RemoteBlockTests {
 
     /// A file in the home folder, outside every rig's folders. It need not exist.
     private var homeFile: String {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Documents/topnotch-test-\(UUID().uuidString).txt").path
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Documents/mantel-test-\(UUID().uuidString).txt").path
     }
 
-    /// A2: `files.read` never shows TopNotch's support folder (the approvals,
+    /// A2: `files.read` never shows Mantel's support folder (the approvals,
     /// other blocks' data), and no block shows the shared temporary folder.
     @Test func previewAndDragOutFollowTheSandboxRule() async throws {
-        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
+        let support = FileManager.default.temporaryDirectory.appending(path: "mantel-support-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: support) }
         let approvals = support.appending(path: "Approvals.json")
         let otherData = support.appending(path: "BlockData/other/secret.txt")
@@ -443,15 +443,15 @@ struct RemoteBlockTests {
         let runtime = NotchRuntime()
         let launcher = FakeLauncher()
         let block = RemoteBlock(
-            manifest: reading, packageURL: URL(fileURLWithPath: "/tmp/Hello.topblock"),
-            source: .development(path: "/tmp/Hello.topblock"),
+            manifest: reading, packageURL: URL(fileURLWithPath: "/tmp/Hello.mantelblock"),
+            source: .development(path: "/tmp/Hello.mantelblock"),
             dataFolder: support.appending(path: "BlockData/hello"), owner: { runtime.state.owner },
             launcher: launcher.launcher, defaults: testDefaults(),
             sharedTemporaryFolder: Rig.newSharedTemporaryFolder(), supportRoot: support
         )
         // The support folder sits inside the "home" folder, as in the app.
         block.homeFolder = support.deletingLastPathComponent()
-        let note = support.deletingLastPathComponent().appending(path: "topnotch-note-\(UUID().uuidString).txt")
+        let note = support.deletingLastPathComponent().appending(path: "mantel-note-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: note) }
         try Data("x".utf8).write(to: note)
 
@@ -498,7 +498,7 @@ struct RemoteBlockTests {
     /// the folder changes, the next screenshot restarts the block first, and
     /// the new process gets the event live after its `welcome`.
     @Test func movedScreenshotFolderRestartsTheBlockBeforeTheEvent() async throws {
-        final class Folder { var url = URL(fileURLWithPath: "/tmp/topnotch-shots-a") }
+        final class Folder { var url = URL(fileURLWithPath: "/tmp/mantel-shots-a") }
         let folder = Folder()
         var manifest = helloManifest
         manifest.events = ["screenshotCaptured"]
@@ -515,7 +515,7 @@ struct RemoteBlockTests {
         _ = await first.waitFor { if case .event = $0 { true } else { false } }
         #expect(launcher.processes.count == 1, "same folder: no restart")
 
-        folder.url = URL(fileURLWithPath: "/tmp/topnotch-shots-b")
+        folder.url = URL(fileURLWithPath: "/tmp/mantel-shots-b")
         let shot = folder.url.appending(path: "b.png")
         runtime.publish(ScreenshotCaptured(url: shot, createdAt: Date()))
         #expect(launcher.processes.count == 2)

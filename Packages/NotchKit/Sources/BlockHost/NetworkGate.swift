@@ -99,7 +99,7 @@ final class NetworkGate: @unchecked Sendable {
     let rules: [HostRule]
     private let connector: Connector
     private let queue: DispatchQueue
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "gate")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "gate")
 
     private var listener: NWListener?
     /// Every connection the gate holds, from either side, until it ends.
@@ -113,7 +113,7 @@ final class NetworkGate: @unchecked Sendable {
         self.blockID = blockID
         rules = hosts.map(HostRule.init)
         self.connector = connector
-        queue = DispatchQueue(label: "dev.topnotch.gate.\(blockID)")
+        queue = DispatchQueue(label: "dev.mantel.gate.\(blockID)")
     }
 
     func allows(_ host: String) -> Bool {

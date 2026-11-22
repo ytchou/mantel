@@ -165,7 +165,7 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case differentSigner(installed: String, found: String)
     /// The package is in the old flat format, from before blocks were bundles.
     case oldPackageFormat
-    /// The manifest asks for access this version of TopNotch does not know.
+    /// The manifest asks for access this version of Mantel does not know.
     case unknownAccess(String)
     /// The manifest asks for `network` but names no `hosts`.
     case networkWithoutHosts
@@ -183,9 +183,9 @@ public enum BlockInstallError: LocalizedError, Equatable {
             let supportedText = supported.lowerBound == supported.upperBound
                 ? "supports contract \(supported.lowerBound)"
                 : "supports contracts \(supported.lowerBound) to \(supported.upperBound)"
-            return "This block was built for contract \(found), but this version of TopNotch \(supportedText). Ask the block's author for a matching version, or update TopNotch."
+            return "This block was built for contract \(found), but this version of Mantel \(supportedText). Ask the block's author for a matching version, or update Mantel."
         case let .reservedID(id):
-            return "The block id \"\(id)\" is reserved by TopNotch. Ask the block's author to choose a different id."
+            return "The block id \"\(id)\" is reserved by Mantel. Ask the block's author to choose a different id."
         case let .invalidID(id):
             return "The block id \"\(id)\" is not valid. Ids use only lowercase letters, digits and hyphens. Ask the block's author to fix the id."
         case let .executableOutsidePackage(path):
@@ -193,17 +193,17 @@ public enum BlockInstallError: LocalizedError, Equatable {
         case let .executableMissing(path):
             return "The block's program \"\(path)\" is missing or cannot be run. Ask the block's author for a complete package."
         case let .unknownEvent(name):
-            return "The block listens to \"\(name)\", which this version of TopNotch does not know. Update TopNotch, or ask the block's author for a matching version."
+            return "The block listens to \"\(name)\", which this version of Mantel does not know. Update Mantel, or ask the block's author for a matching version."
         case let .invalidSetting(key):
             return "The block's setting \"\(key)\" is not valid. Ask the block's author to fix the package."
         case let .unreadableManifest(detail):
-            return "The block's manifest.json could not be read (\(detail)). Check that you chose a .topblock package, or ask the block's author for a new copy."
+            return "The block's manifest.json could not be read (\(detail)). Check that you chose a .mantelblock package, or ask the block's author for a new copy."
         case let .notRemovable(id):
-            return "The block \"\(id)\" comes with TopNotch and cannot be removed. Turn it off on the Blocks page instead."
+            return "The block \"\(id)\" comes with Mantel and cannot be removed. Turn it off on the Blocks page instead."
         case let .copyFailed(detail):
-            return "TopNotch could not copy or delete the block's files (\(detail)). Check that you have free disk space and access to the folder, then try again."
+            return "Mantel could not copy or delete the block's files (\(detail)). Check that you have free disk space and access to the folder, then try again."
         case let .idInUse(id):
-            return "A block with the id \"\(id)\" is already running in TopNotch, for example as the development block. Quit TopNotch and open it without that block, or ask the block's author to choose a different id."
+            return "A block with the id \"\(id)\" is already running in Mantel, for example as the development block. Quit Mantel and open it without that block, or ask the block's author to choose a different id."
         case let .differentBlock(expected, found):
             return "This package is the block \"\(found)\", not \"\(expected)\", so it cannot update \"\(expected)\". Choose the package of \"\(expected)\", or use Install Block\u{2026} to add \"\(found)\"."
         case let .badSignature(detail):
@@ -211,11 +211,11 @@ public enum BlockInstallError: LocalizedError, Equatable {
         case let .differentSigner(installed, found):
             return "This update is signed by \"\(found)\", but the installed block is signed by \"\(installed)\", so it was not installed. Get the update from the block's original author, or remove the block first if you trust the new signer."
         case .oldPackageFormat:
-            return "This block uses the old package format, which this version of TopNotch no longer runs. Ask the block's author to package it again with the current package-block.sh."
+            return "This block uses the old package format, which this version of Mantel no longer runs. Ask the block's author to package it again with the current package-block.sh."
         case let .unknownAccess(token):
-            return "The block asks for access \"\(token)\", which this version of TopNotch does not know. Update TopNotch, or ask the block's author for a matching version."
+            return "The block asks for access \"\(token)\", which this version of Mantel does not know. Update Mantel, or ask the block's author for a matching version."
         case .networkWithoutHosts:
-            return "The block asks to use the network but does not name the hosts it reaches, so TopNotch cannot limit it. Ask the block's author to list its hosts in the manifest."
+            return "The block asks to use the network but does not name the hosts it reaches, so Mantel cannot limit it. Ask the block's author to list its hosts in the manifest."
         case let .invalidHosts(detail):
             return "The block's list of hosts cannot be used: \(detail). Ask the block's author to fix the manifest."
         case let .nothingToApprove(id):

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `manifest.json` at the top of a `<Name>.topblock` folder.
+/// The `manifest.json` at the top of a `<Name>.mantelblock` folder.
 ///
 /// Decoding checks the shape only: required fields are present and have the
 /// right type. The app checks the meaning (id rules, contract range,
