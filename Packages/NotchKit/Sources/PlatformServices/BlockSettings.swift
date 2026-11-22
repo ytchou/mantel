@@ -45,7 +45,7 @@ public final class BlockSettings {
     public func isEnabled(_ id: BlockID) -> Bool {
         _ = EnablementSignal.shared.revision
         // `bool(forKey:)`, not a cast: a launch argument such as
-        // `-block.shelf.enabled NO` arrives as the string "NO".
+        // `-block.hello.enabled NO` arrives as the string "NO".
         guard defaults.object(forKey: Self.key(id)) != nil else { return true }
         return defaults.bool(forKey: Self.key(id))
     }
@@ -65,8 +65,8 @@ public final class BlockSettings {
     /// The blocks' rank, highest first, as stored in "block.order". Ids of
     /// blocks that are not registered may appear; registered blocks missing
     /// from it rank last. Empty with nothing stored: no id is ranked in code,
-    /// so the blocks keep the order they were added in (bundled blocks by
-    /// package name, then installed blocks in install order).
+    /// so the blocks keep the order they were added in (installed blocks in
+    /// install order, then the development block).
     public var order: [BlockID] {
         (defaults.stringArray(forKey: Self.orderKey) ?? []).map { BlockID(rawValue: $0) }
     }

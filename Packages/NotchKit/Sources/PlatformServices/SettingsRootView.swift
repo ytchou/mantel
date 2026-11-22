@@ -9,24 +9,29 @@ public struct SettingsRootView: View {
     private let settings: BlockSettings
     private let installer: (any BlockInstalling)?
     private let consent: ScreenshotFolderConsent?
+    private let example: ExampleOffer?
     @State private var selection: SettingsPane?
 
     /// - Parameters:
     ///   - installer: installs, updates and removes blocks from the
     ///     Blocks page. Nil hides those buttons.
     ///   - consent: the screenshot folder answer, see `SettingsWindowController`.
+    ///   - exampleURL: the example block's package; with an installer, the
+    ///     empty Blocks page offers it.
     public init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil,
-                consent: ScreenshotFolderConsent? = nil) {
-        self.init(runtime: runtime, settings: settings, installer: installer, consent: consent, selection: .general)
+                consent: ScreenshotFolderConsent? = nil, exampleURL: URL? = nil) {
+        self.init(runtime: runtime, settings: settings, installer: installer, consent: consent, exampleURL: exampleURL,
+                  selection: .general)
     }
 
     /// Opens on a chosen pane. Internal, for checking a pane without clicking.
     init(runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)? = nil,
-         consent: ScreenshotFolderConsent? = nil, selection: SettingsPane) {
+         consent: ScreenshotFolderConsent? = nil, exampleURL: URL? = nil, selection: SettingsPane) {
         self.runtime = runtime
         self.settings = settings
         self.installer = installer
         self.consent = consent
+        example = ExampleOffer(url: exampleURL, installer: installer)
         _selection = State(initialValue: selection)
     }
 
@@ -53,7 +58,7 @@ public struct SettingsRootView: View {
         } detail: {
             switch selection {
             case .blocks:
-                BlocksPane(entries: entries, runtime: runtime, settings: settings, installer: installer)
+                BlocksPane(entries: entries, runtime: runtime, settings: settings, installer: installer, example: example)
             case let .block(id):
                 if let block = runtime.blocks.first(where: { $0.id == id }) {
                     BlockPane(block: block, runtime: runtime, settings: settings)
@@ -149,6 +154,14 @@ struct BlockEntry: Identifiable {
         "Blocks live in " + abbreviate(folder.path, home: home)
     }
 
+    /// What the Blocks page offers in place of the list when it has no
+    /// entry, running, waiting for review or refused; nil while it has any.
+    static func emptyActions(_ entries: [BlockEntry], installer: (any BlockInstalling)?,
+                             example: ExampleOffer?) -> [EmptyBlocksAction]? {
+        guard entries.isEmpty else { return nil }
+        return (installer == nil ? [] : [.installBlock]) + (example == nil ? [] : [.installExample])
+    }
+
     /// The entries listed in the sidebar: every block that can run, not
     /// those waiting for review.
     static func sidebar(_ entries: [BlockEntry]) -> [BlockEntry] {
@@ -202,7 +215,7 @@ struct BlockEntry: Identifiable {
         let waiting = review != nil
         // A block waiting for review shows only its package's path.
         let source: String? = switch info.source {
-        case .builtIn, .bundled: waiting ? nil : "Built in"
+        case .builtIn: waiting ? nil : "Built in"
         case let .installed(from): (waiting ? "" : "Installed from ") + abbreviated(from)
         case let .development(path): (waiting ? "" : "Development · ") + abbreviated(path)
         }
@@ -244,6 +257,19 @@ struct BlockEntry: Identifiable {
 
 // MARK: - Blocks page
 
+/// A button of the empty Blocks page.
+enum EmptyBlocksAction: Equatable {
+    case installBlock
+    case installExample
+
+    var title: String {
+        switch self {
+        case .installBlock: "Install Block\u{2026}"
+        case .installExample: "Install the Example Block"
+        }
+    }
+}
+
 /// Every registered block with what it does, where it comes from, what
 /// starts it, what it needs, and its on/off switch. With an installer, blocks
 /// the user installed can be updated and removed, and new ones installed.
@@ -252,22 +278,85 @@ private struct BlocksPane: View {
     let runtime: NotchRuntime
     let settings: BlockSettings
     let installer: (any BlockInstalling)?
+    let example: ExampleOffer?
 
-    /// The package chosen with "Install Block…" or "Update…", waiting for confirmation.
+    /// The package chosen with "Install Block…", "Install the Example Block"
+    /// or "Update…", waiting for confirmation.
     @State private var pending: PendingInstall?
     /// A refusal or failure, shown in an alert.
     @State private var failure: Failure?
     /// The block waiting for the user to confirm Remove.
     @State private var removing: BlockEntry?
+    @FocusState private var exampleFocused: Bool
 
-    init(entries: [BlockEntry], runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)?) {
+    init(entries: [BlockEntry], runtime: NotchRuntime, settings: BlockSettings, installer: (any BlockInstalling)?,
+         example: ExampleOffer?) {
         self.entries = entries
         self.runtime = runtime
         self.settings = settings
         self.installer = installer
+        self.example = example
     }
 
     var body: some View {
+        Group {
+            if let actions = BlockEntry.emptyActions(entries, installer: installer, example: example) {
+                empty(actions)
+            } else {
+                list
+            }
+        }
+        .navigationTitle("Blocks")
+        .sheet(item: $pending) { pending in
+            BlockInstallSheet(summary: pending.summary, review: pending.isReview) {
+                self.pending = nil
+                confirm(pending)
+            } cancel: {
+                self.pending = nil
+            }
+        }
+        .alert(failure?.title ?? "", isPresented: Binding(
+            get: { failure != nil },
+            set: { if !$0 { failure = nil } }
+        ), presenting: failure) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { failure in
+            Text(failure.message)
+        }
+        .alert(removing.map { "Remove \($0.title)?" } ?? "", isPresented: Binding(
+            get: { removing != nil },
+            set: { if !$0 { removing = nil } }
+        ), presenting: removing) { entry in
+            Button("Remove", role: .destructive) { remove(entry.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Its package, settings and data are deleted.")
+        }
+    }
+
+    /// No block at all: what a block is, where packages go, and how to add one.
+    private func empty(_ actions: [EmptyBlocksAction]) -> some View {
+        ContentUnavailableView {
+            Label("No Blocks Yet", systemImage: "square.grid.2x2")
+        } description: {
+            Text("A block adds one thing to your notch. Put a .topblock package in ~/Library/Application Support/TopNotch/Blocks, or install one here.")
+        } actions: {
+            HStack {
+                ForEach(actions, id: \.self) { action in
+                    switch action {
+                    case .installBlock:
+                        Button(action.title) { choosePackage() }
+                    case .installExample:
+                        Button(action.title) { chooseExample() }
+                            .focused($exampleFocused)
+                    }
+                }
+            }
+        }
+        .defaultFocus($exampleFocused, true)
+    }
+
+    private var list: some View {
         Form {
             Section {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
@@ -327,37 +416,6 @@ private struct BlocksPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Blocks")
-        .sheet(item: $pending) { pending in
-            BlockInstallSheet(summary: pending.summary, review: pending.isReview) {
-                self.pending = nil
-                // Only the build the sheet showed.
-                let hash = pending.summary.packageHash
-                switch pending.request {
-                case let .install(url): install(url, expectedHash: hash)
-                case let .review(id): approve(id, expectedHash: hash)
-                }
-            } cancel: {
-                self.pending = nil
-            }
-        }
-        .alert(failure?.title ?? "", isPresented: Binding(
-            get: { failure != nil },
-            set: { if !$0 { failure = nil } }
-        ), presenting: failure) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { failure in
-            Text(failure.message)
-        }
-        .alert(removing.map { "Remove \($0.title)?" } ?? "", isPresented: Binding(
-            get: { removing != nil },
-            set: { if !$0 { removing = nil } }
-        ), presenting: removing) { entry in
-            Button("Remove", role: .destructive) { remove(entry.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its package, settings and data are deleted.")
-        }
     }
 
     private func row(_ entry: BlockEntry) -> some View {
@@ -438,11 +496,24 @@ private struct BlocksPane: View {
         }
     }
 
-    private func approve(_ id: BlockID, expectedHash: String) {
+    /// Installs or approves only the build the sheet showed.
+    private func confirm(_ pending: PendingInstall) {
+        guard let installer else { return }
         do {
-            try installer?.approve(id, expectedHash: expectedHash)
+            try pending.confirm(with: installer)
         } catch {
-            failure = Failure(title: "The block was not approved", message: error.localizedDescription)
+            failure = Failure(title: pending.isReview ? "The block was not approved" : "The block was not installed",
+                              message: error.localizedDescription)
+        }
+    }
+
+    /// Reads the example block for the sheet, as `choosePackage` reads a chosen one.
+    private func chooseExample() {
+        guard let example else { return }
+        do {
+            pending = try example.choose()
+        } catch {
+            failure = Failure(title: "The block cannot be installed", message: error.localizedDescription)
         }
     }
 
@@ -459,19 +530,9 @@ private struct BlocksPane: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let summary = try installer.inspect(url)
-            if let refusal = summary.refusal(updating: id) { throw refusal }
-            pending = PendingInstall(request: .install(url), summary: summary)
+            pending = try PendingInstall.install(url, updating: id, with: installer)
         } catch {
             failure = Failure(title: "The block cannot be installed", message: error.localizedDescription)
-        }
-    }
-
-    private func install(_ url: URL, expectedHash: String) {
-        do {
-            try installer?.install(url, expectedHash: expectedHash)
-        } catch {
-            failure = Failure(title: "The block was not installed", message: error.localizedDescription)
         }
     }
 
@@ -499,10 +560,11 @@ private struct Failure {
 }
 
 /// A package the user chose, or one waiting for review, with what it says
-/// about itself.
-private struct PendingInstall: Identifiable {
+/// about itself. Every install, from "Install Block…", "Update…" or
+/// "Install the Example Block", is read by `install` and confirmed by `confirm`.
+struct PendingInstall: Identifiable {
     enum Request: Hashable {
-        /// From "Install Block…" or "Update…": copied in when confirmed.
+        /// From "Install Block…", "Install the Example Block" or "Update…": copied in when confirmed.
         case install(URL)
         /// From "Review…": approved where it is when confirmed.
         case review(BlockID)
@@ -512,6 +574,25 @@ private struct PendingInstall: Identifiable {
     let summary: BlockPackageSummary
     var id: Request { request }
     var isReview: Bool { if case .review = request { true } else { false } }
+
+    /// Reads the package at `url` for the sheet, or throws why it is refused.
+    /// With `id`, from a row's "Update…", only that block's package is accepted.
+    @MainActor
+    static func install(_ url: URL, updating id: BlockID? = nil, with installer: any BlockInstalling) throws -> PendingInstall {
+        let summary = try installer.inspect(url)
+        if let refusal = summary.refusal(updating: id) { throw refusal }
+        return PendingInstall(request: .install(url), summary: summary)
+    }
+
+    /// Installs or approves only the build the sheet showed.
+    @MainActor
+    func confirm(with installer: any BlockInstalling) throws {
+        let hash = summary.packageHash
+        switch request {
+        case let .install(url): try installer.install(url, expectedHash: hash)
+        case let .review(id): try installer.approve(id, expectedHash: hash)
+        }
+    }
 }
 
 // MARK: - Block pane
@@ -563,8 +644,11 @@ private struct GeneralPane: View {
                 }
             }
 
-            Section("Permissions") {
-                ForEach(PermissionRow.rows(in: runtime), id: \.self) { $0.view(consent: consent) }
+            let rows = PermissionRow.rows(in: runtime)
+            if !rows.isEmpty {
+                Section("Permissions") {
+                    ForEach(rows, id: \.self) { $0.view(consent: consent) }
+                }
             }
 
             Section("Logs") {

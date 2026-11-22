@@ -8,15 +8,13 @@ import NotchCore
 @Suite(.serialized)
 struct BlockStoreTests {
     private func store(
-        _ runtime: NotchRuntime, bundledRoot: URL? = nil, blocksRoot: URL? = nil, dataRoot: URL? = nil,
-        oldDataRoot: URL? = nil, isRegistered: @escaping @MainActor (BlockID) -> Bool = { _ in false }
+        _ runtime: NotchRuntime, blocksRoot: URL? = nil, dataRoot: URL? = nil,
+        isRegistered: @escaping @MainActor (BlockID) -> Bool = { _ in false }
     ) -> BlockStore {
         let store = BlockStore(
             owner: { runtime.state.owner },
             blocksRoot: blocksRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)"),
             dataRoot: dataRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
-            oldDataRoot: oldDataRoot,
-            bundledRoot: bundledRoot,
             defaults: testDefaults(),
             isRegistered: isRegistered
         )
@@ -41,64 +39,30 @@ struct BlockStoreTests {
         return folder
     }
 
-    private func bundledPackage(id: String, name: String, in root: URL) throws {
-        try fixturePackage(id: id, name: name, in: root)
-    }
-
-    @Test func bundledBlocksComeFirstWithSourceBundled() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-bundled-\(UUID().uuidString)/Blocks")
-        // A reserved id is allowed for a bundled package: now-playing ships this way.
-        try bundledPackage(id: "nowplaying", name: "NowPlaying", in: root)
-        try bundledPackage(id: "alpha", name: "Alpha", in: root)
+    /// The app at launch: the installed blocks by id, each waiting for the
+    /// owner's review without an approval, then the development block.
+    @Test func installedBlocksComeBeforeTheDevelopmentBlock() throws {
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        try fixturePackage(id: "beta", name: "Beta", in: blocks)
+        try fixturePackage(id: "alpha", name: "Alpha", in: blocks)
         // Not a package: ignored.
-        try FileManager.default.createDirectory(at: root.appending(path: "Notes"), withIntermediateDirectories: true)
-        // A package that does not validate: logged and left out.
-        let broken = root.appending(path: "Broken.topblock")
-        try writeBrokenManifest(in: broken, "{}")
+        try FileManager.default.createDirectory(at: blocks.appending(path: "Notes"), withIntermediateDirectories: true)
         let development = try fixturePackage()
 
-        let standIns = store(NotchRuntime(), bundledRoot: root).standIns(developmentPath: development.path)
+        let standIns = store(NotchRuntime(), blocksRoot: blocks).standIns(developmentPath: development.path)
 
-        #expect(standIns.map(\.id) == ["alpha", "nowplaying", "fixture"])
-        #expect(standIns.map(\.info.source) == [.bundled, .bundled, .development(path: development.path)])
-        #expect((standIns.first as? RemoteBlock)?.packageURL.lastPathComponent == "Alpha.topblock")
+        #expect(standIns.map(\.id) == ["alpha", "beta", "fixture"])
+        #expect(standIns.prefix(2).allSatisfy { $0 is PendingBlock })
+        #expect(standIns.last?.info.source == .development(path: development.path))
     }
 
-    /// The app at launch: the three bundled blocks, registered in the order
-    /// found, which is the order with nothing stored on the Blocks page (no
-    /// id is ranked in code). Shelf and Rename ran inside the app before:
-    /// their old data folders move to `BlockData` now that bundled stand-ins
-    /// have their ids.
-    @Test func bundledBlocksRegisterByPackageName() throws {
-        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
-        let root = support.appending(path: "Bundled/Blocks")
-        for (id, name) in [("shelf", "Shelf"), ("nowplaying", "NowPlaying"), ("rename", "Rename")] {
-            try bundledPackage(id: id, name: name, in: root)
-        }
-        for folder in ["Shelf", "Rename"] {
-            try FileManager.default.createDirectory(at: support.appending(path: folder), withIntermediateDirectories: true)
-            try Data(folder.utf8).write(to: support.appending(path: "\(folder)/state"))
-        }
-        let runtime = NotchRuntime()
-
-        let standIns = store(runtime, bundledRoot: root, dataRoot: support.appending(path: "BlockData"), oldDataRoot: support)
-            .standIns(developmentPath: nil)
-        // By folder name, as found.
-        #expect(standIns.map(\.id) == ["nowplaying", "rename", "shelf"])
-        #expect(standIns.allSatisfy { $0.info.source == .bundled })
-
-        for block in standIns { runtime.register(block, enabled: false) }
-        #expect(runtime.blocks.map(\.id) == ["nowplaying", "rename", "shelf"])
-
-        #expect(try Data(contentsOf: support.appending(path: "BlockData/shelf/state")) == Data("Shelf".utf8))
-        #expect(try Data(contentsOf: support.appending(path: "BlockData/rename/state")) == Data("Rename".utf8))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Shelf").path))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Rename").path))
-    }
-
-    @Test func missingBundledFolderGivesNone() {
-        let store = store(NotchRuntime(), bundledRoot: URL(fileURLWithPath: "/no/such/Blocks"))
-        #expect(store.standIns(developmentPath: nil).isEmpty)
+    /// The app ships with no blocks: with nothing installed and no
+    /// development path, there is nothing to register.
+    @Test func noInstalledBlocksAndNoDevelopmentPathGiveNone() throws {
+        let empty = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(store(NotchRuntime(), blocksRoot: empty).standIns(developmentPath: nil).isEmpty)
+        #expect(store(NotchRuntime(), blocksRoot: URL(fileURLWithPath: "/no/such/Blocks")).standIns(developmentPath: nil).isEmpty)
     }
 
     @Test func developmentPathGivesOneStandIn() throws {
@@ -151,15 +115,16 @@ struct BlockStoreTests {
     // MARK: Ids are unique
 
     @Test func laterDuplicateIdIsSkipped() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "topnotch-bundled-\(UUID().uuidString)/Blocks")
-        try bundledPackage(id: "fixture", name: "Fixture", in: root)
-        // The same id again, run as the development block: the bundled one wins.
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        try fixturePackage(id: "fixture", name: "Fixture", in: blocks)
+        // The same id again, run as the development block: the installed one wins.
         let development = try fixturePackage()
 
-        let standIns = store(NotchRuntime(), bundledRoot: root).standIns(developmentPath: development.path)
+        let standIns = store(NotchRuntime(), blocksRoot: blocks).standIns(developmentPath: development.path)
 
         #expect(standIns.map(\.id) == ["fixture"])
-        #expect(standIns.map(\.info.source) == [.bundled])
+        let installed = try #require(standIns.first as? PendingBlock)
+        #expect(installed.info.source == .installed(from: installed.packageURL.path))
     }
 
     @Test func idAlreadyRegisteredIsSkipped() throws {
@@ -221,52 +186,6 @@ struct BlockStoreTests {
         #expect(standIns.first?.title == "broken")
         #expect(store.canRemove("old"))
         #expect(!store.canTurnOn("old"))
-    }
-
-    // MARK: Old data folders
-
-    @Test func oldDataFoldersMoveOnce() throws {
-        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
-        let dataRoot = support.appending(path: "BlockData")
-        for folder in ["Shelf", "Rename"] {
-            try FileManager.default.createDirectory(at: support.appending(path: folder), withIntermediateDirectories: true)
-            try Data(folder.utf8).write(to: support.appending(path: "\(folder)/state"))
-        }
-
-        BlockStore.moveOldDataFolders(from: support, to: dataRoot, for: ["shelf", "rename"])
-
-        #expect(try Data(contentsOf: dataRoot.appending(path: "shelf/state")) == Data("Shelf".utf8))
-        #expect(try Data(contentsOf: dataRoot.appending(path: "rename/state")) == Data("Rename".utf8))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Shelf").path))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "Rename").path))
-
-        // The target exists: an old folder that appears again is left alone.
-        try FileManager.default.createDirectory(at: support.appending(path: "Shelf"), withIntermediateDirectories: true)
-        try Data("newer".utf8).write(to: support.appending(path: "Shelf/state"))
-        BlockStore.moveOldDataFolders(from: support, to: dataRoot, for: ["shelf", "rename"])
-        #expect(try Data(contentsOf: dataRoot.appending(path: "shelf/state")) == Data("Shelf".utf8))
-        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Shelf/state").path))
-
-        // A block not found at this launch keeps its folder.
-        let other = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: other.appending(path: "Rename"), withIntermediateDirectories: true)
-        BlockStore.moveOldDataFolders(from: other, to: other.appending(path: "BlockData"), for: ["shelf"])
-        #expect(FileManager.default.fileExists(atPath: other.appending(path: "Rename").path))
-        #expect(!FileManager.default.fileExists(atPath: other.appending(path: "BlockData/rename").path))
-    }
-
-    /// A custom data folder with no old root given moves nothing from its parent folder.
-    @Test func customDataRootWithoutOldRootMovesNothing() throws {
-        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
-        let root = support.appending(path: "Bundled/Blocks")
-        try bundledPackage(id: "shelf", name: "Shelf", in: root)
-        try FileManager.default.createDirectory(at: support.appending(path: "Shelf"), withIntermediateDirectories: true)
-
-        _ = store(NotchRuntime(), bundledRoot: root, dataRoot: support.appending(path: "BlockData"))
-            .standIns(developmentPath: nil)
-
-        #expect(FileManager.default.fileExists(atPath: support.appending(path: "Shelf").path))
-        #expect(!FileManager.default.fileExists(atPath: support.appending(path: "BlockData/shelf").path))
     }
 
     /// A bundle whose `Contents/Resources/manifest.json` is `json`.

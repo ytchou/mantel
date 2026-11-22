@@ -8,7 +8,7 @@ enum ScreenshotCandidate {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "tif", "gif", "bmp", "pdf"]
     /// Set by macOS on every screenshot file. A binary plist holding a boolean.
     static let screenCaptureAttribute = "com.apple.metadata:kMDItemIsScreenCapture"
-    /// Set by the rename block on files it renamed. Such files are not new screenshots.
+    /// Set by a block on screenshot files it gave a new name. Such files are not new screenshots.
     static let originalNameAttribute = "com.topnotch.original-name"
 
     /// A visible image file. macOS writes a hidden `.Screenshot …` file first

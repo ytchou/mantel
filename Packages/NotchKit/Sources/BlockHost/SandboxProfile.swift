@@ -39,7 +39,7 @@ import Foundation
 /// - Quick Look thumbnails ignore the read allow-list: the thumbnail service
 ///   reads the file, not the block, so a block can get a picture of any file
 ///   it can name and learn whether it exists. Its Mach services stay open
-///   because the Shelf block makes thumbnails with `QLThumbnailGenerator`.
+///   because blocks make thumbnails with `QLThumbnailGenerator`.
 ///   Closing it needs thumbnails drawn by the app instead of the block.
 /// - `files.read` opens every mounted volume under `/Volumes` whole, not
 ///   only the home folder: files on external disks must stay readable.

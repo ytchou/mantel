@@ -6,16 +6,13 @@ import NotchCore
 /// refusal is one `BlockInstallError` case whose text tells the owner what
 /// to do next.
 enum PackageValidator {
-    /// Ids that belong to blocks built into the app, the app's own key
-    /// prefixes (`block`, `onboarding`), and prefixes of common UserDefaults
-    /// keys (`com`, `apple`, `ns`) that Remove, which clears `<id>.*`, must
-    /// not touch. Only a bundled package may use one (now-playing ships that way).
-    // Hand-kept: a new built-in block or app key prefix must be added here by
-    // hand. Fine while the built-in blocks are a short list fixed at compile
-    // time; if they grow or become dynamic, build this set from the built-in
-    // blocks' ids plus the fixed prefixes, in one place the app also reads.
+    /// The app's own key prefixes (`block`, `onboarding`), and prefixes of
+    /// common UserDefaults keys (`com`, `apple`, `ns`) that Remove, which
+    /// clears `<id>.*`, must not touch. No package may use one.
+    // Hand-kept: a new app key prefix must be added here by hand. Fine while
+    // the prefixes are a short list fixed at compile time.
     static let reservedIDs: Set<String> = [
-        "shelf", "rename", "nowplaying", "block", "onboarding", "com", "apple", "ns",
+        "block", "onboarding", "com", "apple", "ns",
     ]
 
     /// The package's `manifest.json`: `Contents/Resources/manifest.json`.
@@ -104,12 +101,12 @@ enum PackageValidator {
     }
 
     /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
-    /// source is not bundled.
+    /// source is a package.
     static func checkID(_ id: String, source: BlockSource) throws(BlockInstallError) {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
         guard !id.isEmpty, id.allSatisfy(allowed.contains) else { throw .invalidID(id) }
         switch source {
-        case .builtIn, .bundled:
+        case .builtIn:
             return
         case .installed, .development:
             if reservedIDs.contains(id) { throw .reservedID(id) }

@@ -23,17 +23,19 @@ struct TopNotchApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = NotchRuntime()
     let settings = BlockSettings()
+    // The kit's example block, put there by the "Build example block" phase.
+    // Offered by onboarding and the empty Blocks page; installed, never run from here.
+    private let exampleURL = Bundle.main.resourceURL?.appending(path: "Examples/Hello.topblock")
     private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore,
-                                                                    consent: screenshotConsent)
+                                                                    consent: screenshotConsent, exampleURL: exampleURL)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
-    private lazy var onboarding = OnboardingController(runtime: runtime, consent: screenshotConsent)
+    private lazy var onboarding = OnboardingController(runtime: runtime, consent: screenshotConsent, installer: blockStore,
+                                                       exampleURL: exampleURL)
     private let screenshotConsent = ScreenshotFolderConsent()
     private lazy var blockStore = BlockStore(
         owner: { [runtime] in runtime.state.owner },
         blocksRoot: BlockStore.defaultBlocksRoot,
         dataRoot: BlockStore.defaultDataRoot,
-        // Built into Contents/Resources/Blocks by the "Build bundled blocks" phase.
-        bundledRoot: Bundle.main.resourceURL?.appending(path: "Blocks"),
         // The folder `files.screenshots` opens: the one the screenshot watcher reads.
         screenshotFolder: { ScreenshotFolder.current() },
         defaults: .standard,
@@ -61,8 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        // The bundled blocks (Shelf, Now Playing, Screenshot Names), the
-        // installed blocks, then, with `-devBlock <path to .topblock>`, one
+        // The installed blocks, then, with `-devBlock <path to .topblock>`, one
         // block run from where it is. Every block runs in its own process.
         let blocks = blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         for block in blocks {

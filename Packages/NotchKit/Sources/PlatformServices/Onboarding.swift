@@ -85,7 +85,6 @@ public final class ScreenshotFolderConsent {
 
 enum SystemSettings {
     static let filesAndFolders = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
-    static let appleIntelligence = "x-apple.systempreferences:com.apple.Siri-Settings.extension"
 
     @MainActor
     static func open(_ address: String) {
@@ -99,20 +98,18 @@ enum SystemSettings {
 /// A permission row on the General page and in onboarding.
 enum PermissionRow: Hashable {
     case screenshotFolder
-    case appleIntelligence
 
     /// The rows to show: the screenshot folder only while a turned-on block
     /// listens to `ScreenshotCaptured`, since only then does its source run.
     @MainActor
     static func rows(in runtime: NotchRuntime) -> [PermissionRow] {
-        (runtime.hasSubscribers(for: ScreenshotCaptured.self) ? [.screenshotFolder] : []) + [.appleIntelligence]
+        runtime.hasSubscribers(for: ScreenshotCaptured.self) ? [.screenshotFolder] : []
     }
 
     /// - Parameter consent: updated when the owner presses "Allow access".
     @MainActor @ViewBuilder func view(consent: ScreenshotFolderConsent?) -> some View {
         switch self {
         case .screenshotFolder: FolderAccessRow(consent: consent)
-        case .appleIntelligence: AppleIntelligenceRow()
         }
     }
 }
@@ -171,33 +168,145 @@ struct FolderAccessRow: View {
     }
 }
 
-struct AppleIntelligenceRow: View {
+// MARK: - The example block
+
+/// The kit's example block, shipped inside the app and offered by onboarding
+/// and the empty Blocks page. It installs only through `BlockInstalling`,
+/// with the review sheet, exactly as a package chosen with "Install Block…".
+@MainActor
+final class ExampleOffer {
+    enum Status: Equatable {
+        case notInstalled
+        case installed
+
+        /// The status in words, not color alone.
+        var text: String {
+            switch self {
+            case .notInstalled: "Not installed"
+            case .installed: "Installed"
+            }
+        }
+    }
+
+    let url: URL
+    private let installer: any BlockInstalling
+    private var knownID: BlockID?
+
+    /// Nil, so nothing is offered, without an example in the app or without an installer.
+    init?(url: URL?, installer: (any BlockInstalling)?) {
+        guard let url, let installer else { return nil }
+        self.url = url
+        self.installer = installer
+    }
+
+    /// The example's id, read from its package by `inspect`, once. Nil while
+    /// the package cannot be read.
+    // Read again on each call while `inspect` throws, such as while a
+    // development block holds the id; fine for one small package. Cache the
+    // failure too if that ever shows in a redraw.
+    private var id: BlockID? {
+        if knownID == nil { knownID = try? installer.inspect(url).id }
+        return knownID
+    }
+
+    /// Installed once a block with the example's id is registered, waiting
+    /// for review included.
+    func status(in runtime: NotchRuntime) -> Status {
+        guard let id else { return .notInstalled }
+        return runtime.blocks.contains { $0.id == id } ? .installed : .notInstalled
+    }
+
+    /// True while "Install the Example Block" is offered.
+    func offersInstall(in runtime: NotchRuntime) -> Bool {
+        status(in: runtime) == .notInstalled
+    }
+
+    /// Reads the example for the review sheet, as "Install Block…" reads a chosen package.
+    func choose() throws -> PendingInstall {
+        try PendingInstall.install(url, with: installer)
+    }
+
+    /// Installs the build the sheet showed.
+    func confirm(_ pending: PendingInstall) throws {
+        try pending.confirm(with: installer)
+    }
+}
+
+/// The example row in onboarding, in the `FolderAccessRow` pattern.
+struct ExampleRow: View {
+    let offer: ExampleOffer
+    let runtime: NotchRuntime
+    /// The example read for the review sheet, waiting for confirmation.
+    @State private var pending: PendingInstall?
+    /// Why the example could not be read or installed, shown in an alert.
+    @State private var failure: String?
+    @FocusState private var installFocused: Bool
+
     var body: some View {
+        let status = offer.status(in: runtime)
         VStack(alignment: .leading, spacing: 6) {
-            Text("Apple Intelligence").font(.headline)
-            Text("Naming screenshots on this Mac uses Apple Intelligence. Turn it on and let its model download, which takes several minutes. Without it, screenshots still get a tidy name with the date.")
+            Text("Try the example block").font(.headline)
+            Text("A small block that shows a greeting when the pointer reaches the notch. You can remove it at any time.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
+                Text(status.text).foregroundStyle(.secondary)
                 Spacer()
-                Button("Open Apple Intelligence Settings") { SystemSettings.open(SystemSettings.appleIntelligence) }
+                if status == .notInstalled {
+                    Button("Install the Example Block", action: choose)
+                        .focused($installFocused)
+                }
             }
+        }
+        .defaultFocus($installFocused, true)
+        .sheet(item: $pending) { pending in
+            BlockInstallSheet(summary: pending.summary) {
+                self.pending = nil
+                do {
+                    try offer.confirm(pending)
+                } catch {
+                    failure = error.localizedDescription
+                }
+            } cancel: {
+                self.pending = nil
+            }
+        }
+        .alert("The example block was not installed", isPresented: Binding(
+            get: { failure != nil },
+            set: { if !$0 { failure = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure ?? "")
+        }
+    }
+
+    private func choose() {
+        do {
+            pending = try offer.choose()
+        } catch {
+            failure = error.localizedDescription
         }
     }
 }
 
 // MARK: - Onboarding
 
-/// First-run onboarding window content, also reachable from
-/// Settings > General > Permissions.
+/// First-run onboarding window content: the permission rows a turned-on
+/// block needs, then the offer to install the example block.
 public struct OnboardingView: View {
     private let rows: [PermissionRow]
     private let consent: ScreenshotFolderConsent?
+    private let example: ExampleOffer?
+    private let runtime: NotchRuntime?
     private let onDone: () -> Void
 
-    init(rows: [PermissionRow], consent: ScreenshotFolderConsent? = nil, onDone: @escaping () -> Void) {
+    init(rows: [PermissionRow], consent: ScreenshotFolderConsent? = nil, example: ExampleOffer? = nil,
+         runtime: NotchRuntime? = nil, onDone: @escaping () -> Void) {
         self.rows = rows
         self.consent = consent
+        self.example = example
+        self.runtime = runtime
         self.onDone = onDone
     }
 
@@ -205,7 +314,7 @@ public struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome to TopNotch").font(.title2.bold())
-                Text("TopNotch works from the notch and the menu bar. What needs your OK is below. You can come back to it in Settings > General. To open Settings, right-click the notch.")
+                Text("TopNotch works from the notch and the menu bar. Each thing it does comes from a block you add. To open Settings, right-click the notch.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -214,6 +323,9 @@ public struct OnboardingView: View {
             Form {
                 ForEach(rows, id: \.self) { row in
                     Section { row.view(consent: consent) }
+                }
+                if let example, let runtime {
+                    Section { ExampleRow(offer: example, runtime: runtime) }
                 }
             }
             .formStyle(.grouped)
@@ -235,13 +347,21 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
 
     private let runtime: NotchRuntime
     private let consent: ScreenshotFolderConsent?
+    private let installer: (any BlockInstalling)?
+    private let exampleURL: URL?
     private let defaults: UserDefaults
     private var window: NSWindow?
 
-    /// - Parameter consent: updated when the owner presses "Allow access".
-    public init(runtime: NotchRuntime, consent: ScreenshotFolderConsent? = nil, defaults: UserDefaults = .standard) {
+    /// - Parameters:
+    ///   - consent: updated when the owner presses "Allow access".
+    ///   - installer, exampleURL: with both, onboarding offers the example
+    ///     block, installed through the review sheet as on the Blocks page.
+    public init(runtime: NotchRuntime, consent: ScreenshotFolderConsent? = nil, installer: (any BlockInstalling)? = nil,
+                exampleURL: URL? = nil, defaults: UserDefaults = .standard) {
         self.runtime = runtime
         self.consent = consent
+        self.installer = installer
+        self.exampleURL = exampleURL
         self.defaults = defaults
         super.init()
     }
@@ -267,7 +387,9 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
         // Measure once, then give the window a fixed size. Letting the hosting
         // view drive the window size through constraints crashed at launch
         // (AppKit exception in the window's update-constraints pass).
-        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime), consent: consent) { [weak self] in
+        let example = ExampleOffer(url: exampleURL, installer: installer)
+        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime), consent: consent,
+                                                             example: example, runtime: runtime) { [weak self] in
             self?.window?.close()
         })
         let size = hosting.fittingSize

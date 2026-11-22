@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Stable identifier of a block, such as `"shelf"`. Used as a settings key.
+/// Stable identifier of a block, such as `"hello"`. Used as a settings key.
 public struct BlockID: RawRepresentable, Hashable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
     public let rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
@@ -74,8 +74,6 @@ public struct BlockInfo: Sendable, Equatable {
 public enum BlockSource: Sendable, Equatable {
     /// Compiled into the app.
     case builtIn
-    /// A package shipped inside the app bundle.
-    case bundled
     /// A package the user installed, from the given path.
     case installed(from: String)
     /// A package run from where it is, without installing, for block authors.

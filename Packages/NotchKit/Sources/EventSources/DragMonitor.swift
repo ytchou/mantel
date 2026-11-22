@@ -9,8 +9,8 @@ import os
 ///
 /// Signals, fed into `DragStateMachine`:
 /// - a global and a local `NSEvent` monitor for left mouse-down, dragged and
-///   up. The local one sees drags that start in this app, such as the
-///   shelf's own drag-out; a global monitor never sees this app's events.
+///   up. The local one sees drags that start in this app, such as a
+///   block's own drag-out; a global monitor never sees this app's events.
 /// - a 50 ms timer, running only while the button is held, that reads the
 ///   drag pasteboard change count and `NSEvent.pressedMouseButtons`. The
 ///   button poll is a second source of mouse-up, for drag loops in which the

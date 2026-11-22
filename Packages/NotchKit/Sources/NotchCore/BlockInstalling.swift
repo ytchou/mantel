@@ -151,7 +151,7 @@ public enum BlockInstallError: LocalizedError, Equatable {
     case invalidSetting(String)
     /// `manifest.json` is missing or cannot be read.
     case unreadableManifest(String)
-    /// The block is built in or bundled, so it cannot be removed.
+    /// The block is built in or run as the development block, so it cannot be removed.
     case notRemovable(String)
     /// Copying or deleting files failed.
     case copyFailed(String)
