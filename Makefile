@@ -34,4 +34,4 @@ quit: ## Quit the running app, if any
 	-@pkill -x TopNotch 2>/dev/null || true
 
 clean:
-	rm -rf $(DERIVED) $(addsuffix /.build,$(PACKAGES))
+	rm -rf $(DERIVED) .build $(addsuffix /.build,$(PACKAGES))
