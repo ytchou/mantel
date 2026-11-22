@@ -428,8 +428,9 @@ sandbox. An unknown token is refused.
 
 The app refuses a manifest, at install and at launch, when: a required field
 is missing or has the wrong type; `id` breaks the rule above or is reserved
-(`shelf`, `rename`, `nowplaying`, `block`, `onboarding`, `com`, `apple`,
-`ns`; only a bundled block may use one); `contract` is not supported;
+(`block`, `onboarding`, `com`, `apple`, `ns`: prefixes of the app's own
+preference keys and of common system ones; no package may use one);
+`contract` is not supported;
 `executable` is outside `Contents/MacOS` or not executable; a symbolic link
 in the package leads outside it; an event name is
 unknown; an `access` token is unknown; `hosts` breaks a rule under "Hosts";
