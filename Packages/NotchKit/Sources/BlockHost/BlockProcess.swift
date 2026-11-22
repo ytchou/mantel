@@ -33,7 +33,7 @@ public struct BlockClock: Sendable {
 /// The block gets one end of a socket pair as fd 3, `/dev/null` as stdin and
 /// stdout (protocol traffic never uses them), and the app's stderr. Its
 /// environment is minimal: `PATH`, `HOME`, `TMPDIR` and
-/// `TOPNOTCH_BLOCK_GENERATION`, which the kit uses for `hello`.
+/// `MANTEL_BLOCK_GENERATION`, which the kit uses for `hello`.
 ///
 /// It is the `Transport` to the block. `close()` ends the process: the socket
 /// closes (the kit exits when it sees that), then SIGTERM, then SIGKILL.
@@ -58,7 +58,7 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     /// Run once, after the process has exited and been reaped.
     private var exitActions: [@Sendable () -> Void] = []
 
-    static let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
+    static let log = Logger(subsystem: "dev.mantel.Mantel", category: "blocks")
 
     private init(pid: pid_t, socket: SocketTransport) {
         self.pid = pid
@@ -88,7 +88,7 @@ public final class BlockProcess: Transport, @unchecked Sendable {
     // Foundation's `NSTemporaryDirectory()` and `FileManager.temporaryDirectory`
     // ignore `TMPDIR` on macOS 26 (probed 2026-11-20): inside the block they
     // still name the per-user temporary folder (writable, not readable, and
-    // the app's `TopNotch` subtree closed). A block finds its own folder by
+    // the app's `Mantel` subtree closed). A block finds its own folder by
     // reading `TMPDIR`.
     static func spawn(executable: URL, generation: Int, sandbox: SandboxProfile?) throws(BlockProcessError) -> BlockProcess {
         var fds: [Int32] = [0, 0]
@@ -149,7 +149,7 @@ public final class BlockProcess: Transport, @unchecked Sendable {
             "PATH=" + (own["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"),
             "HOME=" + (own["HOME"] ?? NSHomeDirectory()),
             "TMPDIR=" + (temporaryFolder ?? own["TMPDIR"] ?? NSTemporaryDirectory()),
-            "TOPNOTCH_BLOCK_GENERATION=\(generation)",
+            "MANTEL_BLOCK_GENERATION=\(generation)",
         ]
     }
 

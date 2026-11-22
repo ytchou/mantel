@@ -20,7 +20,7 @@ struct ProcessTests {
         }
 
         let first = try #require(hello)
-        #expect(first.generation == 7, "the generation comes from TOPNOTCH_BLOCK_GENERATION")
+        #expect(first.generation == 7, "the generation comes from MANTEL_BLOCK_GENERATION")
         #expect(first.message == .hello(contract: Contract.current, id: "fixture", version: "1.0.0"))
 
         // Without the socket the fixture exits, and it is reaped.
@@ -146,12 +146,12 @@ struct ProcessTests {
         #expect(FileManager.default.fileExists(atPath: inside.path))
     }
 
-    /// Other blocks' files and dropped files sit in the app's `TopNotch`
+    /// Other blocks' files and dropped files sit in the app's `Mantel`
     /// temporary subtree: closed. The block's own temporary folder inside it is open.
     @Test func fixtureCannotReadTheAppTemporarySubtreeButUsesItsOwn() async throws {
         let rig = try SandboxRig()
         defer { rig.remove() }
-        let other = rig.shared.appending(path: "TopNotch/Blocks/other")
+        let other = rig.shared.appending(path: "Mantel/Blocks/other")
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         let shared = other.appending(path: "other-block-file")
         try Data("x".utf8).write(to: shared)
@@ -207,7 +207,7 @@ struct ProcessTests {
     @Test func fixtureCannotReadTheAppsPreferenceDomain() async throws {
         let rig = try SandboxRig()
         defer { rig.remove() }
-        let domain = "dev.topnotch.tests-\(UUID().uuidString)"
+        let domain = "dev.mantel.tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: domain))
         defaults.set("x", forKey: "probe")
         CFPreferencesAppSynchronize(domain as CFString)
@@ -216,7 +216,7 @@ struct ProcessTests {
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let closed = try await rig.run(rig.profile(preferenceDomain: domain, home: home), ["prefs:\(domain)"])
         #expect(closed == ["prefs none"])
-        let control = try await rig.run(rig.profile(preferenceDomain: "dev.topnotch.unrelated", home: home), ["prefs:\(domain)"])
+        let control = try await rig.run(rig.profile(preferenceDomain: "dev.mantel.unrelated", home: home), ["prefs:\(domain)"])
         #expect(control == ["prefs found"])
     }
 
@@ -253,26 +253,26 @@ struct ProcessTests {
 
 /// A fixture package and sibling "home", data and shared temporary folders
 /// in one temporary root, so the data folder is not inside the "home"
-/// folder. The block's temporary folder is inside the shared one's `TopNotch`
+/// folder. The block's temporary folder is inside the shared one's `Mantel`
 /// subtree, as in the app.
 private struct SandboxRig {
     let root: URL
     let package: URL
     let home: URL
-    /// TopNotch's support folder inside the "home" folder, as in the app.
+    /// Mantel's support folder inside the "home" folder, as in the app.
     let support: URL
     let data: URL
     let shared: URL
     let temporary: URL
-    var preferencesFile: URL { home.appending(path: "Library/Preferences/dev.topnotch.TopNotchTests.plist") }
+    var preferencesFile: URL { home.appending(path: "Library/Preferences/dev.mantel.MantelTests.plist") }
 
     init() throws {
-        root = FileManager.default.temporaryDirectory.appending(path: "topnotch-sandboxed-\(UUID().uuidString)")
+        root = FileManager.default.temporaryDirectory.appending(path: "mantel-sandboxed-\(UUID().uuidString)")
         home = root.appending(path: "home")
-        support = home.appending(path: "Library/Application Support/TopNotch")
+        support = home.appending(path: "Library/Application Support/Mantel")
         data = support.appending(path: "BlockData/fixture")
         shared = root.appending(path: "shared-tmp")
-        temporary = shared.appending(path: "TopNotch/Blocks/fixture")
+        temporary = shared.appending(path: "Mantel/Blocks/fixture")
         for folder in [home, data, temporary] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         }
@@ -280,7 +280,7 @@ private struct SandboxRig {
     }
 
     func profile(gatePort: UInt16? = nil, readsHome: Bool = false,
-                 preferenceDomain: String = "dev.topnotch.TopNotchTests", home: URL? = nil) -> SandboxProfile {
+                 preferenceDomain: String = "dev.mantel.MantelTests", home: URL? = nil) -> SandboxProfile {
         SandboxProfile(gatePort: gatePort, readsHome: readsHome, screenshotFolder: nil, package: package,
                        dataFolder: data, temporaryFolder: temporary, sharedTemporaryFolder: shared, home: home ?? self.home,
                        supportRoot: support, preferencesFile: preferencesFile, preferenceDomain: preferenceDomain)

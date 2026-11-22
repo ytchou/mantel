@@ -10,7 +10,7 @@ enum ScreenshotCandidate {
     static let screenCaptureAttribute = "com.apple.metadata:kMDItemIsScreenCapture"
     /// Set by a block on a screenshot file it gave a new name, to the old
     /// name. Such files are not new screenshots. Documented in `PROTOCOL.md`.
-    static let originalNameAttribute = "com.topnotch.original-name"
+    static let originalNameAttribute = "com.mantel.original-name"
 
     /// A visible image file. macOS writes a hidden `.Screenshot …` file first
     /// and renames it to the final name; the hidden one is never a candidate.

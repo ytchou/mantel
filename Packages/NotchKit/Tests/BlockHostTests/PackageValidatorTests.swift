@@ -15,7 +15,7 @@ struct PackageValidatorTests {
         .deletingLastPathComponent() // Packages
         .appending(path: "BlockKit/Examples/HelloBlock/manifest.json")
 
-    /// A temporary `<Name>.topblock` bundle holding `manifest` and, unless
+    /// A temporary `<Name>.mantelblock` bundle holding `manifest` and, unless
     /// told otherwise, an executable file at `Contents/MacOS/<manifest.executable>`.
     private func package(
         _ manifest: Manifest,
@@ -23,8 +23,8 @@ struct PackageValidatorTests {
         executableMode: Int = 0o755
     ) throws -> URL {
         let folder = FileManager.default.temporaryDirectory
-            .appending(path: "topnotch-validator-\(UUID().uuidString)")
-            .appending(path: "Test.topblock")
+            .appending(path: "mantel-validator-\(UUID().uuidString)")
+            .appending(path: "Test.mantelblock")
         try writeBundle(at: folder, manifest: manifest, writeExecutable: writeExecutable, mode: executableMode)
         return folder
     }
@@ -159,7 +159,7 @@ struct PackageValidatorTests {
     /// stay inside it: the hash covers the link's text, not its target.
     @Test func refusesAnyLinkLeavingThePackage() throws {
         for (target, relative) in [("/usr/lib/libSystem.B.dylib", false), ("../../../outside.dylib", true),
-                                   ("/topnotch-missing/later.dylib", false)] {
+                                   ("/mantel-missing/later.dylib", false)] {
             let linked = try package(manifest())
             let frameworks = linked.appending(path: "Contents/Frameworks")
             try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
@@ -243,8 +243,8 @@ struct PackageValidatorTests {
 
     @Test func refusesUnreadableManifest() throws {
         let folder = FileManager.default.temporaryDirectory
-            .appending(path: "topnotch-validator-\(UUID().uuidString)")
-            .appending(path: "Empty.topblock")
+            .appending(path: "mantel-validator-\(UUID().uuidString)")
+            .appending(path: "Empty.mantelblock")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         #expect(throws: BlockInstallError.self) { try PackageValidator.load(folder) }
@@ -252,8 +252,8 @@ struct PackageValidatorTests {
 
     @Test func flatPackageIsRefusedAsOldFormat() throws {
         let folder = FileManager.default.temporaryDirectory
-            .appending(path: "topnotch-validator-\(UUID().uuidString)")
-            .appending(path: "Flat.topblock")
+            .appending(path: "mantel-validator-\(UUID().uuidString)")
+            .appending(path: "Flat.mantelblock")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let hello = manifest()
         try Framing.encoder().encode(hello).write(to: folder.appending(path: "manifest.json"))

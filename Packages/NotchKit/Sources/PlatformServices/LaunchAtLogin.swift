@@ -35,7 +35,7 @@ public final class LaunchAtLogin {
         let status = SMAppService.mainApp.status
         isEnabled = status == .enabled
         if status == .requiresApproval {
-            lastError = "Allow TopNotch in System Settings > General > Login Items."
+            lastError = "Allow Mantel in System Settings > General > Login Items."
         }
     }
 }

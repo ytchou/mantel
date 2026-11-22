@@ -5,8 +5,8 @@ import Foundation
 /// One place, so the shell and the block host agree: a block's stand-in moves
 /// each dropped file inside it into that block's own temporary folder.
 public enum DropFolder {
-    /// `<app temporary folder>/TopNotch/Drops/`. Emptied when the shell starts.
+    /// `<app temporary folder>/Mantel/Drops/`. Emptied when the shell starts.
     public static var root: URL {
-        FileManager.default.temporaryDirectory.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+        FileManager.default.temporaryDirectory.appending(path: "Mantel/Drops", directoryHint: .isDirectory)
     }
 }

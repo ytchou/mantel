@@ -1,4 +1,4 @@
-# TopNotch block protocol, version 3
+# Mantel block protocol, version 3
 
 A block is a separate program. The app starts it in a sandbox, sends it
 events, and draws the view the block sends back as data. This file describes
@@ -34,7 +34,7 @@ the messages between the app and a block. `BlockWire` implements it;
 - Stdin and stdout are not used. A stray `print` cannot break the protocol.
 - When the app closes its end, the block must exit.
 - The environment holds `PATH`, `HOME`, `TMPDIR` (the block's own
-  temporary folder, `<app temporary folder>/TopNotch/Blocks/<block id>/`) and `TOPNOTCH_BLOCK_GENERATION`, the process generation.
+  temporary folder, `<app temporary folder>/Mantel/Blocks/<block id>/`) and `MANTEL_BLOCK_GENERATION`, the process generation.
   Foundation's `NSTemporaryDirectory()` and `FileManager.temporaryDirectory`
   do not read `TMPDIR` on macOS 26: read the variable to find the folder.
 
@@ -58,7 +58,7 @@ the messages between the app and a block. `BlockWire` implements it;
 - `message`: an object with exactly one key, the message name. Its value is
   an object with the message fields. A message with no fields has `{}`.
 - The block sends `hello` with the generation from
-  `TOPNOTCH_BLOCK_GENERATION` (0 when it is not set), and every later frame
+  `MANTEL_BLOCK_GENERATION` (0 when it is not set), and every later frame
   with the generation of the app's `welcome`.
 - Fields that are not set are left out. Keys are written in sorted order.
 - An enum value with fields is an object with one key, as a message is:
@@ -147,12 +147,12 @@ Inputs:
   `{"text": {"string"}}`. A file path is absolute.
 - Files the app wrote for a drop (a dragged image without a file, for
   example) are moved into the block's own temporary folder, under
-  `TopNotch/Drops/<uuid>/`, before the drop is sent. Only that block may
+  `Mantel/Drops/<uuid>/`, before the drop is sent. Only that block may
   read and write them.
 - A dropped file the block's sandbox can read where it is (in the block's
   own folders, or with `files.read` in the home folder or under `/Volumes`)
   is sent with its own path.
-- Any other dropped file is copied into `TopNotch/Drops/<uuid>/` first, and
+- Any other dropped file is copied into `Mantel/Drops/<uuid>/` first, and
   the copy's path is sent. A file on another volume over 500 MB is left out
   and logged. A copy that fails is left out.
 - An item `action` is `{"click": {}}`, `{"doubleClick": {}}` or
@@ -163,7 +163,7 @@ Inputs:
 - `settings` holds every declared setting's current value, keyed without the
   block id. A toggle is `true` or `false`. A choice is a string.
 - `dataFolder` is a folder the block may write to:
-  `~/Library/Application Support/TopNotch/BlockData/<id>`. Remove deletes it.
+  `~/Library/Application Support/Mantel/BlockData/<id>`. Remove deletes it.
 - `gatePort` is the local port of the block's network gate (see "Network
   gate"). It is set only when the manifest asks for `network` and the gate
   opened. When the gate cannot open, the block starts without network and
@@ -201,7 +201,7 @@ An event payload is `{"name": <event name>, "value": <object>}`.
   each player. The block updates its state and does not present. Events that
   happen while the block starts are sent after the replay with `replay: false`.
 - `screenshotCaptured` is not sent for a file with the extended attribute
-  `com.topnotch.original-name`. A block that renames a screenshot sets this
+  `com.mantel.original-name`. A block that renames a screenshot sets this
   attribute on the file, to the old name, so the renamed file is not
   reported as a new screenshot.
 
@@ -339,7 +339,7 @@ opacity from 0 to 1 (opaque when not set).
 A package is a macOS bundle, signed as a whole:
 
 ```
-<Name>.topblock/
+<Name>.mantelblock/
   Contents/
     Info.plist                  made from the manifest
     MacOS/<executable>          the manifest's "executable"
@@ -347,7 +347,7 @@ A package is a macOS bundle, signed as a whole:
 ```
 
 - `Scripts/package-block.sh` builds and signs this layout; see `README.md`.
-- The folder may have any name that ends in `.topblock`. The block's id
+- The folder may have any name that ends in `.mantelblock`. The block's id
   comes from the manifest, not from the folder name.
 - The signature seals the manifest with the executable. A package changed
   after signing is refused.
@@ -450,16 +450,16 @@ denies:
   with `network`;
 - name lookups;
 - Apple events;
-- preference writes, and reads of TopNotch's own preferences domain;
+- preference writes, and reads of Mantel's own preferences domain;
 - file writes, except in the block's data folder, the temporary folder and
   `/dev`;
 - file reads outside an allow-list: the system locations a process needs,
   the block's package, its data folder, its own temporary folder, and what
   its tokens open;
 - after everything a token opens: file reads and writes in the app's
-  `TopNotch` folder inside the temporary folder (dropped files and every
-  block's temporary folder), in TopNotch's support folder
-  (`~/Library/Application Support/TopNotch`: other blocks' packages and
+  `Mantel` folder inside the temporary folder (dropped files and every
+  block's temporary folder), in Mantel's support folder
+  (`~/Library/Application Support/Mantel`: other blocks' packages and
   data, the approvals) and of the app's preferences file, except the
   block's own temporary folder, data folder and package.
 
@@ -481,7 +481,7 @@ Limits that remain:
   `TMPDIR`, and frameworks (FoundationModels, Quick Look thumbnails) write
   there. Reads there are closed outside the block's own folder, so two
   blocks cannot pass files through it by reading. Metadata there stays
-  readable outside the app's `TopNotch` folder (whether a named file
+  readable outside the app's `Mantel` folder (whether a named file
   exists, its size and dates, not listings): Foundation needs it to create
   folders and open files for writing.
 - Metadata of anything in the home folder stays readable (names, sizes,
@@ -489,7 +489,7 @@ Limits that remain:
   enabled".
 - Other apps' preference domains stay readable through the preferences
   service: denying every preference read breaks the on-device model.
-  Nothing a block must not see is kept in TopNotch's own domain, which is
+  Nothing a block must not see is kept in Mantel's own domain, which is
   closed.
 - Quick Look thumbnails ignore the read allow-list: the thumbnail service
   reads the file, not the block. A block can get a picture of any file it

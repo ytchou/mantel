@@ -17,7 +17,7 @@ public final class OutputVolumeWatcher {
     private var filter = VolumeChangeFilter()
     private var deviceListener: AudioObjectPropertyListenerBlock?
     private var valueListener: AudioObjectPropertyListenerBlock?
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "volume")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "volume")
 
     private static var defaultDeviceAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,

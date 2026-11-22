@@ -11,7 +11,7 @@ import os
 /// `SystemNowPlayingWatcher` covers every other player, and adds artwork.
 ///
 /// Limits:
-/// - A player posts only on a change, so after TopNotch starts the track is
+/// - A player posts only on a change, so after Mantel starts the track is
 ///   known from the next play, pause or track change.
 /// - No artwork in the notification.
 @MainActor
@@ -33,7 +33,7 @@ public final class PlayerNotificationWatcher {
     private let runtime: NotchRuntime
     private let player: Player
     private(set) var observers: [(center: NotificationCenter, token: any NSObjectProtocol)] = []
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "nowplaying")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "nowplaying")
 
     public init(runtime: NotchRuntime, player: Player) {
         self.runtime = runtime

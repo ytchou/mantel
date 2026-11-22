@@ -50,7 +50,7 @@ public final class SettingsWindowController {
         // The window keeps the size it is given; see OnboardingController.show.
         hosting.sizingOptions = []
         window.contentView = hosting
-        window.title = "TopNotch Settings"
+        window.title = "Mantel Settings"
         // Kept after closing, so it reopens on the pane and at the place it was left.
         window.isReleasedWhenClosed = false
         window.center()

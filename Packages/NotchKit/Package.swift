@@ -6,7 +6,7 @@ import PackageDescription
 // No block is linked into the app or into any target here: every block runs
 // in its own process, over the wire protocol in ../BlockKit, and BlockHost
 // runs its stand-in. The collision tests that run real blocks together live
-// with the blocks, in the topnotch-blocks repository (tests/collisions).
+// with the blocks, in the mantel-blocks repository (tests/collisions).
 let package = Package(
     name: "NotchKit",
     platforms: [.macOS(.v26)],

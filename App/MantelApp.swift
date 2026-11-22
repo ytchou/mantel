@@ -9,11 +9,11 @@ import SwiftUI
 /// Thin app target. It only starts the process and wires the modules together;
 /// all behaviour lives in the NotchKit package modules.
 @main
-struct TopNotchApp: App {
+struct MantelApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("TopNotch", systemImage: "rectangle.topthird.inset.filled") {
+        MenuBarExtra("Mantel", systemImage: "rectangle.topthird.inset.filled") {
             MenuBarContent(runtime: delegate.runtime) { delegate.settingsWindow.show() }
         }
     }
@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = BlockSettings()
     // The kit's example block, put there by the "Build example block" phase.
     // Offered by onboarding and the empty Blocks page; installed, never run from here.
-    private let exampleURL = Bundle.main.resourceURL?.appending(path: "Examples/Hello.topblock")
+    private let exampleURL = Bundle.main.resourceURL?.appending(path: "Examples/Hello.mantelblock")
     private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore,
                                                                     consent: screenshotConsent, exampleURL: exampleURL)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let defaults = UserDefaults.standard
-        // The installed blocks, then, with `-devBlock <path to .topblock>`, one
+        // The installed blocks, then, with `-devBlock <path to .mantelblock>`, one
         // block run from where it is. Every block runs in its own process.
         let blocks = blockStore.standIns(developmentPath: defaults.string(forKey: "devBlock"))
         for block in blocks {
@@ -99,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sources.add(PlayerNotificationWatcher(runtime: runtime, player: player), for: [NowPlayingChanged.self])
         }
         // Built into Contents/Frameworks by the "Build now-playing helper" phase.
-        let helper = Bundle.main.privateFrameworksURL?.appending(path: "TopNotchNowPlaying.dylib")
+        let helper = Bundle.main.privateFrameworksURL?.appending(path: "MantelNowPlaying.dylib")
         sources.add(SystemNowPlayingWatcher(runtime: runtime, helperURL: helper), for: [NowPlayingChanged.self])
         self.sources = sources
 

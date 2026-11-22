@@ -22,9 +22,9 @@ public final class SystemNowPlayingWatcher {
     private(set) var process: Process?
     private var input: Pipe?
     private var translator = SystemNowPlayingTranslator()
-    private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "nowplaying")
+    private let log = Logger(subsystem: "dev.mantel.Mantel", category: "nowplaying")
 
-    static let helperSymbol = "topnotch_nowplaying_stream"
+    static let helperSymbol = "mantel_nowplaying_stream"
     /// Loads the helper and calls its stream function, which runs until stdin closes.
     static let perlScript = """
     use DynaLoader;

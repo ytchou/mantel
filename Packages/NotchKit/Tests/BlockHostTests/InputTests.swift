@@ -121,9 +121,9 @@ struct InputTests {
         return rig
     }
 
-    /// `<block temp>/TopNotch/Drops`.
+    /// `<block temp>/Mantel/Drops`.
     private func drops(_ rig: Rig) -> URL {
-        rig.block.temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+        rig.block.temporaryFolder.appending(path: "Mantel/Drops", directoryHint: .isDirectory)
     }
 
     /// Drops `items` and returns the drop the block got.
@@ -140,7 +140,7 @@ struct InputTests {
     /// A new file in a fresh folder of the real temporary folder, outside
     /// any rig's folders, as a file from Finder.
     private func finderFile(_ name: String, _ text: String) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "topnotch-finder-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "mantel-finder-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appending(path: name)
         try Data(text.utf8).write(to: url)
@@ -188,7 +188,7 @@ struct InputTests {
         let original = try finderFile("notes.txt", "hello")
         defer { try? FileManager.default.removeItem(at: original.deletingLastPathComponent()) }
         // A home folder that does not hold the file.
-        rig.block.homeFolder = FileManager.default.temporaryDirectory.appending(path: "topnotch-home-\(UUID().uuidString)")
+        rig.block.homeFolder = FileManager.default.temporaryDirectory.appending(path: "mantel-home-\(UUID().uuidString)")
 
         let items = await dropped([.file(original)], on: rig)
 
@@ -224,7 +224,7 @@ struct InputTests {
 
     @Test func aDroppedFolderIsCopiedWhole() async throws {
         let rig = try await owningRig()
-        let folder = FileManager.default.temporaryDirectory.appending(path: "topnotch-finder-\(UUID().uuidString)/Photos", directoryHint: .isDirectory)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "mantel-finder-\(UUID().uuidString)/Photos", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder.appending(path: "Inner"), withIntermediateDirectories: true)
         try Data("a".utf8).write(to: folder.appending(path: "a.txt"))
         try Data("b".utf8).write(to: folder.appending(path: "Inner/b.txt"))

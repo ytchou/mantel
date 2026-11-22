@@ -13,8 +13,8 @@ struct BlockStoreTests {
     ) -> BlockStore {
         let store = BlockStore(
             owner: { runtime.state.owner },
-            blocksRoot: blocksRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)"),
-            dataRoot: dataRoot ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            blocksRoot: blocksRoot ?? FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)"),
+            dataRoot: dataRoot ?? FileManager.default.temporaryDirectory.appending(path: "mantel-data-\(UUID().uuidString)"),
             defaults: testDefaults(),
             isRegistered: isRegistered
         )
@@ -23,14 +23,14 @@ struct BlockStoreTests {
         return store
     }
 
-    /// `<root>/<name>.topblock`: a bundle with a copy of the fixture
+    /// `<root>/<name>.mantelblock`: a bundle with a copy of the fixture
     /// executable under the manifest `id`. A copy, not a link: the validator
     /// refuses an executable that leads outside its package, and the
     /// sandbox reads only the package.
     @discardableResult
     private func fixturePackage(id: String = "fixture", name: String = "Fixture", in root: URL? = nil) throws -> URL {
-        let root = root ?? FileManager.default.temporaryDirectory.appending(path: "topnotch-fixture-\(UUID().uuidString)")
-        let folder = root.appending(path: "\(name).topblock")
+        let root = root ?? FileManager.default.temporaryDirectory.appending(path: "mantel-fixture-\(UUID().uuidString)")
+        let folder = root.appending(path: "\(name).mantelblock")
         var manifest = Fixture.manifest
         manifest.id = id
         manifest.name = name
@@ -42,7 +42,7 @@ struct BlockStoreTests {
     /// The app at launch: the installed blocks by id, each waiting for the
     /// owner's review without an approval, then the development block.
     @Test func installedBlocksComeBeforeTheDevelopmentBlock() throws {
-        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)")
         try fixturePackage(id: "beta", name: "Beta", in: blocks)
         try fixturePackage(id: "alpha", name: "Alpha", in: blocks)
         // Not a package: ignored.
@@ -59,7 +59,7 @@ struct BlockStoreTests {
     /// The app ships with no blocks: with nothing installed and no
     /// development path, there is nothing to register.
     @Test func noInstalledBlocksAndNoDevelopmentPathGiveNone() throws {
-        let empty = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        let empty = FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
         #expect(store(NotchRuntime(), blocksRoot: empty).standIns(developmentPath: nil).isEmpty)
         #expect(store(NotchRuntime(), blocksRoot: URL(fileURLWithPath: "/no/such/Blocks")).standIns(developmentPath: nil).isEmpty)
@@ -80,15 +80,15 @@ struct BlockStoreTests {
     @Test func missingOrInvalidDevelopmentPathGivesNoneAndLogs() throws {
         let store = store(NotchRuntime())
         #expect(store.standIns(developmentPath: nil).isEmpty)
-        #expect(store.standIns(developmentPath: "/no/such/Block.topblock").isEmpty)
+        #expect(store.standIns(developmentPath: "/no/such/Block.mantelblock").isEmpty)
 
         // A manifest that does not decode.
-        let broken = FileManager.default.temporaryDirectory.appending(path: "topnotch-broken-\(UUID().uuidString).topblock")
+        let broken = FileManager.default.temporaryDirectory.appending(path: "mantel-broken-\(UUID().uuidString).mantelblock")
         try writeBrokenManifest(in: broken, "{\"name\": \"No id\"}")
         #expect(store.standIns(developmentPath: broken.path).isEmpty)
 
         // A valid manifest whose executable is missing.
-        let empty = FileManager.default.temporaryDirectory.appending(path: "topnotch-empty-\(UUID().uuidString).topblock")
+        let empty = FileManager.default.temporaryDirectory.appending(path: "mantel-empty-\(UUID().uuidString).mantelblock")
         try writeBundle(at: empty, manifest: Fixture.manifest, writeExecutable: false)
         #expect(store.standIns(developmentPath: empty.path).isEmpty)
     }
@@ -115,7 +115,7 @@ struct BlockStoreTests {
     // MARK: Ids are unique
 
     @Test func laterDuplicateIdIsSkipped() throws {
-        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)")
         try fixturePackage(id: "fixture", name: "Fixture", in: blocks)
         // The same id again, run as the development block: the installed one wins.
         let development = try fixturePackage()
@@ -134,7 +134,7 @@ struct BlockStoreTests {
     }
 
     @Test func aPackageUnderAnyFolderNameIsFound() throws {
-        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)")
         // Named after the block's name, as the packaging script names it.
         try fixturePackage(id: "weather-peek", name: "Weather Peek", in: blocks)
         // A second package with the same id.
@@ -147,9 +147,9 @@ struct BlockStoreTests {
         let pending = try #require(standIns.first as? PendingBlock)
         #expect(pending.id == "weather-peek")
         #expect(pending.review == .new)
-        #expect(pending.packageURL.lastPathComponent == "Weather Peek.topblock")
+        #expect(pending.packageURL.lastPathComponent == "Weather Peek.mantelblock")
         let duplicate = try #require(standIns.last as? RefusedBlock)
-        #expect(duplicate.packageURL.lastPathComponent == "Weather Peek Copy.topblock")
+        #expect(duplicate.packageURL.lastPathComponent == "Weather Peek Copy.mantelblock")
         guard case let .turnedOff(reason) = duplicate.health else {
             Issue.record("the second package is listed turned off")
             return
@@ -161,16 +161,16 @@ struct BlockStoreTests {
     // MARK: Refused at launch
 
     @Test func refusedInstalledPackageIsListedTurnedOff() throws {
-        let blocks = FileManager.default.temporaryDirectory.appending(path: "topnotch-blocks-\(UUID().uuidString)")
+        let blocks = FileManager.default.temporaryDirectory.appending(path: "mantel-blocks-\(UUID().uuidString)")
         // A contract this app does not run.
-        let old = blocks.appending(path: "old.topblock")
+        let old = blocks.appending(path: "old.mantelblock")
         var manifest = Fixture.manifest
         manifest.id = "old"
         manifest.name = "Old Block"
         manifest.contract = 99
         try writeBundle(at: old, manifest: manifest)
         // A manifest that does not decode: titled with its id.
-        let broken = blocks.appending(path: "broken.topblock")
+        let broken = blocks.appending(path: "broken.mantelblock")
         try writeBrokenManifest(in: broken, "{}")
 
         let store = store(NotchRuntime(), blocksRoot: blocks)
@@ -179,7 +179,7 @@ struct BlockStoreTests {
         #expect(standIns.map(\.id) == ["broken", "old"])
         let refused = try #require(standIns.last as? RefusedBlock)
         #expect(refused.title == "Old Block")
-        #expect(refused.packageURL.lastPathComponent == "old.topblock")
+        #expect(refused.packageURL.lastPathComponent == "old.mantelblock")
         #expect(refused.info.source == .installed(from: refused.packageURL.path))
         let reason = BlockInstallError.unsupportedContract(found: 99, supported: Contract.supported).errorDescription
         #expect(refused.health == .turnedOff(reason: try #require(reason)))

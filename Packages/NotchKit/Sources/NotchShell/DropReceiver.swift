@@ -18,7 +18,7 @@ final class DropTargetView: NSView {
     private static let readClasses: [AnyClass] = [NSFilePromiseReceiver.self, NSURL.self, NSString.self]
     private let promiseQueue: OperationQueue = {
         let queue = OperationQueue()
-        queue.name = "TopNotch.promises"
+        queue.name = "Mantel.promises"
         queue.qualityOfService = .userInitiated
         return queue
     }()

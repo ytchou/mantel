@@ -12,7 +12,7 @@ from your own repository. A block is yours: the kit is MIT.
 When contributions open, each contributor agrees to the terms below, once,
 before their first contribution is merged.
 
-By submitting a contribution to TopNotch, you agree that:
+By submitting a contribution to Mantel, you agree that:
 
 1. You grant ytchou a perpetual, worldwide, non-exclusive, royalty-free,
    irrevocable right to use, change and license your contribution under the

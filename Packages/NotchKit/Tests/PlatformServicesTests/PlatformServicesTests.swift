@@ -215,7 +215,7 @@ private final class ActionBlock: NotchBlock {
 
     let menu = notchMenu.make()
     let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
-    #expect(titles == ["On Block", "Go", "Stop", "Settings\u{2026}", "Quit TopNotch"])
+    #expect(titles == ["On Block", "Go", "Stop", "Settings\u{2026}", "Quit Mantel"])
     #expect(menu.item(withTitle: "Go")?.isEnabled == true)
     #expect(menu.item(withTitle: "Stop")?.isEnabled == false)
 
@@ -331,14 +331,14 @@ private final class FakeInstaller: BlockInstalling {
 
     let development = BlockEntry(
         block: InfoBlock("dev", info: BlockInfo(trigger: "Pointer hover", version: "0.1",
-                                                source: .development(path: "/tmp/Dev.topblock"))),
+                                                source: .development(path: "/tmp/Dev.mantelblock"))),
         installer: nil, home: home)
-    #expect(development.detail == "Development · /tmp/Dev.topblock · 0.1 · Pointer hover")
+    #expect(development.detail == "Development · /tmp/Dev.mantelblock · 0.1 · Pointer hover")
 }
 
 @MainActor
 @Test func turnedOffEntryShowsReason() {
-    let block = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.topblock")),
+    let block = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.mantelblock")),
                           health: .turnedOff(reason: "It stopped 3 times in a minute."))
     let entry = BlockEntry(block: block, installer: nil)
     #expect(entry.turnedOffReason == "It stopped 3 times in a minute.")
@@ -351,7 +351,7 @@ private final class FakeInstaller: BlockInstalling {
 
 @MainActor
 @Test func refusedPackageShowsReasonWithoutTurnOn() {
-    let block = InfoBlock("old", info: BlockInfo(source: .installed(from: "/tmp/Old.topblock")),
+    let block = InfoBlock("old", info: BlockInfo(source: .installed(from: "/tmp/Old.mantelblock")),
                           health: .turnedOff(reason: "Built for contract 99."))
     let installer = FakeInstaller(removable: ["old"], cannotRun: ["old"])
     let entry = BlockEntry(block: block, installer: installer)
@@ -372,8 +372,8 @@ private final class FakeInstaller: BlockInstalling {
 @Test func removeOfferedOnlyWhenRemovable() {
     // The installer alone decides.
     let installer = FakeInstaller(removable: ["hello"])
-    let installed = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.topblock")))
-    let other = InfoBlock("other", info: BlockInfo(source: .installed(from: "/tmp/Other.topblock")))
+    let installed = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.mantelblock")))
+    let other = InfoBlock("other", info: BlockInfo(source: .installed(from: "/tmp/Other.mantelblock")))
     let builtIn = InfoBlock("alpha", info: BlockInfo())
     #expect(BlockEntry(block: installed, installer: installer).isRemovable)
     #expect(!BlockEntry(block: other, installer: installer).isRemovable, "the installer says no")
@@ -397,7 +397,7 @@ private final class FakeInstaller: BlockInstalling {
 }
 
 @Test func updateRefusesPackageOfAnotherBlock() throws {
-    let other = BlockPackageSummary(id: "other", name: "Other", version: "1.0", contract: 1, sourcePath: "/tmp/Other.topblock")
+    let other = BlockPackageSummary(id: "other", name: "Other", version: "1.0", contract: 1, sourcePath: "/tmp/Other.mantelblock")
 
     #expect(other.refusal(updating: "hello") == .differentBlock(expected: "hello", found: "other"))
     #expect(other.refusal(updating: "other") == nil)
@@ -413,7 +413,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     let update = BlockPackageSummary(id: "hello", name: "Hello", version: "0.3", contract: 1,
                                      newEvents: ["Volume changes"],
                                      eventEntries: [hover, volume],
-                                     permissions: [], sourcePath: "/tmp/Hello.topblock", installedVersion: "0.2")
+                                     permissions: [], sourcePath: "/tmp/Hello.mantelblock", installedVersion: "0.2")
     let text = InstallSheetText(update)
     #expect(text.events.map(\.name) == ["Pointer over the notch", "Volume changes (new)"])
     #expect(text.isUpdate)
@@ -424,7 +424,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
     let fresh = BlockPackageSummary(id: "hello", name: "Hello", version: "0.2", contract: 1,
                                     eventEntries: [hover],
-                                    permissions: ["Reads the clipboard"], sourcePath: "/tmp/Hello.topblock")
+                                    permissions: ["Reads the clipboard"], sourcePath: "/tmp/Hello.mantelblock")
     let freshText = InstallSheetText(fresh)
     #expect(freshText.events.map(\.name) == ["Pointer over the notch"])
     #expect(!freshText.isUpdate)
@@ -443,7 +443,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     let music = EventEntry(name: "Music playing", reveals: "Player, state, title, artist, artwork",
                            note: "Other players are read from an undocumented part of macOS")
     let summary = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 3,
-                                      eventEntries: [hover, shots, music], sourcePath: "/tmp/Hello.topblock")
+                                      eventEntries: [hover, shots, music], sourcePath: "/tmp/Hello.mantelblock")
 
     let events = InstallSheetText(summary).events
 
@@ -459,19 +459,19 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func theSheetListsHostsUnderCanReach() {
     let network = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
-                                      sourcePath: "/tmp/Weather.topblock", access: ["Use the network"],
+                                      sourcePath: "/tmp/Weather.mantelblock", access: ["Use the network"],
                                       signer: "Ana Lima", hosts: ["api.open-meteo.com", "*.example.org"])
     let text = InstallSheetText(network)
     #expect(text.hosts == ["api.open-meteo.com", "*.example.org"])
     #expect(text.access == "Use the network")
 
-    let none = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 3, sourcePath: "/tmp/Hello.topblock")
+    let none = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 3, sourcePath: "/tmp/Hello.mantelblock")
     #expect(InstallSheetText(none).hosts.isEmpty, "no Can reach row")
 }
 
 @Test func aRiskyPairNeedsTheSecondConfirmation() {
     let files = BlockPackageSummary(id: "share", name: "Drop to Share", version: "0.4.0", contract: 3,
-                                    sourcePath: "/tmp/Share.topblock", access: ["Read your files", "Use the network"],
+                                    sourcePath: "/tmp/Share.mantelblock", access: ["Read your files", "Use the network"],
                                     signer: "Ana Lima", hosts: ["api.dropbox.com", "content.dropboxapi.com"], riskyPair: .files)
     let text = InstallSheetText(files)
     #expect(text.warning == "This block can read your files and send data to api.dropbox.com and content.dropboxapi.com. Install it only if you trust its creator.")
@@ -489,7 +489,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func aSafeBlockNeedsNoSecondConfirmation() {
     let network = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
-                                      sourcePath: "/tmp/Weather.topblock", access: ["Use the network"],
+                                      sourcePath: "/tmp/Weather.mantelblock", access: ["Use the network"],
                                       signer: "Ana Lima", hosts: ["api.open-meteo.com"])
     let text = InstallSheetText(network)
     #expect(text.warning == nil)
@@ -499,13 +499,13 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func anUnsignedBlockSaysTheCreatorCannotBeVerified() {
     let unsigned = BlockPackageSummary(id: "hello", name: "My Hello", version: "0.1.0", contract: 3,
-                                       sourcePath: "/tmp/My Hello.topblock")
+                                       sourcePath: "/tmp/My Hello.mantelblock")
     let text = InstallSheetText(unsigned)
     #expect(text.creator == "No signature: the creator cannot be verified")
     #expect(text.creatorNote == "Your approval covers this exact build. A changed copy asks again.")
 
     let signed = BlockPackageSummary(id: "hello", name: "My Hello", version: "0.1.0", contract: 3,
-                                     sourcePath: "/tmp/My Hello.topblock", signer: "Jane Developer")
+                                     sourcePath: "/tmp/My Hello.mantelblock", signer: "Jane Developer")
     let signedText = InstallSheetText(signed)
     #expect(signedText.creator == "Jane Developer")
     #expect(signedText.creatorNote == nil)
@@ -513,7 +513,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func anUpdateThatAddsAHostNamesTheNewHost() {
     let update = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.3.0", contract: 3,
-                                     sourcePath: "/tmp/Weather.topblock", installedVersion: "1.2.0",
+                                     sourcePath: "/tmp/Weather.mantelblock", installedVersion: "1.2.0",
                                      access: ["Use the network"], signer: "Ana Lima",
                                      hosts: ["api.open-meteo.com", "cdn.open-meteo.com"], newHosts: ["cdn.open-meteo.com"])
     #expect(InstallSheetText(update).hosts == ["api.open-meteo.com", "cdn.open-meteo.com (new)"])
@@ -521,7 +521,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func theSheetServesInstallUpdateAndReview() {
     let summary = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
-                                      sourcePath: "/tmp/Weather.topblock")
+                                      sourcePath: "/tmp/Weather.mantelblock")
     #expect(InstallSheetText(summary).confirm == "Install and Turn On")
     let review = InstallSheetText(summary, review: true)
     #expect(review.confirm == "Approve and Turn On")
@@ -653,7 +653,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @Test func installSheetListsAccessAndSigner() {
     let signed = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
-                                     permissions: ["Old free text"], sourcePath: "/tmp/Hello.topblock",
+                                     permissions: ["Old free text"], sourcePath: "/tmp/Hello.mantelblock",
                                      access: ["Use the network", "Read files you choose"],
                                      signer: "Jane Developer")
     let signedText = InstallSheetText(signed)
@@ -662,7 +662,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     #expect(signedText.creatorNote == nil)
 
     let unsigned = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
-                                       sourcePath: "/tmp/Hello.topblock")
+                                       sourcePath: "/tmp/Hello.mantelblock")
     let unsignedText = InstallSheetText(unsigned)
     #expect(unsignedText.access == "Nothing")
     #expect(unsignedText.creator == "No signature: the creator cannot be verified")
@@ -685,7 +685,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 @MainActor
 @Test func aNewBlockShowsReviewAndNoSwitch() {
     let home = "/Users/test"
-    let path = "/Users/test/Library/Application Support/TopNotch/Blocks/Weather Peek.topblock"
+    let path = "/Users/test/Library/Application Support/Mantel/Blocks/Weather Peek.mantelblock"
     let block = InfoBlock("weather", info: BlockInfo(version: "1.2.0", source: .installed(from: path)),
                           health: .turnedOff(reason: "New: review this block before it runs."), review: .new)
     let installer = FakeInstaller(removable: ["weather"], cannotRun: ["weather"])
@@ -700,7 +700,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     #expect(!entry.hasOrderControls)
     #expect(entry.turnedOffReason == nil, "the review text says why, not a stopped box")
     #expect(!entry.offersTurnOn)
-    #expect(entry.detail == "~/Library/Application Support/TopNotch/Blocks/Weather Peek.topblock · 1.2.0 · Off")
+    #expect(entry.detail == "~/Library/Application Support/Mantel/Blocks/Weather Peek.mantelblock · 1.2.0 · Off")
     #expect(entry.accessibilityLabel == "Weather, New")
 
     let running = BlockEntry(block: InfoBlock("alpha", info: BlockInfo()), installer: installer)
@@ -714,7 +714,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @MainActor
 @Test func aChangedBlockShowsReviewAgain() {
-    let block = InfoBlock("share", info: BlockInfo(source: .installed(from: "/tmp/Share.topblock")),
+    let block = InfoBlock("share", info: BlockInfo(source: .installed(from: "/tmp/Share.mantelblock")),
                           health: .turnedOff(reason: "Changed"), review: .changed)
 
     let entry = BlockEntry(block: block, installer: FakeInstaller(removable: ["share"]))
@@ -775,9 +775,9 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 }
 
 @Test func theFooterSaysWhereBlocksLive() {
-    let folder = URL(filePath: "/Users/test/Library/Application Support/TopNotch/Blocks", directoryHint: .isDirectory)
+    let folder = URL(filePath: "/Users/test/Library/Application Support/Mantel/Blocks", directoryHint: .isDirectory)
     #expect(BlockEntry.blocksFolderNote(folder, home: "/Users/test")
-        == "Blocks live in ~/Library/Application Support/TopNotch/Blocks")
+        == "Blocks live in ~/Library/Application Support/Mantel/Blocks")
     let elsewhere = URL(filePath: "/Volumes/Work/Blocks", directoryHint: .isDirectory)
     #expect(BlockEntry.blocksFolderNote(elsewhere, home: "/Users/test") == "Blocks live in /Volumes/Work/Blocks")
 }
@@ -868,7 +868,7 @@ private final class RecordingInstaller: BlockInstalling {
     func canRemove(_ id: BlockID) -> Bool { true }
 }
 
-private let exampleURL = URL(filePath: "/Applications/TopNotch.app/Contents/Resources/Examples/Hello.topblock")
+private let exampleURL = URL(filePath: "/Applications/Mantel.app/Contents/Resources/Examples/Hello.mantelblock")
 
 @MainActor
 @Test func exampleOfferShowsUntilInstalled() throws {
@@ -937,9 +937,9 @@ private let exampleURL = URL(filePath: "/Applications/TopNotch.app/Contents/Reso
 
     // Any entry, running, waiting for review or refused, lists the blocks instead.
     let running = BlockEntry(id: "hello", title: "Hello", info: BlockInfo())
-    let waiting = BlockEntry(id: "new", title: "New", info: BlockInfo(source: .installed(from: "/tmp/New.topblock")),
+    let waiting = BlockEntry(id: "new", title: "New", info: BlockInfo(source: .installed(from: "/tmp/New.mantelblock")),
                              review: .new)
-    let refused = BlockEntry(id: "old", title: "Old", info: BlockInfo(source: .installed(from: "/tmp/Old.topblock")),
+    let refused = BlockEntry(id: "old", title: "Old", info: BlockInfo(source: .installed(from: "/tmp/Old.mantelblock")),
                              health: .turnedOff(reason: "Built for contract 99."))
     for entry in [running, waiting, refused] {
         #expect(BlockEntry.emptyActions([entry], installer: installer, example: offer) == nil)
@@ -968,10 +968,10 @@ private let exampleURL = URL(filePath: "/Applications/TopNotch.app/Contents/Reso
 
     #expect(installer.installed.map(\.url) == [exampleURL])
     #expect(installer.installed.map(\.hash) == [pending.summary.packageHash])
-    #expect(pending.summary.packageHash == "hash-of-Hello.topblock")
+    #expect(pending.summary.packageHash == "hash-of-Hello.mantelblock")
 
     // "Install Block…" takes the same path for a package the owner chooses.
-    let chosen = URL(filePath: "/tmp/Other.topblock")
+    let chosen = URL(filePath: "/tmp/Other.mantelblock")
     let other = try PendingInstall.install(chosen, with: installer)
     #expect(other.request == .install(chosen))
 }

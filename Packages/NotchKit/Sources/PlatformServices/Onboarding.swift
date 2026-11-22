@@ -37,7 +37,7 @@ enum FolderAccess: Equatable, Sendable {
     }
 }
 
-/// The answer to "may TopNotch read the screenshot folder", asked through
+/// The answer to "may Mantel read the screenshot folder", asked through
 /// `FolderAccess.check` before the screenshot source first runs, and again
 /// each time the owner presses "Allow access". The app wires it as the
 /// source's consent check and sets `onChange` to the source coordinator's
@@ -127,7 +127,7 @@ struct FolderAccessRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Screenshot folder").font(.headline)
-            Text("TopNotch gives new screenshots clear names. To do that it reads the folder screenshots are saved to (\((folder.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath)). macOS asks once whether TopNotch may use that folder.")
+            Text("Mantel gives new screenshots clear names. To do that it reads the folder screenshots are saved to (\((folder.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath)). macOS asks once whether Mantel may use that folder.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -311,8 +311,8 @@ public struct OnboardingView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Welcome to TopNotch").font(.title2.bold())
-                Text("TopNotch works from the notch and the menu bar. Each thing it does comes from a block you add. To open Settings, right-click the notch.")
+                Text("Welcome to Mantel").font(.title2.bold())
+                Text("Mantel works from the notch and the menu bar. Each thing it does comes from a block you add. To open Settings, right-click the notch.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -399,7 +399,7 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
             defer: false
         )
         window.contentView = hosting
-        window.title = "Welcome to TopNotch"
+        window.title = "Welcome to Mantel"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()

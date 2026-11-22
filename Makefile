@@ -1,8 +1,8 @@
-# TopNotch build commands. Run from the repository root.
-PROJECT := TopNotch.xcodeproj
-SCHEME  := TopNotch
+# Mantel build commands. Run from the repository root.
+PROJECT := Mantel.xcodeproj
+SCHEME  := Mantel
 DERIVED := build
-APP     := $(DERIVED)/Build/Products/Debug/TopNotch.app
+APP     := $(DERIVED)/Build/Products/Debug/Mantel.app
 PACKAGE := Packages/NotchKit
 # Every Swift package, tested in this order.
 PACKAGES := Packages/NotchKit Packages/BlockKit
@@ -33,7 +33,7 @@ run: build quit ## Build, then launch the app
 	open $(APP)
 
 quit: ## Quit the running app, if any
-	-@pkill -x TopNotch 2>/dev/null || true
+	-@pkill -x Mantel 2>/dev/null || true
 
 clean:
 	rm -rf $(DERIVED) .build $(addsuffix /.build,$(PACKAGES))

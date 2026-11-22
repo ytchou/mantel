@@ -1,4 +1,4 @@
-// TopNotch now-playing helper.
+// Mantel now-playing helper.
 //
 // macOS 15.4 and later answer MediaRemote now-playing requests only for
 // Apple-signed processes, so a normal app gets nothing back. This library is
@@ -75,7 +75,7 @@ static void emitSoon(void) {
 
 /// Called from perl as an XSUB; the two arguments are perl's and unused.
 /// Runs until stdin closes.
-void topnotch_nowplaying_stream(void *perl, void *cv) {
+void mantel_nowplaying_stream(void *perl, void *cv) {
     void *mr = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW);
     if (!mr) exit(2);
     RegisterFn registerForNotifications = (RegisterFn)dlsym(mr, "MRMediaRemoteRegisterForNowPlayingNotifications");

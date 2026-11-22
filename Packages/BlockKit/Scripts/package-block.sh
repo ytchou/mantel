@@ -3,12 +3,12 @@
 #
 #   package-block.sh <executable> <manifest.json> [<output folder>]
 #
-# Creates <output folder>/<Name>.topblock, where <Name> is the manifest's
+# Creates <output folder>/<Name>.mantelblock, where <Name> is the manifest's
 # "name" without spaces. The package is a macOS bundle:
 #
-#   <Name>.topblock/Contents/Info.plist              made from the manifest
-#   <Name>.topblock/Contents/MacOS/<executable>      the manifest's "executable"
-#   <Name>.topblock/Contents/Resources/manifest.json
+#   <Name>.mantelblock/Contents/Info.plist              made from the manifest
+#   <Name>.mantelblock/Contents/MacOS/<executable>      the manifest's "executable"
+#   <Name>.mantelblock/Contents/Resources/manifest.json
 #
 # The bundle is then signed, so the signature seals the manifest with the
 # executable. The identity is taken from the BLOCK_SIGN_IDENTITY environment
@@ -67,8 +67,8 @@ esac
 [ -n "$version" ] || { echo "error: manifest \"version\" is empty" >&2; exit 1; }
 
 mkdir -p "$out"
-package="$out/$name.topblock"
-staging="$out/.$name.topblock.tmp"
+package="$out/$name.mantelblock"
+staging="$out/.$name.mantelblock.tmp"
 rm -rf "$staging"
 mkdir -p "$staging/Contents/MacOS" "$staging/Contents/Resources"
 cp "$manifest" "$staging/Contents/Resources/manifest.json"
@@ -80,7 +80,7 @@ chmod 755 "$staging/Contents/MacOS/$target"
 plist="$staging/Contents/Info.plist"
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict/>\n</plist>\n' > "$plist"
 plutil -insert CFBundleInfoDictionaryVersion -string "6.0" "$plist"
-plutil -insert CFBundleIdentifier -string "dev.topnotch.block.$id" "$plist"
+plutil -insert CFBundleIdentifier -string "dev.mantel.block.$id" "$plist"
 plutil -insert CFBundleExecutable -string "$target" "$plist"
 plutil -insert CFBundleShortVersionString -string "$version" "$plist"
 plutil -insert CFBundlePackageType -string "BNDL" "$plist"

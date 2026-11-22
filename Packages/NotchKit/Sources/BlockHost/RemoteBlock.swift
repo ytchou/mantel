@@ -53,7 +53,7 @@ public final class RemoteBlock: NotchBlock {
     public private(set) var notice: String?
 
     @ObservationIgnored private let dataFolder: URL
-    /// The app's temporary folder. The block's sandbox closes its `TopNotch`
+    /// The app's temporary folder. The block's sandbox closes its `Mantel`
     /// subtree, except for `temporaryFolder` inside it.
     @ObservationIgnored private let sharedTemporaryFolder: URL
     /// Where the shell writes promised files of a drop.
@@ -65,7 +65,7 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private let clock: BlockClock
     @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
     @ObservationIgnored private let preview: @MainActor ([URL]) -> Void
-    /// TopNotch's support folder, closed to the block's reads even with `files.read`.
+    /// Mantel's support folder, closed to the block's reads even with `files.read`.
     @ObservationIgnored private let supportRoot: URL
     /// The app's preferences domain, closed to the block.
     @ObservationIgnored private let preferenceDomain: String
@@ -77,7 +77,7 @@ public final class RemoteBlock: NotchBlock {
     /// The owner's home folder, which `files.read` opens to the sandbox.
     /// Tests point it at a folder of their own.
     @ObservationIgnored var homeFolder: URL = FileManager.default.homeDirectoryForCurrentUser
-    @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
+    @ObservationIgnored private let log = Logger(subsystem: "dev.mantel.Mantel", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
     @ObservationIgnored private var transport: (any Transport)?
@@ -151,7 +151,7 @@ public final class RemoteBlock: NotchBlock {
 
     /// - Parameters:
     ///   - manifest: the package's manifest, already checked.
-    ///   - packageURL: the `.topblock` folder.
+    ///   - packageURL: the `.mantelblock` folder.
     ///   - dataFolder: the folder the block may write to. Created at each launch of its process.
     ///   - owner: who owns the notch now, read inside observation tracking so
     ///     changes are pushed to the block. Pass `{ runtime.state.owner }`.
@@ -167,11 +167,11 @@ public final class RemoteBlock: NotchBlock {
     ///   - preview: shows files in Quick Look, for the block's `preview`.
     ///     Nil uses the system Quick Look panel.
     ///   - sharedTemporaryFolder: the app's temporary folder. The block's own
-    ///     temporary folder is `<it>/TopNotch/Blocks/<id>/`. Tests pass their own.
+    ///     temporary folder is `<it>/Mantel/Blocks/<id>/`. Tests pass their own.
     ///   - dropFolder: where the shell writes promised files of a drop;
     ///     dropped files inside it are moved into the block's own temporary
     ///     folder. Tests pass their own.
-    ///   - supportRoot: TopNotch's support folder, which the sandbox closes
+    ///   - supportRoot: Mantel's support folder, which the sandbox closes
     ///     even with `files.read`, except the block's own package and data.
     ///   - preferenceDomain: the app's preferences domain; the sandbox closes
     ///     it and the preferences file `~/Library/Preferences/<it>.plist`.
@@ -190,7 +190,7 @@ public final class RemoteBlock: NotchBlock {
         sharedTemporaryFolder: URL = FileManager.default.temporaryDirectory,
         dropFolder: URL = DropFolder.root,
         supportRoot: URL = SupportFolder.root,
-        preferenceDomain: String = Bundle.main.bundleIdentifier ?? "dev.topnotch.TopNotch"
+        preferenceDomain: String = Bundle.main.bundleIdentifier ?? "dev.mantel.Mantel"
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -221,10 +221,10 @@ public final class RemoteBlock: NotchBlock {
     static func failureKey(_ id: BlockID) -> String { "block.\(id.rawValue).failure" }
 
     /// The block's own temporary folder and `TMPDIR`, inside the app's:
-    /// `<shared>/TopNotch/Blocks/<id>/`. Created at each launch of its
+    /// `<shared>/Mantel/Blocks/<id>/`. Created at each launch of its
     /// process. Only this block's sandbox opens it.
     var temporaryFolder: URL {
-        sharedTemporaryFolder.appending(path: "TopNotch/Blocks/\(id.rawValue)", directoryHint: .isDirectory)
+        sharedTemporaryFolder.appending(path: "Mantel/Blocks/\(id.rawValue)", directoryHint: .isDirectory)
     }
 
     /// The executable the manifest names, inside the package.
@@ -309,11 +309,11 @@ public final class RemoteBlock: NotchBlock {
     /// size and volume check. Called off the main actor.
     @ObservationIgnored var crossVolumeSize: @Sendable (_ source: URL, _ folder: URL) -> Int? = RemoteBlock.sizeOnAnotherVolume
 
-    /// `<temporaryFolder>/TopNotch/Drops`: dropped files the block gets.
+    /// `<temporaryFolder>/Mantel/Drops`: dropped files the block gets.
     /// Inside the block its own temporary folder is `TMPDIR`. Emptied at
     /// each launch: a block is expected to move drops out of it at once.
     var dropsFolder: URL {
-        temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+        temporaryFolder.appending(path: "Mantel/Drops", directoryHint: .isDirectory)
     }
 
     /// One dropped item on its way to the block.
@@ -629,7 +629,7 @@ public final class RemoteBlock: NotchBlock {
     /// Starts the block under the sandbox profile its manifest asks for.
     /// `launch` has created the data and temporary folders: the profile
     /// names real paths. The temporary folder is the block's own, inside the
-    /// app's `TopNotch` subtree, which the profile closes: other blocks'
+    /// app's `Mantel` subtree, which the profile closes: other blocks'
     /// temporary files and dropped files stay out of reach. Dropped files
     /// reach the block by `forwardedDrop`.
     private func spawnSandboxed() throws -> any Transport {

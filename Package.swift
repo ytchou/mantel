@@ -2,10 +2,10 @@
 import PackageDescription
 
 // The kit, for block authors who add it by URL:
-//   .package(url: "https://github.com/ytchou/topnotch.git", from: "0.1.0")
-//   .product(name: "BlockKit", package: "topnotch")
-// The URL package's identity is `topnotch` (the repository name), so authors
-// pass "topnotch" as `package:`.
+//   .package(url: "https://github.com/ytchou/mantel.git", from: "0.1.0")
+//   .product(name: "BlockKit", package: "mantel")
+// The URL package's identity is `mantel` (the repository name), so authors
+// pass "mantel" as `package:`.
 //
 // Why two manifests: a package added by local path is identified by its folder
 // name, which differs per worktree and checkout, so the app and NotchKit keep
@@ -14,7 +14,7 @@ import PackageDescription
 // Both manifests must change together: targets, dependencies and settings.
 // No example, no tests here: those stay in Packages/BlockKit.
 let package = Package(
-    name: "TopNotch",
+    name: "Mantel",
     platforms: [.macOS(.v26)],
     products: [
         .library(name: "BlockWire", targets: ["BlockWire"]),

@@ -2,19 +2,19 @@
 
 Copyright (c) 2026 ytchou
 
-TopNotch is source-available. Its parts are licensed as follows:
+Mantel is source-available. Its parts are licensed as follows:
 
 - `Packages/BlockKit` (the kit block authors write against, the wire
   protocol in `PROTOCOL.md`, and the Hello example) and the root
   `Package.swift` (the kit's manifest, for adding it by URL) are licensed
   under the MIT License, in `Packages/BlockKit/LICENSE`.
-- All third party components incorporated into TopNotch are licensed under
+- All third party components incorporated into Mantel are licensed under
   the original license provided by the owner of the applicable component.
 - Everything else in this repository is available under the "Sustainable
   Use License" as defined below.
 
 In the Sustainable Use License below, the "licensor" is ytchou and the
-"software" is TopNotch, as found in this repository.
+"software" is Mantel, as found in this repository.
 
 ## Sustainable Use License
 

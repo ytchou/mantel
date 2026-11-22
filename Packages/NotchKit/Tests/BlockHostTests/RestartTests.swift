@@ -185,7 +185,7 @@ struct RestartTests {
             manifest: Fixture.manifest,
             packageURL: package,
             source: .development(path: package.path),
-            dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            dataFolder: FileManager.default.temporaryDirectory.appending(path: "mantel-data-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
             launcher: { try BlockProcess.spawn(executable: $0, generation: $1) },
             defaults: testDefaults(),
@@ -220,7 +220,7 @@ struct RestartTests {
         let first = try #require(setup.launcher.last)
         try await first.start()
 
-        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.mantelblock"))
         first.close()
         await waitUntil { setup.runtime.blocks.first is PendingBlock }
 
@@ -242,7 +242,7 @@ struct RestartTests {
         #expect(setup.launcher.processes.count == 1)
 
         setup.runtime.setEnabled("hello", false)
-        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.mantelblock"))
         setup.runtime.setEnabled("hello", true)
         await settle()
 
@@ -265,7 +265,7 @@ struct RestartTests {
         for block in store.standIns(developmentPath: nil) { runtime.register(block, enabled: false) }
         await settle()
 
-        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.mantelblock"))
         runtime.setEnabled("hello", true)
         await settle()
 
@@ -359,7 +359,7 @@ struct RestartTests {
             manifest: Fixture.manifest,
             packageURL: package,
             source: .development(path: package.path),
-            dataFolder: FileManager.default.temporaryDirectory.appending(path: "topnotch-data-\(UUID().uuidString)"),
+            dataFolder: FileManager.default.temporaryDirectory.appending(path: "mantel-data-\(UUID().uuidString)"),
             owner: { runtime.state.owner },
             launcher: { try BlockProcess.spawn(executable: $0, generation: $1) },
             defaults: defaults,
