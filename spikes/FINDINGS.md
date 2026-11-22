@@ -291,3 +291,143 @@ temporary folders, and reads in the home folder).
   part of the owner's check at `make run`.
 - Limit: a deny list stops the plain cases, not a determined attacker; system
   services stay reachable.
+
+## Sandbox rules, 21 Nov
+
+Measured on this Mac (macOS 26.5.1, Apple Intelligence on) with
+`spikes/sandbox-rules`: the executable `sbspike` (one subcommand per probe,
+each prints one `RESULT <probe> OK|FAIL` line) copied into a stand-in
+package folder `Spike.topblock/` and started by `run.sh` the way
+`BlockProcess` starts a block: `env -i PATH=... HOME=... TMPDIR=<block temp>
+TOPNOTCH_BLOCK_GENERATION=1 /usr/bin/sandbox-exec -p <profile> <executable>`.
+The block's temp folder was `<TMPDIR>/TopNotch/Blocks/dev.topnotch.spike/`, its
+data folder a throwaway one under `~/Library/Application Support/`. All
+commands run from `spikes/sandbox-rules` after `swift build`; `./run.sh
+<profile> --print` prints a profile. Sandbox violations are not logged for
+`sandbox-exec` here, so each needed location was found by adding one
+`(allow file-read* ...)` at a time through `EXTRA=`.
+
+1. **Read allow-list (measured).** The allow-list below lets FoundationModels
+   answer and Quick Look make thumbnails. Commands: `./run.sh allowlist fm`
+   (model answered in 7.5 s) and `./thumbs.sh allowlist` (PNG, text and PDF in
+   the block's temp folder and a PNG in its data folder: all `thumbnail`
+   representations, same sizes as unsandboxed). Two entries were not
+   obvious: without `/private/var/db/eligibilityd` the model reports
+   `deviceNotEligible` (`EXTRA='(allow file-read* (subpath "/private/var/db/eligibilityd"))'`
+   was the narrowest fix; `os_eligibility`, `AppleIntelligencePlatform` and
+   `com.apple.modelcatalog` were not enough); without the root symbolic links
+   `/etc`, `/var`, `/tmp` `getaddrinfo` fails even with the network open
+   (`EXTRA='(allow network*)' ./run.sh allowlist dns www.apple.com`, fixed by
+   `(literal "/etc") (literal "/var") (literal "/tmp")`). `/Library/Apple` and
+   `/Library/Preferences` were not narrowed further. With the list, `/Applications`,
+   `/Library/Application Support`, `/private/tmp` and `~/Library/Preferences`
+   are refused (`./run.sh allowlist read <path>`).
+2. **Per-user temp folder (measured): yes, reads can be closed.** Under the
+   allow-list, a file in `<TMPDIR>` outside `TopNotch/`, a listing of `<TMPDIR>`
+   and another block's folder are refused, the block's own folder reads
+   (`./run.sh allowlist read <path>`), and question 1 passes with it, because
+   nothing in that list opens `<TMPDIR>`. Writes into `<TMPDIR>` stay open
+   (the current write rule); only reads were asked. Control: `allowlist-tmp`
+   (the same plus `<TMPDIR>` readable) and `denylist` (today's profile) both
+   read the outside file.
+3. **Network gate (measured): yes.** Command `./q3.sh gate` (starts two copies
+   of `proxy.py`, a 30-line CONNECT proxy, on 8899 and 8898). Under the gate
+   profile: TCP to `127.0.0.1:8899` and `localhost:8899` connects; TCP to
+   `127.0.0.1:8898` (another local listener) and to `17.253.144.10:443` is
+   refused (`EPERM`); a direct `URLSession` GET of `https://www.apple.com/`
+   fails (`EPERM`). A `URLSession` GET through the proxy on 8899 returns 200
+   with both `connectionProxyDictionary` (`kCFNetworkProxiesHTTPSEnable/Proxy/Port`,
+   proxy host `127.0.0.1`) and `proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy:)]`;
+   the proxy logged `CONNECT www.apple.com:443 HTTP/1.1` for each. The same
+   session aimed at 8898 fails (CFNetwork 310) and that proxy logged nothing.
+   The block itself needs no name lookup: the proxy resolves.
+4. **Name lookups (measured).** Two paths. `getaddrinfo` uses the
+   `/private/var/run/mDNSResponder` socket, which `(deny network*)` already
+   closes: under the gate it fails in 0 ms for `www.apple.com` and an unknown
+   name (`./run.sh gate dns <name>`), and resolves once that socket is allowed
+   (`EXTRA='(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'`);
+   the dnssd deny does not stop that path. `URLSession` (Network framework)
+   resolves through the `com.apple.dnssd.service` Mach service, which the gate
+   leaves open: under `gate`, `https://www.apple.com/` fails at the connect
+   (`EPERM`) while an unknown name fails with -1003, so a query went out.
+   With `(deny mach-lookup (global-name "com.apple.dnssd.service"))` (profile
+   `gate-dns`), `www.apple.com` also fails with -1003: no lookup. Proxy
+   requests still return 200 (`./q3.sh gate-dns`), and question 1 still
+   passes (`./run.sh gate-dns fm`, 7.6 s; `./thumbs.sh gate-dns`, all four).
+5. **Preferences service (measured): yes, the file deny alone does not stop
+   it.** Under `denylist`, `allowlist` and `prefs-file` (the allow-list plus
+   `(deny file-read* file-write* (literal "~/Library/Preferences/dev.topnotch.TopNotch.plist"))`)
+   a direct read of the file is refused, yet `./run.sh <profile> prefs-read dev.topnotch.TopNotch`
+   gets all 8 keys through `UserDefaults(suiteName:)` and `CFPreferences`
+   (values not printed), and `./run.sh <profile> prefs-write dev.topnotch.SpikeTest`
+   writes keys that `defaults read dev.topnotch.SpikeTest` sees from outside.
+   So a block can also write any other app's preferences. Denying the Mach
+   services `com.apple.cfprefsd.daemon` and/or `com.apple.cfprefsd.agent`
+   (either one alone, or both: profile `gate-dns-prefs`) stops the read and
+   the persisted write, but breaks FoundationModels (`appleIntelligenceNotEnabled`);
+   thumbnails and the proxy still work. The narrower SBPL operations do the job
+   without breakage: `(deny user-preference-write)` plus
+   `(deny user-preference-read (preference-domain "dev.topnotch.TopNotch"))`
+   (`EXTRA='<those two>' ./run.sh gate-dns ...`): the TopNotch domain reads
+   nothing, writes to any domain do not persist, the model answers (7.3 s)
+   and all four thumbnails work. Denying every preference read breaks the
+   model again (`appleIntelligenceNotEnabled`); reads of other apps' domains
+   (`com.apple.finder`: 80 keys) stay open, a written limit.
+
+**Not asked, found on the way (measured).** Quick Look bypasses the read
+allow-list: `./run.sh allowlist thumb <path>` made a full thumbnail of a PNG
+in the home folder that `./run.sh allowlist read <path>` refuses, and of
+`~/Library/Preferences/.GlobalPreferences.plist`; a missing path gives
+"doesn't exist". So a block can see a picture of any file it can name and
+learn whether it exists (metadata reads in the home folder already allow the
+second). Not closed here.
+
+Profile that passed question 1 (`./run.sh allowlist --print`; `<HOME>`,
+`<TMPDIR>` (real path) and `<PKG>` stand for this Mac's paths):
+
+```
+(version 1)
+(allow default)
+(deny network*)
+(deny appleevent-send)
+(deny file-write*)
+(allow file-write* (subpath "<HOME>/Library/Application Support/TopNotchSpike/BlockData/dev.topnotch.spike") (subpath "<TMPDIR>") (subpath "/dev"))
+(deny file-read* file-write* (subpath "<TMPDIR>/TopNotch"))
+(allow file-read* file-write* (subpath "<TMPDIR>/TopNotch/Blocks/dev.topnotch.spike"))
+(deny file-read*)
+(allow file-read*
+  (literal "/")
+  (literal "/etc")
+  (literal "/var")
+  (literal "/tmp")
+  (subpath "/System")
+  (subpath "/usr")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Preferences")
+  (subpath "/private/etc")
+  (subpath "/private/var/db/timezone")
+  (subpath "/private/var/db/dyld")
+  (subpath "/private/var/db/eligibilityd")
+  (subpath "/dev"))
+(allow file-read* (subpath "<PKG>/Spike.topblock") (subpath "<HOME>/Library/Application Support/TopNotchSpike/BlockData/dev.topnotch.spike") (subpath "<TMPDIR>/TopNotch/Blocks/dev.topnotch.spike"))
+(allow file-read-metadata (subpath "<HOME>"))
+```
+
+Profile that passed question 3 (`./run.sh gate --print`): the question 1
+profile followed by
+
+```
+(deny network*)
+(allow network-outbound (remote tcp "localhost:8899"))
+```
+
+Measured together with question 1 and the proxy (questions 4 and 5): the
+question 3 profile plus `(deny mach-lookup (global-name "com.apple.dnssd.service"))`,
+`(deny user-preference-write)` and
+`(deny user-preference-read (preference-domain "dev.topnotch.TopNotch"))`
+(`EXTRA='<the two preference rules>' ./q3.sh gate-dns`, `./run.sh gate-dns fm`,
+`./thumbs.sh gate-dns`: all as in questions 3 and 1).
+
+These rules are now in `SandboxProfile` (`Packages/NotchKit/Sources/BlockHost/SandboxProfile.swift`).

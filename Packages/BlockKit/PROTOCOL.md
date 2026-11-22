@@ -1,4 +1,4 @@
-# TopNotch block protocol, version 2
+# TopNotch block protocol, version 3
 
 A block is a separate program. The app starts it in a sandbox, sends it
 events, and draws the view the block sends back as data. This file describes
@@ -7,10 +7,13 @@ the messages between the app and a block. `BlockWire` implements it;
 
 ## Version
 
-- The protocol version is one integer. This document is version 2.
+- The protocol version is one integer. This document is version 3.
 - A block names its version in `manifest.json` (`contract`) and in `hello`.
-- The app accepts versions 1 to 2. It refuses any other version and names the
+- The app accepts versions 1 to 3. It refuses any other version and names the
   versions it supports.
+- Version 3 is additive. It adds two optional fields: `hosts` in the
+  manifest and `gatePort` in `welcome`. A field that is not set is left out,
+  so a version 1 or 2 manifest and `welcome` encode as before.
 - Version 2 is additive. Every version 1 frame is a valid version 2 frame
   with the same bytes; version 2 only adds node kinds, messages and optional
   fields. A field that is not set is left out, so a version 1 tree encodes as
@@ -79,8 +82,11 @@ the messages between the app and a block. `BlockWire` implements it;
 
 - `priority` is `ambient`, `standard` or `interactive`.
 - `opensAt` is `peek` or `expanded`.
-- `seconds` dismisses the presentation after that time, at most 3600. Without
-  it, or when it is not a positive number, the presentation stays until
+- `seconds` dismisses the presentation after that time.
+- A `standard` presentation ends after at most 60 s. Without `seconds`, or
+  when it is not a positive number, it ends after 60 s.
+- An `ambient` or `interactive` presentation ends after at most 3600 s.
+  Without `seconds`, or when it is not a positive number, it stays until
   `dismiss`.
 - `accepts` is a list of drop kinds: `file`, `link`, `text`. While the
   presentation is on screen, things of those kinds dropped on the notch come
@@ -98,9 +104,12 @@ the messages between the app and a block. `BlockWire` implements it;
   `present` with only a wing is valid.
 - An `interactive` presentation counts as `interactive` only while the block
   is in an interaction: a drag is in progress, the pointer is on the notch and
-  the block owns it, or less than 20 s have passed since either ended. Outside
-  that it counts as `standard`. Between equal priorities the block higher in
-  the owner's order on the Blocks page wins.
+  the block owns it, or less than 20 s have passed since either ended.
+- Outside an interaction, an `interactive` presentation with `seconds`
+  counts as `standard`. One without `seconds` (an endless view) counts as
+  `ambient`: it gives way to any timed view of another block.
+- Between equal priorities the block higher in the owner's order on the
+  Blocks page wins.
 
 ### Late answers
 
@@ -114,7 +123,7 @@ the messages between the app and a block. `BlockWire` implements it;
 
 | Message | Fields | Meaning |
 |---|---|---|
-| `welcome` | `contract` int, `settings` object, `dataFolder` string | The answer to `hello`. The block starts now. |
+| `welcome` | `contract` int, `settings` object, `dataFolder` string, `gatePort`? int (v3) | The answer to `hello`. The block starts now. |
 | `ping` | `seq` int | A heartbeat, once per second. |
 | `event` | `payload` `{name, value}`, `replay` bool, `seq`? int (v2) | A system event the block listens to. |
 | `owner` | `owns` bool | Whether the block's presentation is on screen. |
@@ -135,10 +144,17 @@ Inputs:
 | `dragEnded` (v2) | `id` string, `succeeded` bool | That drag ended. `succeeded` is false when it was cancelled. |
 
 - A drop is `{"file": {"path"}}`, `{"link": {"url"}}` or
-  `{"text": {"string"}}`. A file path is absolute. Files the app wrote for a
-  drop (a dragged image without a file, for example) are moved into the
-  block's own temporary folder, under `TopNotch/Drops/<uuid>/`, before the
-  drop is sent. Only that block may read and write them.
+  `{"text": {"string"}}`. A file path is absolute.
+- Files the app wrote for a drop (a dragged image without a file, for
+  example) are moved into the block's own temporary folder, under
+  `TopNotch/Drops/<uuid>/`, before the drop is sent. Only that block may
+  read and write them.
+- A dropped file the block's sandbox can read where it is (in the block's
+  own folders, or with `files.read` in the home folder or under `/Volumes`)
+  is sent with its own path.
+- Any other dropped file is copied into `TopNotch/Drops/<uuid>/` first, and
+  the copy's path is sent. A file on another volume over 500 MB is left out
+  and logged. A copy that fails is left out.
 - An item `action` is `{"click": {}}`, `{"doubleClick": {}}` or
   `{"menu": {"id": <menu entry id>}}`.
 - The app sends `dragBegan` before the `dragStarted` event that the same drag
@@ -148,6 +164,10 @@ Inputs:
   block id. A toggle is `true` or `false`. A choice is a string.
 - `dataFolder` is a folder the block may write to:
   `~/Library/Application Support/TopNotch/BlockData/<id>`. Remove deletes it.
+- `gatePort` is the local port of the block's network gate (see "Network
+  gate"). It is set only when the manifest asks for `network` and the gate
+  opened. When the gate cannot open, the block starts without network and
+  the reason is shown on the Blocks page.
 - A block must answer `ping` from its main thread. No `pong` for 3 seconds
   after `welcome` is a hang; before `welcome` the block has 10 seconds to say
   `hello`. The app then stops the block and counts a failure.
@@ -156,6 +176,10 @@ Inputs:
 - `owner` with `owns: false` is the block's only signal that its time ran out
   or that another block took the notch.
 - After `quit`, the app sends SIGTERM, then SIGKILL after 1 second.
+- The app samples each block process every 30 s. A block over 500 MB of
+  memory at one sample, or over half a processor core for 4 samples in a row
+  (two minutes), is stopped and turned off with the reason. It is not
+  started again.
 
 ## Events
 
@@ -176,6 +200,33 @@ An event payload is `{"name": <event name>, "value": <object>}`.
   `replay: true`, in the order they arrived; for `nowPlaying`, the latest of
   each player. The block updates its state and does not present. Events that
   happen while the block starts are sent after the replay with `replay: false`.
+
+### Catalog
+
+Each event has one entry in the app's catalog (`EventCatalog`): what it
+reveals and the macOS permission it needs. The install sheet shows the entry
+of each event the manifest lists.
+
+| Event | Shown as | Reveals | Permission |
+|---|---|---|---|
+| `pointerHover` | Pointer over the notch | The pointer entered or left the notch | none |
+| `dragStarted` | Dragging starts | A drag is under way, and the kinds of things in it (file, link, text), never their content | none |
+| `dragEnded` | Dragging ends | A drag has ended, and the kinds of things in it (file, link, text), never their content | none |
+| `screenshotCaptured` | Screenshots | The path and time of a new screenshot | the screenshot folder |
+| `outputVolume` | Volume changes | The output volume and mute state | none |
+| `nowPlaying` | Music playing | Player, state, title, artist, artwork | none |
+
+- `nowPlaying` notes: other players are read from an undocumented part of
+  macOS and may stop working after an update.
+
+### Adding an event
+
+A new event must meet every rule:
+
+- It reveals only something the user just did in the open on this Mac.
+- It reveals nothing more: never keystrokes, clipboard content, screen content or another app's data.
+- It has an entry in the catalog. A new event does not compile without one.
+- Its permission is asked before its source runs.
 
 ## View nodes
 
@@ -292,6 +343,8 @@ A package is a macOS bundle, signed as a whole:
 ```
 
 - `Scripts/package-block.sh` builds and signs this layout; see `README.md`.
+- The folder may have any name that ends in `.topblock`. The block's id
+  comes from the manifest, not from the folder name.
 - The signature seals the manifest with the executable. A package changed
   after signing is refused.
 - A package in the version 1 flat layout (`manifest.json` and the executable
@@ -313,6 +366,7 @@ A package is a macOS bundle, signed as a whole:
 | `trigger` | string | no | What makes the block show. |
 | `permissions` | list of strings | no | Display-only text. |
 | `access` | list of tokens | no | What the block may do beyond the default sandbox (v2). |
+| `hosts` | list of strings | with `network` | The hosts the block may reach through the network gate (v3). |
 | `events` | list of event names | no | The events the app sends. |
 | `settings` | list of settings | no | Drawn and stored by the app. |
 
@@ -329,12 +383,46 @@ A setting is `{key, type, title, default?, options?}`.
 
 | Token | Lets the block | Shown to the owner as |
 |---|---|---|
-| `network` | open outbound connections | "Use the network" |
-| `files.read` | read files in the home folder | "Read your files" |
+| `network` | reach the hosts in `hosts`, over HTTPS, through the network gate | "Use the network, only to reach: <hosts>" |
+| `files.read` | read files in the home folder and under `/Volumes` | "Read your files" |
 | `files.screenshots` | read and write in the screenshot folder | "Rename files in the screenshot folder" |
 
 A manifest without `access` (every version 1 manifest) gets the default
 sandbox. An unknown token is refused.
+
+### Hosts
+
+- Each entry is an exact host name, such as `api.example.com`, or `*.` and a
+  domain, such as `*.example.org`.
+- `*.example.org` matches every name below `example.org`, not `example.org`
+  itself.
+- Names are compared without case.
+- `network` needs `hosts`, and `hosts` needs `network`, whatever the
+  contract.
+- A bare `*` is refused.
+- `*.` with a top-level domain only, such as `*.com`, is refused.
+- An entry that is not a host name is refused: a host name is letters,
+  digits, `-` and `.`, in labels that are not empty, at most 253
+  characters.
+
+### Network gate
+
+- A block with `network` reaches the network only through its own gate: a
+  local HTTPS proxy on `127.0.0.1`, at the port sent in `welcome`
+  (`gatePort`).
+- The sandbox allows that port and no other connection. Name lookups are
+  closed; the gate resolves names.
+- The gate accepts `CONNECT <host>:443` for a host that matches an entry in
+  `hosts`. It answers `200`, opens the connection and passes bytes both ways.
+- Anything else gets `403` and is closed: another host, another port, plain
+  HTTP, a host that is not a host name (by the rule under "Hosts"), a
+  request header over 8 KB.
+- Each refused host is logged once, cut to 253 characters, never with the
+  request's content. After 64 different refused hosts, one line says more
+  are not logged.
+- In Swift, use `ctx.urlSession`: it sends every request through the gate.
+  A session the block builds itself (`URLSession.shared` included) does not
+  work.
 
 ### Refusals
 
@@ -342,31 +430,81 @@ The app refuses a manifest, at install and at launch, when: a required field
 is missing or has the wrong type; `id` breaks the rule above or is reserved
 (`shelf`, `rename`, `nowplaying`, `block`, `onboarding`, `com`, `apple`,
 `ns`; only a bundled block may use one); `contract` is not supported;
-`executable` is outside `Contents/MacOS` or not executable; an event name is
-unknown; an `access` token is unknown; or a setting is malformed. Each case
-has its own message.
+`executable` is outside `Contents/MacOS` or not executable; a symbolic link
+in the package leads outside it; an event name is
+unknown; an `access` token is unknown; `hosts` breaks a rule under "Hosts";
+or a setting is malformed. Each case has its own message.
 
 ## Sandbox
 
 Every block runs under a sandbox profile that the app builds from its
-manifest. The profile allows everything by default, then denies:
+manifest (`SandboxProfile`). The profile allows everything by default, then
+denies:
 
-- network connections, unless `network`;
+- network connections, except to the block's own network gate, and only
+  with `network`;
+- name lookups;
 - Apple events;
+- preference writes, and reads of TopNotch's own preferences domain;
 - file writes, except in the block's data folder, the temporary folder and
   `/dev`;
-- file reads and writes in the app's `TopNotch` folder inside the temporary
-  folder, where dropped files and every block's temporary folder are, except
-  in the block's own temporary folder. The rest of the per-user temporary
-  folder stays open, so a block can still see other apps' files there:
-  Foundation ignores `TMPDIR`, and frameworks write temporary files there;
-- file reads inside the home folder, unless `files.read`. The block's data
-  folder and its own package stay readable.
+- file reads outside an allow-list: the system locations a process needs,
+  the block's package, its data folder, its own temporary folder, and what
+  its tokens open;
+- after everything a token opens: file reads and writes in the app's
+  `TopNotch` folder inside the temporary folder (dropped files and every
+  block's temporary folder), in TopNotch's support folder
+  (`~/Library/Application Support/TopNotch`: other blocks' packages and
+  data, the approvals) and of the app's preferences file, except the
+  block's own temporary folder, data folder and package.
 
-`files.screenshots` allows reads and writes in the screenshot folder only.
-Reading file metadata in the home folder is always allowed: the on-device
-model (FoundationModels) needs it.
+`files.read` opens the home folder and every volume under `/Volumes`.
+`files.screenshots` opens reads and writes in the screenshot folder only.
+Neither opens what the last rule closes, even when the screenshot folder is
+the home folder.
 
-This is a deny list. It stops the plain cases: sending a file away, writing
-over a document. It is not a guarantee against a determined attacker: system
-services stay reachable. The signature answers who made the block.
+The app follows the same rule before it shows (`preview`) or drags out a file
+the block names, and before it hands a dropped file over where it is: a path
+the block's sandbox cannot read is left out, or for a drop, copied.
+
+Limits that remain:
+
+- It stops the plain cases: sending a file away, reading another block's
+  data, writing over a document. It is not a guarantee against a determined
+  attacker: system services stay reachable.
+- Writes into the per-user temporary folder stay open: Foundation ignores
+  `TMPDIR`, and frameworks (FoundationModels, Quick Look thumbnails) write
+  there. Reads there are closed outside the block's own folder, so two
+  blocks cannot pass files through it by reading. Metadata there stays
+  readable outside the app's `TopNotch` folder (whether a named file
+  exists, its size and dates, not listings): Foundation needs it to create
+  folders and open files for writing.
+- Metadata of anything in the home folder stays readable (names, sizes,
+  dates): without it the on-device model reports "Apple Intelligence not
+  enabled".
+- Other apps' preference domains stay readable through the preferences
+  service: denying every preference read breaks the on-device model.
+  Nothing a block must not see is kept in TopNotch's own domain, which is
+  closed.
+- Quick Look thumbnails ignore the read allow-list: the thumbnail service
+  reads the file, not the block. A block can get a picture of any file it
+  can name and learn whether it exists.
+- `files.read` opens every mounted volume under `/Volumes` whole, not only
+  the home folder: files on external disks must stay readable.
+- System services can fetch from the network for a block, outside the
+  network gate: the network deny covers the block's own process only. A
+  background `URLSession` (run by `nsurlsessiond`) or LaunchServices
+  opening a URL in another app reaches any host. Closing them needs their
+  services denied, which may break frameworks blocks use; that needs a
+  follow-up spike.
+- A block starts in a process group of its own, and the group is ended with
+  it, so its child processes do not outlive it. A child that leaves the
+  group is not ended, and the memory and processor watch counts the
+  block's own process only, not its children.
+- The package hash is checked before each start, but the package runs in
+  place from its folder: a file changed between the check and the moment
+  it is loaded is not caught until the next start.
+
+The signature answers who made the block. The owner's approval answers
+whether this exact build may run. A package the app cannot read in full (a file it
+cannot open, a folder it cannot list) matches no approval and does not start.

@@ -87,7 +87,9 @@ public struct ActionItem: Codable, Hashable, Sendable {
 public enum HostToBlock: Codable, Hashable, Sendable {
     /// The app's answer to `hello`. `settings` holds every declared setting's
     /// current value. `dataFolder` is a path the block may write to.
-    case welcome(contract: Int, settings: [String: SettingValue], dataFolder: String)
+    /// Contract version 3: `gatePort` is the local port of the app's network
+    /// gate, for a block that may reach named hosts (none when nil).
+    case welcome(contract: Int, settings: [String: SettingValue], dataFolder: String, gatePort: Int? = nil)
     /// A heartbeat. Answer with `pong` and the same `seq`.
     case ping(seq: Int)
     /// A system event the block listens to. `replay` is true when the app

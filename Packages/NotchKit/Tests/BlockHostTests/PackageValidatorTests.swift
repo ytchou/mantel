@@ -36,10 +36,12 @@ struct PackageValidatorTests {
         contract: Int = Contract.current,
         executable: String = "HelloBlock",
         events: [String] = ["pointerHover"],
-        settings: [SettingSpec] = []
+        settings: [SettingSpec] = [],
+        access: [Access] = [],
+        hosts: [String] = []
     ) -> Manifest {
         Manifest(id: id, name: "Hello", version: "1.0.0", contract: contract, executable: executable,
-                 events: events, settings: settings)
+                 access: access, hosts: hosts, events: events, settings: settings)
     }
 
     /// The refusal for `manifest` in a package, or `nil` when it passes.
@@ -67,13 +69,13 @@ struct PackageValidatorTests {
         #expect(loaded == hello)
     }
 
-    @Test func refusesUnsupportedContract() throws {
+    @Test func aContractOutsideOneToThreeIsRefused() throws {
         let error = try #require(try refusal(manifest(contract: 99)))
 
         #expect(error == .unsupportedContract(found: 99, supported: Contract.supported))
         let text = try #require(error.errorDescription)
         #expect(text.contains("contract 99"))
-        #expect(text.contains("supports contracts 1 to 2"))
+        #expect(text.contains("supports contracts 1 to 3"))
     }
 
     @Test func refusesReservedIds() throws {
@@ -151,6 +153,32 @@ struct PackageValidatorTests {
         try Data("#!/bin/sh\n".utf8).write(to: real)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: real.path)
         try FileManager.default.createSymbolicLink(atPath: macOS(inside).appending(path: "Link").path, withDestinationPath: "Real")
+        #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
+    }
+
+    /// A5: a link anywhere in the package, not only the executable, must
+    /// stay inside it: the hash covers the link's text, not its target.
+    @Test func refusesAnyLinkLeavingThePackage() throws {
+        for (target, relative) in [("/usr/lib/libSystem.B.dylib", false), ("../../../outside.dylib", true),
+                                   ("/topnotch-missing/later.dylib", false)] {
+            let linked = try package(manifest())
+            let frameworks = linked.appending(path: "Contents/Frameworks")
+            try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: frameworks.appending(path: "Lib.dylib").path,
+                                                       withDestinationPath: target)
+            #expect(throws: BlockInstallError.executableOutsidePackage("Contents/Frameworks/Lib.dylib"),
+                    "\(target), relative: \(relative)") {
+                try PackageValidator.load(linked, source: Self.installed)
+            }
+        }
+
+        // A link to a file inside the package passes.
+        let inside = try package(manifest())
+        let frameworks = inside.appending(path: "Contents/Frameworks")
+        try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+        try Data("lib".utf8).write(to: frameworks.appending(path: "Real.dylib"))
+        try FileManager.default.createSymbolicLink(atPath: frameworks.appending(path: "Lib.dylib").path,
+                                                   withDestinationPath: "Real.dylib")
         #expect(throws: Never.self) { try PackageValidator.load(inside, source: Self.installed) }
     }
 
@@ -247,11 +275,49 @@ struct PackageValidatorTests {
 
         #expect(throws: BlockInstallError.unknownAccess("camera")) { try PackageValidator.load(url, source: Self.installed) }
 
-        // Known tokens pass.
+        // Known tokens pass; `network` names its hosts.
         object["access"] = ["network", "files.read", "files.screenshots"]
+        object["hosts"] = ["api.example.com"]
         try JSONSerialization.data(withJSONObject: object).write(to: manifestFile)
         let loaded = try PackageValidator.load(url, source: Self.installed)
         #expect(loaded.access == [.network, .filesRead, .filesScreenshots])
+    }
+
+    // MARK: Hosts
+
+    @Test func aBareStarIsRefusedByTheValidator() throws {
+        let error = try refusal(manifest(access: [.network], hosts: ["api.example.com", "*"]))
+        guard case let .invalidHosts(detail)? = error else {
+            Issue.record("expected invalidHosts, got \(String(describing: error))")
+            return
+        }
+        #expect(detail.contains("\"*\""))
+        #expect(try #require(error?.errorDescription).contains("hosts"))
+    }
+
+    @Test func networkWithoutHostsIsRefused() throws {
+        for contract in [2, 3] {
+            #expect(try refusal(manifest(contract: contract, access: [.network])) == .networkWithoutHosts, "contract \(contract)")
+        }
+        #expect(try #require(BlockInstallError.networkWithoutHosts.errorDescription).contains("network"))
+    }
+
+    @Test func hostsWithoutNetworkIsRefused() throws {
+        let error = try refusal(manifest(access: [.filesRead], hosts: ["api.example.com"]))
+        guard case let .invalidHosts(detail)? = error else {
+            Issue.record("expected invalidHosts, got \(String(describing: error))")
+            return
+        }
+        #expect(detail.contains("network"))
+    }
+
+    @Test func networkWithValidHostsPasses() throws {
+        #expect(try refusal(manifest(access: [.network], hosts: ["api.example.com", "*.example.org"])) == nil)
+        // A malformed host or a wildcard over a whole top-level domain is refused.
+        for bad in ["*.com", "api.example.com:443", "a*.example.org"] {
+            let error = try refusal(manifest(access: [.network], hosts: [bad]))
+            if case .invalidHosts? = error {} else { Issue.record("\(bad): \(String(describing: error))") }
+        }
     }
 
     private func macOS(_ package: URL) -> URL {

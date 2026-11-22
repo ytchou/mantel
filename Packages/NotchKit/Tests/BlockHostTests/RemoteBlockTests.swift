@@ -7,6 +7,27 @@ import NotchCore
 
 @MainActor
 struct RemoteBlockTests {
+    /// B5: a block whose start check refuses raises no demand, so no event
+    /// source starts and no permission is asked for it.
+    @Test func aRefusedStartSubscribesToNothing() async throws {
+        let runtime = NotchRuntime()
+        let launcher = FakeLauncher()
+        let block = Rig.standIn(runtime: runtime, launcher: launcher, defaults: testDefaults())
+        block.startCheck = { "Changed: its package changed after you approved it." }
+
+        runtime.register(block)
+
+        #expect(!runtime.hasSubscribers(for: PointerHoverChanged.self))
+        #expect(launcher.processes.isEmpty)
+
+        // Control: once the check passes, turning it on subscribes and starts it.
+        block.startCheck = { nil }
+        runtime.setEnabled(block.id, false)
+        runtime.setEnabled(block.id, true)
+        #expect(runtime.hasSubscribers(for: PointerHoverChanged.self))
+        #expect(launcher.processes.count == 1)
+    }
+
     @Test func presentReachesRuntime() async throws {
         let rig = Rig()
         try await rig.process.start()
@@ -116,7 +137,7 @@ struct RemoteBlockTests {
         #expect(first.allSatisfy { !$0.replay }, "a change during the start still shows a peek")
         // `welcome` comes first, with settings read from the manifest defaults.
         #expect(rig.process.received.first.map { message -> Bool in
-            if case let .welcome(contract, settings, _) = message {
+            if case let .welcome(contract, settings, _, _) = message {
                 contract == Contract.current && settings == ["loud": .bool(false), "size": .string("large")]
             } else { false }
         } == true)
@@ -143,21 +164,58 @@ struct RemoteBlockTests {
     }
 
     @Test func presentSecondsAreBounded() async throws {
-        #expect(RemoteBlock.duration(seconds: .infinity) == nil)
-        #expect(RemoteBlock.duration(seconds: .nan) == nil)
-        #expect(RemoteBlock.duration(seconds: 0) == nil)
-        #expect(RemoteBlock.duration(seconds: 2.5) == .milliseconds(2500))
+        #expect(RemoteBlock.duration(seconds: .infinity, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: .nan, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: 0, priority: .ambient) == nil)
+        #expect(RemoteBlock.duration(seconds: 2.5, priority: .ambient) == .milliseconds(2500))
+        #expect(RemoteBlock.duration(seconds: 2.5, priority: .standard) == .milliseconds(2500))
 
         let rig = Rig()
         try await rig.process.start()
         // Before the fix this traps converting to `Duration`.
-        try rig.process.send(present(seconds: 1e300))
+        try rig.process.send(present(priority: .ambient, seconds: 1e300))
         await waitUntil { rig.runtime.state.owner == "hello" }
         #expect(rig.runtime.state.presentation?.duration == .seconds(3600))
 
-        try rig.process.send(present(.text("Again"), seconds: -1))
+        try rig.process.send(present(.text("Again"), priority: .ambient, seconds: -1))
         await waitUntil { rig.block.model.peek == .text("Again") }
         await settle()
+        #expect(rig.runtime.state.presentation?.duration == nil)
+    }
+
+    @Test func aStandardPresentationIsCappedAtSixtySeconds() async throws {
+        #expect(RemoteBlock.standardMaxSeconds == 60)
+        #expect(RemoteBlock.duration(seconds: 1e300, priority: .standard) == .seconds(60))
+
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(priority: .standard, seconds: 3600))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.duration == .seconds(60))
+    }
+
+    @Test func aStandardPresentationWithNoEndGetsSixtySeconds() async throws {
+        for seconds: Double in [0, -1, .infinity, .nan] {
+            #expect(RemoteBlock.duration(seconds: seconds, priority: .standard) == .seconds(60), "\(seconds)")
+        }
+
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(priority: .standard, seconds: nil))
+        await waitUntil { rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.duration == .seconds(60))
+    }
+
+    @Test func ambientAndInteractiveKeepNoEnd() async throws {
+        let rig = Rig()
+        try await rig.process.start()
+        try rig.process.send(present(.text("Low"), priority: .ambient, seconds: nil))
+        await waitUntil { rig.block.model.peek == .text("Low") && rig.runtime.state.owner == "hello" }
+        #expect(rig.runtime.state.presentation?.priority == .ambient)
+        #expect(rig.runtime.state.presentation?.duration == nil)
+
+        try rig.process.send(present(.text("Top"), priority: .interactive, seconds: nil))
+        await waitUntil { rig.block.model.peek == .text("Top") && rig.runtime.state.presentation?.priority == .interactive }
         #expect(rig.runtime.state.presentation?.duration == nil)
     }
 
@@ -232,7 +290,7 @@ struct RemoteBlockTests {
 
         let reason = try #require(failures.first)
         #expect(reason.contains("99"))
-        #expect(reason.contains("contracts 1 to 2"))
+        #expect(reason.contains("contracts 1 to 3"))
         #expect(rig.runtime.state.owner == nil)
         #expect(!rig.process.received.contains { if case .welcome = $0 { true } else { false } })
     }
@@ -295,7 +353,8 @@ struct RemoteBlockTests {
 
     /// The app's `TopNotch` temporary subtree holds other blocks' files and
     /// the drop folder: closed. The block's own temporary folder inside it is
-    /// open, and so is the rest of the temporary folder, as before.
+    /// open. The rest of the shared temporary folder is not readable to the
+    /// sandbox, so it is not shown either.
     @Test func readablePathsTakeTheBlocksOwnTemporaryFolderNotOtherBlocks() throws {
         let rig = Rig()
         let own = try temporaryFile("own.png", in: rig)
@@ -310,7 +369,7 @@ struct RemoteBlockTests {
         try Data("x".utf8).write(to: dropped)
 
         #expect(rig.block.temporaryFolder.path.hasPrefix(rig.sharedTemporaryFolder.appending(path: "TopNotch/Blocks/hello").path))
-        #expect(rig.block.readablePaths([shared.path, dropped.path, own, otherApp.path]) == [own, otherApp.path])
+        #expect(rig.block.readablePaths([shared.path, dropped.path, own, otherApp.path]) == [own])
 
         // `files.read` opens the home folder, not the app's temporary subtree.
         var reading = helloManifest
@@ -341,27 +400,71 @@ struct RemoteBlockTests {
         let rig = Rig(preview: { shown.append($0) })
         try await rig.process.start()
         let allowed = try temporaryFile("a.png", in: rig)
-        let home = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh/id_rsa").path
+        let home = homeFile
 
-        try rig.process.send(.preview(paths: ["/etc/hosts", home, "relative.png", allowed]))
+        try rig.process.send(.preview(paths: [home, "relative.png", allowed]))
         await waitUntil { !shown.isEmpty }
         #expect(shown == [[URL(fileURLWithPath: allowed)]])
 
         // Nothing readable: no preview at all.
         shown = []
-        try rig.process.send(.preview(paths: ["/etc/hosts"]))
+        try rig.process.send(.preview(paths: [home]))
         await settle()
         #expect(shown.isEmpty)
 
-        // With `files.read`, any absolute path.
+        // With `files.read`, a file in the home folder.
         var reading = helloManifest
         reading.access = [.filesRead]
         var readingShown: [[URL]] = []
         let readingRig = Rig(manifest: reading, preview: { readingShown.append($0) })
         try await readingRig.process.start()
-        try readingRig.process.send(.preview(paths: ["/etc/hosts", "relative.png"]))
+        try readingRig.process.send(.preview(paths: [home, "relative.png"]))
         await waitUntil { !readingShown.isEmpty }
-        #expect(readingShown == [[URL(fileURLWithPath: "/etc/hosts")]])
+        #expect(readingShown == [[URL(fileURLWithPath: home)]])
+    }
+
+    /// A file in the home folder, outside every rig's folders. It need not exist.
+    private var homeFile: String {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Documents/topnotch-test-\(UUID().uuidString).txt").path
+    }
+
+    /// A2: `files.read` never shows TopNotch's support folder (the approvals,
+    /// other blocks' data), and no block shows the shared temporary folder.
+    @Test func previewAndDragOutFollowTheSandboxRule() async throws {
+        let support = FileManager.default.temporaryDirectory.appending(path: "topnotch-support-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: support) }
+        let approvals = support.appending(path: "Approvals.json")
+        let otherData = support.appending(path: "BlockData/other/secret.txt")
+        try FileManager.default.createDirectory(at: otherData.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for file in [approvals, otherData] { try Data("x".utf8).write(to: file) }
+
+        var reading = helloManifest
+        reading.access = [.filesRead]
+        let runtime = NotchRuntime()
+        let launcher = FakeLauncher()
+        let block = RemoteBlock(
+            manifest: reading, packageURL: URL(fileURLWithPath: "/tmp/Hello.topblock"),
+            source: .development(path: "/tmp/Hello.topblock"),
+            dataFolder: support.appending(path: "BlockData/hello"), owner: { runtime.state.owner },
+            launcher: launcher.launcher, defaults: testDefaults(),
+            sharedTemporaryFolder: Rig.newSharedTemporaryFolder(), supportRoot: support
+        )
+        // The support folder sits inside the "home" folder, as in the app.
+        block.homeFolder = support.deletingLastPathComponent()
+        let note = support.deletingLastPathComponent().appending(path: "topnotch-note-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: note) }
+        try Data("x".utf8).write(to: note)
+
+        #expect(block.readablePaths([approvals.path, otherData.path, note.path]) == [note.path])
+        let drag = ViewNode.ItemDrag([.file(path: approvals.path), .file(path: otherData.path)])
+        #expect(block.model.dragPayloads(for: drag).isEmpty)
+
+        // No tokens: a file in the shared temporary folder is not shown.
+        let rig = Rig()
+        let shared = rig.sharedTemporaryFolder.appending(path: "other-app.png")
+        try FileManager.default.createDirectory(at: rig.sharedTemporaryFolder, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: shared)
+        #expect(rig.block.readablePaths([shared.path]).isEmpty)
     }
 
     /// The same rule for the files of an item drag-out.
@@ -369,7 +472,7 @@ struct RemoteBlockTests {
         let rig = Rig()
         try await rig.process.start()
         let allowed = try temporaryFile("a.png", in: rig)
-        let drag = ViewNode.ItemDrag([.file(path: "/etc/hosts"), .file(path: allowed), .text(string: "hi")])
+        let drag = ViewNode.ItemDrag([.file(path: homeFile), .file(path: allowed), .text(string: "hi")])
 
         let payloads = rig.block.model.dragPayloads(for: drag)
         #expect(payloads.count == 2)
@@ -380,7 +483,15 @@ struct RemoteBlockTests {
         reading.access = [.filesRead]
         let readingRig = Rig(manifest: reading)
         try await readingRig.process.start()
-        #expect(readingRig.block.model.dragPayloads(for: drag).count == 3)
+        // `files.read` adds the home folder; another block's temporary
+        // folder (`allowed` is in the first rig's) stays closed.
+        let home = homeFile
+        let own = try temporaryFile("b.png", in: readingRig)
+        let readingDrag = ViewNode.ItemDrag([.file(path: home), .file(path: own), .file(path: allowed), .text(string: "hi")])
+        let kept = readingRig.block.model.dragPayloads(for: readingDrag)
+        #expect(kept.count == 3)
+        #expect(kept.compactMap { ($0.writer as? NSURL)?.path } == [home, own], "the other block's file is left out")
+        #expect(kept.last?.writer is NSString)
     }
 
     /// The sandbox opens the screenshot folder the process started with. When

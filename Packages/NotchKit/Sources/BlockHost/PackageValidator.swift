@@ -80,10 +80,27 @@ enum PackageValidator {
         }
         try checkID(manifest.id, source: source)
         try checkExecutable(manifest.executable, package: package)
+        try checkLinks(in: package)
         if let unknown = manifest.events.first(where: { WireEvent(rawValue: $0) == nil }) {
             throw .unknownEvent(unknown)
         }
         try checkSettings(manifest.settings)
+        try checkHosts(manifest)
+    }
+
+    /// `network` needs `hosts`, and `hosts` needs `network`, whatever the
+    /// contract (D19): a block reaches the network only through the gate,
+    /// which lets through the hosts named. Each host is an exact name or
+    /// `*.` and a domain; a bare `*` is refused.
+    static func checkHosts(_ manifest: Manifest) throws(BlockInstallError) {
+        let network = manifest.access.contains(.network)
+        if network, manifest.hosts.isEmpty { throw .networkWithoutHosts }
+        if !network, !manifest.hosts.isEmpty {
+            throw .invalidHosts("it names hosts but does not ask for \"network\"")
+        }
+        for host in manifest.hosts {
+            if let problem = HostRule.problem(with: host) { throw .invalidHosts(problem) }
+        }
     }
 
     /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
@@ -123,6 +140,27 @@ enum PackageValidator {
               FileManager.default.isExecutableFile(atPath: resolved)
         else {
             throw .executableMissing(path)
+        }
+    }
+
+    /// Refuses a package with a symbolic link whose target, followed, leaves
+    /// the package: the package hash covers a link's text, not what it
+    /// points to, so such a target could change after the owner's approval.
+    /// A link that points nowhere yet is judged by its text.
+    // Reuses the executable refusal: a linked file outside the package is
+    // part of the program outside it. A case of its own needs NotchCore's
+    // `BlockInstallError`.
+    static func checkLinks(in package: URL) throws(BlockInstallError) {
+        let manager = FileManager.default
+        let root = SandboxProfile.resolvedPath(package)
+        for path in manager.subpaths(atPath: package.path) ?? [] {
+            let link = package.appending(path: path)
+            guard let target = try? manager.destinationOfSymbolicLink(atPath: link.path) else { continue }
+            let folder = URL(fileURLWithPath: SandboxProfile.resolvedPath(link.deletingLastPathComponent()), isDirectory: true)
+            let pointed = target.hasPrefix("/") ? URL(fileURLWithPath: target) : folder.appending(path: target)
+            guard SandboxProfile.isInside(SandboxProfile.resolvedPath(pointed), root) else {
+                throw .executableOutsidePackage(path)
+            }
         }
     }
 

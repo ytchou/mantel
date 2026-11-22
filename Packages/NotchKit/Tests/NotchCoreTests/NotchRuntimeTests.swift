@@ -55,6 +55,24 @@ struct NotchRuntimeTests {
         #expect(received == 1)
     }
 
+    /// The Blocks page asks per block, to say why one that needs the
+    /// screenshot folder does nothing.
+    @Test func isSubscribedAnswersPerEnabledBlock() {
+        let runtime = NotchRuntime()
+        let listener = FakeBlock("listener")
+        listener.onActivate = { context in context.subscribe(to: Ping.self) { _ in } }
+        runtime.register(listener)
+        runtime.register(FakeBlock("quiet"))
+
+        #expect(runtime.isSubscribed("listener", to: Ping.self))
+        #expect(!runtime.isSubscribed("listener", to: Pong.self))
+        #expect(!runtime.isSubscribed("quiet", to: Ping.self))
+        #expect(!runtime.isSubscribed("missing", to: Ping.self))
+
+        runtime.setEnabled("listener", false)
+        #expect(!runtime.isSubscribed("listener", to: Ping.self), "a block turned off listens to nothing")
+    }
+
     // Rule 3
     @Test func publishDeliversByExactTypeInRegistrationOrder() {
         let runtime = NotchRuntime()

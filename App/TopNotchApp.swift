@@ -23,9 +23,11 @@ struct TopNotchApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = NotchRuntime()
     let settings = BlockSettings()
-    private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore)
+    private(set) lazy var settingsWindow = SettingsWindowController(runtime: runtime, settings: settings, installer: blockStore,
+                                                                    consent: screenshotConsent)
     private lazy var notchMenu = NotchMenu(runtime: runtime) { [weak self] in self?.settingsWindow.show() }
-    private let onboarding = OnboardingController()
+    private lazy var onboarding = OnboardingController(runtime: runtime, consent: screenshotConsent)
+    private let screenshotConsent = ScreenshotFolderConsent()
     private lazy var blockStore = BlockStore(
         owner: { [runtime] in runtime.state.owner },
         blocksRoot: BlockStore.defaultBlocksRoot,
@@ -35,14 +37,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The folder `files.screenshots` opens: the one the screenshot watcher reads.
         screenshotFolder: { ScreenshotFolder.current() },
         defaults: .standard,
+        // The owner's approvals, in the support folder the sandbox closes to blocks.
+        approvalsFile: BlockStore.defaultApprovalsFile,
         // A block that keeps failing is turned off the way the user would, so the Blocks page redraws.
         turnOff: { [settings, runtime] id in settings.setEnabled(id, false, in: runtime) },
+        // "Install and Turn On" and "Approve and Turn On" store the block on.
+        turnOn: { [settings, runtime] id in settings.setEnabled(id, true, in: runtime) },
         // A block installed from the Blocks page joins like one found at launch,
         // then takes its place in the stored order (a new id goes last), which is stored.
         register: { [settings, runtime] block in
             runtime.register(block, enabled: settings.isEnabled(block.id))
             settings.applyOrderAfterInstall(to: runtime)
         },
+        // An approved block takes its placeholder's place, then `turnOn` turns it on.
+        replace: { [settings, runtime] block in runtime.replace(block, enabled: settings.isEnabled(block.id)) },
         unregister: { [runtime] id in runtime.unregister(id) },
         clearKeys: { [settings] id in settings.clear(id) },
         // A package whose id the runtime already has is refused, as the runtime would drop it.
@@ -77,7 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sources = SourceCoordinator(runtime: runtime)
         sources.add(DragMonitor(runtime: runtime), for: [DragSessionStarted.self, DragSessionEnded.self],
                     whileInteractiveShows: true)
-        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self])
+        // The screenshot watcher runs only once macOS allows the screenshot
+        // folder, asked when a block first listens to screenshots and each
+        // time the owner presses "Allow access"; every answer re-evaluates.
+        screenshotConsent.onChange = { [weak sources] in sources?.evaluate() }
+        sources.add(ScreenshotWatcher(runtime: runtime), for: [ScreenshotCaptured.self], consent: .init(
+            isGranted: { [screenshotConsent] in screenshotConsent.isGranted },
+            ask: { [screenshotConsent] in screenshotConsent.ask() }
+        ))
         sources.add(OutputVolumeWatcher(runtime: runtime), for: [OutputVolumeChanged.self])
         for player in [PlayerNotificationWatcher.Player.spotify, .music] {
             sources.add(PlayerNotificationWatcher(runtime: runtime, player: player), for: [NowPlayingChanged.self])

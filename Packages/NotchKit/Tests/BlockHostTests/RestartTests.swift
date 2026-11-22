@@ -212,6 +212,108 @@ struct RestartTests {
         #expect(runtime.state.owner == "other")
     }
 
+    /// The package is hashed again before a restart: a running block whose
+    /// package changed on disk is not started again when its process dies.
+    @Test func aChangedPackageIsNotRestartedAfterACrash() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let first = try #require(setup.launcher.last)
+        try await first.start()
+
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        first.close()
+        await waitUntil { setup.runtime.blocks.first is PendingBlock }
+
+        let pending = try #require(setup.runtime.blocks.first as? PendingBlock)
+        #expect(pending.review == .changed)
+        #expect(setup.runtime.blocks.count == 1)
+        await settle()
+        #expect(setup.launcher.processes.count == 1, "not started again")
+        #expect(!setup.store.canTurnOn("hello"))
+        #expect(setup.store.canRemove("hello"))
+    }
+
+    /// The package is hashed again before every start (D18), not only after
+    /// a crash: turned off, changed on disk and turned on again, it does not
+    /// start and waits for review.
+    @Test func aChangedPackageIsNotStartedWhenTurnedOnAgain() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        #expect(setup.launcher.processes.count == 1)
+
+        setup.runtime.setEnabled("hello", false)
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        setup.runtime.setEnabled("hello", true)
+        await settle()
+
+        let pending = try #require(setup.runtime.blocks.first as? PendingBlock)
+        #expect(pending.review == .changed)
+        #expect(setup.runtime.blocks.count == 1)
+        #expect(setup.launcher.processes.count == 1, "no process started")
+        #expect(!setup.store.canTurnOn("hello"))
+        #expect(setup.store.canRemove("hello"))
+    }
+
+    /// The launch check counts for the start right after it only: a block
+    /// found at launch turned off, changed later, is hashed when turned on.
+    @Test func aBlockFoundOffAtLaunchIsHashedWhenTurnedOnLater() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let runtime = NotchRuntime()
+        // The relaunched store stays alive for the whole test, as in the app.
+        let store = setup.makeStore(checksRuntime: false)
+        for block in store.standIns(developmentPath: nil) { runtime.register(block, enabled: false) }
+        await settle()
+
+        try InstallTests.Setup.changeOneByte(in: setup.blocksRoot.appending(path: "hello.topblock"))
+        runtime.setEnabled("hello", true)
+        await settle()
+
+        #expect(setup.launcher.processes.count == 1, "only the process started at install")
+        withExtendedLifetime(store) {}
+    }
+
+    /// An installed block whose store is gone cannot be hashed: it does not start.
+    @Test func anInstalledBlockDoesNotStartWithoutItsStore() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let runtime = NotchRuntime()
+        // `relaunch` keeps no reference to the store it makes.
+        for block in setup.relaunch() { runtime.register(block, enabled: false) }
+        await settle()
+
+        runtime.setEnabled("hello", true)
+        await settle()
+
+        #expect(setup.launcher.processes.count == 1, "only the process started at install")
+    }
+
+    /// An unchanged installed package is started again when turned on.
+    @Test func anUnchangedPackageStartsWhenTurnedOnAgain() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+
+        setup.runtime.setEnabled("hello", false)
+        setup.runtime.setEnabled("hello", true)
+
+        #expect(setup.launcher.processes.count == 2)
+        #expect(setup.block("hello") != nil)
+    }
+
+    /// An unchanged installed package still comes back after a crash.
+    @Test func anUnchangedPackageIsRestartedAfterACrash() async throws {
+        let setup = InstallTests.Setup()
+        try setup.store.install(try setup.package())
+        let first = try #require(setup.launcher.last)
+        try await first.start()
+
+        first.close()
+        await waitUntil { setup.launcher.processes.count == 2 }
+
+        #expect(setup.launcher.processes.count == 2)
+        #expect(setup.block("hello")?.health == .restarting(count: 1))
+    }
+
     @Test func stopDoesNotWaitForTheProcess() async throws {
         let block = try hungFixture()
         await waitLong { block.isWelcomed && block.processID != nil }

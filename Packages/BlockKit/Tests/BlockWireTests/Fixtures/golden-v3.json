@@ -1,0 +1,5 @@
+[
+{"generation":1,"message":{"hello":{"contract":3,"id":"weather","version":"3.0.0"}}},
+{"generation":1,"message":{"welcome":{"contract":3,"dataFolder":"/tmp/weather","gatePort":49152,"settings":{"units":"metric"}}}},
+{"generation":1,"message":{"welcome":{"contract":3,"dataFolder":"/tmp/weather","settings":{}}}}
+]

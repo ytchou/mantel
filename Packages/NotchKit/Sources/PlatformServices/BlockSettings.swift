@@ -25,9 +25,8 @@ final class EnablementSignal {
     var revision = 0
 }
 
-/// Remembers which blocks are on, their order, and whether unsigned packages
-/// are allowed. UserDefaults keys "block.<id>.enabled" (a block with no
-/// stored value is on), "block.order" and "block.allowUnsigned".
+/// Remembers which blocks are on and their order. UserDefaults keys
+/// "block.<id>.enabled" (a block with no stored value is on) and "block.order".
 @MainActor
 public final class BlockSettings {
     private let defaults: UserDefaults
@@ -105,17 +104,6 @@ public final class BlockSettings {
     private func storeOrder(of runtime: NotchRuntime) {
         let ranked = runtime.blocks.map(\.id)
         setOrder(ranked + order.filter { !ranked.contains($0) })
-    }
-
-    // MARK: Unsigned blocks
-
-    /// True when the owner allows packages without a valid signature.
-    /// "block.allowUnsigned"; off when nothing is stored.
-    public var allowsUnsigned: Bool { defaults.bool(forKey: BlockDefaultsKey.allowUnsigned) }
-
-    public func setAllowsUnsigned(_ allowed: Bool) {
-        defaults.set(allowed, forKey: BlockDefaultsKey.allowUnsigned)
-        Log.platform.info("Blocks without a signature \(allowed ? "allowed" : "refused", privacy: .public)")
     }
 
     // MARK: Remove

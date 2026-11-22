@@ -23,13 +23,7 @@ public typealias BlockLauncher = @MainActor (_ executable: URL, _ generation: In
 public final class RemoteBlock: NotchBlock {
     public let id: BlockID
     public var title: String { manifest.name }
-    public var info: BlockInfo {
-        BlockInfo(summary: manifest.summary, symbol: manifest.symbol.isEmpty ? "square.grid.2x2" : manifest.symbol,
-                  // The access the sandbox grants, in the user's words, after
-                  // what the author wrote: the Blocks page shows both.
-                  trigger: manifest.trigger, permissions: manifest.permissions + manifest.accessText,
-                  version: manifest.version, source: source)
-    }
+    public var info: BlockInfo { manifest.blockInfo(source: source) }
 
     /// The trees the block process sent; `NodeView` draws from it.
     public let model = RemoteModel()
@@ -49,6 +43,14 @@ public final class RemoteBlock: NotchBlock {
     /// The text the block set for its `note` settings with `settingNote`,
     /// by key. A note without one shows its manifest title.
     public private(set) var notes: [String: String] = [:]
+    /// What the process used at the resource watch's last sample. Observed,
+    /// so the Blocks page redraws. Nil while the block is not running, and
+    /// until the first sample of a process.
+    public private(set) var usage: BlockUsage?
+    /// Why the current process runs with less than it asked for, such as
+    /// without network when the gate could not open. Observed, so the Blocks
+    /// page redraws. Nil when it runs as asked, and set again at each start.
+    public private(set) var notice: String?
 
     @ObservationIgnored private let dataFolder: URL
     /// The app's temporary folder. The block's sandbox closes its `TopNotch`
@@ -63,6 +65,18 @@ public final class RemoteBlock: NotchBlock {
     @ObservationIgnored private let clock: BlockClock
     @ObservationIgnored private let turnOff: @MainActor (BlockID) -> Void
     @ObservationIgnored private let preview: @MainActor ([URL]) -> Void
+    /// TopNotch's support folder, closed to the block's reads even with `files.read`.
+    @ObservationIgnored private let supportRoot: URL
+    /// The app's preferences domain, closed to the block.
+    @ObservationIgnored private let preferenceDomain: String
+    /// Opens the network gate's connections to approved hosts. Tests point
+    /// it at a local listener before the block starts.
+    @ObservationIgnored var gateConnector: NetworkGate.Connector = NetworkGate.direct
+    /// Opens the gate and returns its port. Tests make it fail.
+    @ObservationIgnored var startGate: @MainActor (NetworkGate) throws -> UInt16 = { try $0.start() }
+    /// The owner's home folder, which `files.read` opens to the sandbox.
+    /// Tests point it at a folder of their own.
+    @ObservationIgnored var homeFolder: URL = FileManager.default.homeDirectoryForCurrentUser
     @ObservationIgnored private let log = Logger(subsystem: "dev.topnotch.TopNotch", category: "blocks")
 
     @ObservationIgnored private var context: (any BlockContext)?
@@ -97,9 +111,32 @@ public final class RemoteBlock: NotchBlock {
     /// The screenshot folder the current process's sandbox opens, for
     /// `files.screenshots`; nil without that access.
     @ObservationIgnored private var launchedScreenshotFolder: URL?
+    /// The current process's network gate; nil for a block without hosts,
+    /// and when the gate could not open.
+    @ObservationIgnored private(set) var gate: NetworkGate?
+    /// The local port of `gate`, sent in `welcome` and allowed by the sandbox.
+    @ObservationIgnored private(set) var gatePort: UInt16?
 
-    /// Called by `handleFailure(reason:)` with the reason, before supervision decides.
+    // Resource watch.
+    @ObservationIgnored private var watch: ResourceWatch?
+    /// Reads the block's process for the watch. Tests pass their own.
+    @ObservationIgnored var resourceSampler: ResourceSampler = ResourceWatch.processUsage
+    /// Times the watch's samples: the stand-in's clock. Tests pass their own.
+    @ObservationIgnored var resourceClock: BlockClock
+    /// The process id the watch samples, nil for a transport that is no
+    /// process (tests make one up).
+    @ObservationIgnored var watchedProcessID: @MainActor (any Transport) -> pid_t? = { ($0 as? BlockProcess)?.pid }
+
+    /// Called by `handleFailure(reason:)` with the reason, before supervision
+    /// decides, and with the reason the resource watch stopped the block.
+    /// A gate that cannot open is not a failure: see `notice`.
     @ObservationIgnored var onFailure: (@MainActor (String) -> Void)?
+
+    /// Asked before every start of the block's process: the reason the
+    /// start is refused, or nil to start. Nil for no check. `BlockStore`
+    /// sets it for installed blocks, to hash the package against its
+    /// approval (D18); it may turn the block off from inside the call.
+    @ObservationIgnored var startCheck: (@MainActor () -> String?)?
 
     // Supervision.
     @ObservationIgnored private var supervisor = Supervisor()
@@ -134,6 +171,10 @@ public final class RemoteBlock: NotchBlock {
     ///   - dropFolder: where the shell writes promised files of a drop;
     ///     dropped files inside it are moved into the block's own temporary
     ///     folder. Tests pass their own.
+    ///   - supportRoot: TopNotch's support folder, which the sandbox closes
+    ///     even with `files.read`, except the block's own package and data.
+    ///   - preferenceDomain: the app's preferences domain; the sandbox closes
+    ///     it and the preferences file `~/Library/Preferences/<it>.plist`.
     public init(
         manifest: Manifest,
         packageURL: URL,
@@ -147,7 +188,9 @@ public final class RemoteBlock: NotchBlock {
         turnOff: @escaping @MainActor (BlockID) -> Void = { _ in },
         preview: (@MainActor ([URL]) -> Void)? = nil,
         sharedTemporaryFolder: URL = FileManager.default.temporaryDirectory,
-        dropFolder: URL = DropFolder.root
+        dropFolder: URL = DropFolder.root,
+        supportRoot: URL = SupportFolder.root,
+        preferenceDomain: String = Bundle.main.bundleIdentifier ?? "dev.topnotch.TopNotch"
     ) {
         let id = BlockID(rawValue: manifest.id)
         self.id = id
@@ -162,8 +205,11 @@ public final class RemoteBlock: NotchBlock {
         self.screenshotFolder = screenshotFolder
         self.defaults = defaults
         self.clock = clock
+        resourceClock = clock
         self.turnOff = turnOff
         self.preview = preview ?? { FilePreview.shared.show($0) }
+        self.supportRoot = supportRoot
+        self.preferenceDomain = preferenceDomain
         // Turned off after failures, and not yet turned on again.
         health = defaults.string(forKey: Self.failureKey(id)).map { .turnedOff(reason: $0) } ?? .ok
         settings = readSettings()
@@ -201,9 +247,15 @@ public final class RemoteBlock: NotchBlock {
         restarts = 0
         health = .ok
         subscribed = []
-        subscribeToManifestEvents()
         if !observingOwner { observeOwner() }
-        launch()
+        // Before subscribing: a block whose start is refused must raise no
+        // demand, so no event source starts and no permission is asked for
+        // a build that will not run. `launch` checks again at each restart.
+        if let refusal = startCheck?() {
+            return log.error("\(self.id.rawValue, privacy: .public) not started: \(refusal, privacy: .public)")
+        }
+        subscribeToManifestEvents()
+        launch(checked: true)
     }
 
     /// Subscribes to each manifest event not yet subscribed in this context.
@@ -230,8 +282,8 @@ public final class RemoteBlock: NotchBlock {
 
     /// Forwards a click, and to a version 2 block a drop, while this block
     /// owns the notch. The runtime passes only drops of kinds the
-    /// presentation `accepts`. Dropped files in the drop folder are moved
-    /// into the block's own temporary folder first; see `forwardedDrop`.
+    /// presentation `accepts`. Dropped files are handed over first; see
+    /// `handOver(_:)`.
     public func handle(_ input: NotchInput) {
         guard context?.ownsNotch == true, isWelcomed else { return }
         switch input {
@@ -239,36 +291,141 @@ public final class RemoteBlock: NotchBlock {
             send(.input(input: .click))
         case let .drop(items):
             guard contract >= 2 else { return }
-            let forwarded = items.compactMap { forwardedDrop($0) }
-            guard !forwarded.isEmpty else { return }
-            send(.input(input: .drop(items: forwarded)))
+            deliverDrop(items.map { handOver($0) })
         }
     }
 
-    /// `item` as the block gets it. A file inside the drop folder, which the
-    /// block's sandbox cannot read, is moved to
-    /// `<temporaryFolder>/TopNotch/Drops/<path below the drop folder>` (its
-    /// `<uuid>` folder keeps names apart) and sent with that path. Inside the
-    /// block its own temporary folder is `TMPDIR`. Any other item passes
-    /// unchanged. Nil, with a log line, when the move fails.
+    /// The most bytes copied from another volume for one dropped item the
+    /// block's sandbox cannot read where it is. A larger item is left out and logged.
+    // 500 MB: a copy from another volume (a USB disk, a network share) is a
+    // real read and write, not a clone, and it fills the temporary folder.
+    // The limit is per item; a drop of several items may copy more in total.
+    // Upgrade path: give the block a read grant for the original file (a
+    // sandbox extension) instead of a copy; then no limit is needed.
+    nonisolated static let crossVolumeCopyLimit = 500 * 1024 * 1024
+
+    /// The size to copy when `source` is on another volume than `folder`,
+    /// nil on the same volume or when either cannot be read. Tests inject a
+    /// size and volume check. Called off the main actor.
+    @ObservationIgnored var crossVolumeSize: @Sendable (_ source: URL, _ folder: URL) -> Int? = RemoteBlock.sizeOnAnotherVolume
+
+    /// `<temporaryFolder>/TopNotch/Drops`: dropped files the block gets.
+    /// Inside the block its own temporary folder is `TMPDIR`. Emptied at
+    /// each launch: the Shelf block moves drops out of it at once.
+    var dropsFolder: URL {
+        temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
+    }
+
+    /// One dropped item on its way to the block.
+    private enum HandOver: Sendable {
+        /// Sent as it is.
+        case ready(WireDrop)
+        /// A file to copy into `dropsFolder` first.
+        case copy(URL)
+        /// Left out.
+        case skip
+    }
+
+    /// How `item` reaches the block. A file inside the drop folder (a
+    /// promised file), which the block's sandbox cannot read, is moved to
+    /// `<dropsFolder>/<path below the drop folder>` (its `<uuid>` folder
+    /// keeps names apart), for every block. Any other file passes unchanged
+    /// when the block's sandbox reads it where it is
+    /// (`SandboxProfile.allowsRead`). Any other file is copied. Links and text pass
+    /// unchanged. A promised file that cannot be moved is left out, with a
+    /// log line.
     // Moves on the main actor: a rename inside one volume, so it is quick.
-    // If drops ever cross volumes, move off the main actor before sending.
-    private func forwardedDrop(_ item: DroppedItem) -> WireDrop? {
-        guard case let .file(url) = item else { return Self.wireDrop(item) }
-        let root = Self.resolvedPath(dropFolder)
-        let source = Self.resolvedPath(url)
-        guard source.hasPrefix(root + "/") else { return Self.wireDrop(item) }
+    // Copies run off it, in `deliverDrop`.
+    private func handOver(_ item: DroppedItem) -> HandOver {
+        guard case let .file(url) = item else { return .ready(Self.wireDrop(item)) }
+        let root = SandboxProfile.resolvedPath(dropFolder)
+        let source = SandboxProfile.resolvedPath(url)
+        guard source.hasPrefix(root + "/") else {
+            return sandboxProfile.allowsRead(source) ? .ready(Self.wireDrop(item)) : .copy(url)
+        }
         let relative = String(source.dropFirst(root.count + 1))
-        let target = temporaryFolder.appending(path: "TopNotch/Drops", directoryHint: .isDirectory)
-            .appending(path: relative, directoryHint: .notDirectory)
+        let target = dropsFolder.appending(path: relative, directoryHint: .notDirectory)
         do {
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: url, to: target)
         } catch {
             log.error("\(self.id.rawValue, privacy: .public): dropped file \(source, privacy: .private) not moved, left out: \(error, privacy: .public)")
+            return .skip
+        }
+        return .ready(.file(path: target.path))
+    }
+
+    /// Sends the drop. Without copies, at once. With copies, after they are
+    /// made off the main actor, in the items' order, and only to the
+    /// process the drop was meant for; a copy that fails is left out.
+    private func deliverDrop(_ handOvers: [HandOver]) {
+        let copies = handOvers.compactMap { if case let .copy(url) = $0 { url } else { nil } }
+        guard !copies.isEmpty else { return sendDrop(handOvers) }
+        let generation = self.generation
+        let folder = dropsFolder
+        let measure = crossVolumeSize
+        let blockID = id.rawValue
+        Task { [weak self] in
+            let copied = await Task.detached(priority: .userInitiated) {
+                copies.map { RemoteBlock.copyDrop($0, into: folder, measure: measure, blockID: blockID) }
+            }.value
+            guard let self, generation == self.generation, self.isWelcomed else { return }
+            var next = copied.makeIterator()
+            self.sendDrop(handOvers.map { item in
+                guard case .copy = item else { return item }
+                return (next.next() ?? nil).map(HandOver.ready) ?? .skip
+            })
+        }
+    }
+
+    private func sendDrop(_ handOvers: [HandOver]) {
+        let forwarded = handOvers.compactMap { if case let .ready(drop) = $0 { drop } else { nil } }
+        guard !forwarded.isEmpty else { return }
+        send(.input(input: .drop(items: forwarded)))
+    }
+
+    /// Copies `source` to `<folder>/<uuid>/<name>` with `FileManager.copyItem`
+    /// (an APFS clone on the same volume, not a read into memory). Nil, with
+    /// a log line, when it is on another volume and over
+    /// `crossVolumeCopyLimit`, or when the copy fails (such as a missing file).
+    nonisolated static func copyDrop(
+        _ source: URL, into folder: URL, measure: @Sendable (URL, URL) -> Int?, blockID: String
+    ) -> WireDrop? {
+        let source = source.standardizedFileURL.resolvingSymlinksInPath()
+        let box = folder.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let target = box.appending(path: source.lastPathComponent, directoryHint: .notDirectory)
+        do {
+            try FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+            if let size = measure(source, box), size > crossVolumeCopyLimit {
+                try? FileManager.default.removeItem(at: box)
+                BlockProcess.log.error("\(blockID, privacy: .public): dropped item \(source.path, privacy: .private) on another volume is \(size) bytes, over \(crossVolumeCopyLimit); left out")
+                return nil
+            }
+            try FileManager.default.copyItem(at: source, to: target)
+        } catch {
+            try? FileManager.default.removeItem(at: box)
+            BlockProcess.log.error("\(blockID, privacy: .public): dropped item \(source.path, privacy: .private) not copied, left out: \(error, privacy: .public)")
             return nil
         }
         return .file(path: target.path)
+    }
+
+    /// The size of `source` (a file, or a folder's files in total) when it
+    /// is on another volume than `folder`; nil on the same volume or when
+    /// either volume cannot be read. Stops counting past `crossVolumeCopyLimit`.
+    nonisolated static func sizeOnAnotherVolume(_ source: URL, _ folder: URL) -> Int? {
+        let keys: Set<URLResourceKey> = [.volumeIdentifierKey]
+        guard let from = try? source.resourceValues(forKeys: keys).volumeIdentifier,
+              let to = try? folder.resourceValues(forKeys: keys).volumeIdentifier,
+              !from.isEqual(to) else { return nil }
+        let values = try? source.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+        guard values?.isDirectory == true else { return values?.fileSize ?? 0 }
+        var total = 0
+        let files = FileManager.default.enumerator(at: source, includingPropertiesForKeys: [.fileSizeKey])
+        while let file = files?.nextObject() as? URL, total <= crossVolumeCopyLimit {
+            total += (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        }
+        return total
     }
 
     static func wireDrop(_ item: DroppedItem) -> WireDrop {
@@ -352,7 +509,18 @@ public final class RemoteBlock: NotchBlock {
 
     // MARK: Process
 
-    private func launch() {
+    /// Starts a new process. `checked` is true when the caller has just
+    /// run `startCheck` (`activate`).
+    // The check hashes the package before each start, but the package runs
+    // in place from its folder: a file changed between the check and the
+    // moment it is loaded is not caught until the next start. Closing that
+    // needs running a private copy of the package (a design change).
+    private func launch(checked: Bool = false) {
+        // Before anything of a new process exists. The check may replace
+        // this block in the runtime, which deactivates it.
+        if !checked, let refusal = startCheck?() {
+            return log.error("\(self.id.rawValue, privacy: .public) not started: \(refusal, privacy: .public)")
+        }
         generation += 1
         isWelcomed = false
         contract = 1
@@ -373,6 +541,8 @@ public final class RemoteBlock: NotchBlock {
             // `welcome`, and drops are moved into the temporary folder.
             try FileManager.default.createDirectory(at: dataFolder, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: temporaryFolder, withIntermediateDirectories: true)
+            emptyDropsFolder()
+            openGate()
             if let launcher {
                 transport = try launcher(executableURL, self.generation)
             } else {
@@ -391,6 +561,69 @@ public final class RemoteBlock: NotchBlock {
         heartbeat = BlockProcess.heartbeat(clock: clock) { [weak self] in
             self?.heartbeatTick(generation: generation) ?? false
         }
+        startWatch(transport, generation: generation)
+    }
+
+    /// Starts the resource watch on the new process. A runaway is stopped
+    /// and turned off at once: restarting it would only repeat the breach.
+    private func startWatch(_ transport: any Transport, generation: Int) {
+        guard let pid = watchedProcessID(transport) else { return }
+        let watch = ResourceWatch(
+            pid: pid, sampler: resourceSampler, clock: resourceClock,
+            onSample: { [weak self] usage in
+                guard let self, generation == self.generation else { return }
+                self.usage = usage
+            },
+            onBreach: { [weak self] reason in
+                guard let self, generation == self.generation else { return }
+                self.stopRunaway(reason: reason)
+            }
+        )
+        self.watch = watch
+        watch.start()
+    }
+
+    /// Ends a process the resource watch caught and turns the block off with
+    /// the reason, as repeated failures do. Not a failure: the supervisor's
+    /// count is not used, and the block is not started again.
+    private func stopRunaway(reason: String) {
+        let sentence = "It was stopped because \(Self.sentenceEnd(reason))"
+        log.error("\(self.id.rawValue, privacy: .public) stopped by the resource watch: \(reason, privacy: .public)")
+        withdraw()
+        endProcess()?.close()
+        onFailure?(sentence)
+        turnOffForGood(sentence)
+    }
+
+    /// Removes what earlier processes left in `dropsFolder`.
+    private func emptyDropsFolder() {
+        guard FileManager.default.fileExists(atPath: dropsFolder.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: dropsFolder)
+        } catch {
+            log.error("\(self.id.rawValue, privacy: .public): drops folder not emptied: \(error, privacy: .public)")
+        }
+    }
+
+    /// Opens the network gate for a block whose manifest names hosts. When
+    /// it cannot open, the block starts without network: no port in
+    /// `welcome`, none in the sandbox, and the reason is logged and shown as
+    /// `notice`; the process is not counted as failed.
+    // Uses the manifest's hosts: the approval of the package hash (D18)
+    // covers them, so an update that changes them is approved again first.
+    // Every launch follows `endProcess` (or the stand-in's first start), which
+    // has cleared `gate`, `gatePort` and `notice`.
+    private func openGate() {
+        guard manifest.access.contains(.network), !manifest.hosts.isEmpty else { return }
+        let gate = NetworkGate(blockID: id.rawValue, hosts: manifest.hosts, connector: gateConnector)
+        do {
+            gatePort = try startGate(gate)
+            self.gate = gate
+        } catch {
+            let reason = "\(manifest.name) started without network: \(error)"
+            log.error("\(self.id.rawValue, privacy: .public): \(reason, privacy: .public)")
+            notice = reason
+        }
     }
 
     /// Starts the block under the sandbox profile its manifest asks for.
@@ -400,17 +633,27 @@ public final class RemoteBlock: NotchBlock {
     /// temporary files and dropped files stay out of reach. Dropped files
     /// reach the block by `forwardedDrop`.
     private func spawnSandboxed() throws -> any Transport {
-        let profile = SandboxProfile(
-            network: manifest.access.contains(.network),
+        try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: sandboxProfile)
+    }
+
+    /// The sandbox the current process runs under, or the next one would:
+    /// from the manifest's `access`, the gate's port and the screenshot
+    /// folder the process started with. Also the app's rule for which of
+    /// the block's paths it may show, drag out or hand over in place.
+    var sandboxProfile: SandboxProfile {
+        SandboxProfile(
+            gatePort: gatePort,
             readsHome: manifest.access.contains(.filesRead),
             screenshotFolder: launchedScreenshotFolder,
             package: packageURL,
             dataFolder: dataFolder,
             temporaryFolder: temporaryFolder,
             sharedTemporaryFolder: sharedTemporaryFolder,
-            home: FileManager.default.homeDirectoryForCurrentUser
+            home: homeFolder,
+            supportRoot: supportRoot,
+            preferencesFile: preferencesFile,
+            preferenceDomain: preferenceDomain
         )
-        return try BlockProcess.spawn(executable: executableURL, generation: generation, sandbox: profile)
     }
 
     /// One heartbeat step: a hang when the process has not answered for
@@ -429,9 +672,26 @@ public final class RemoteBlock: NotchBlock {
     }
 
     /// Stops reading and pinging the current process, sends it `quit` and
-    /// lets it go. Returns its transport, still open, for the caller to close
-    /// or to wait on. Frames still in flight from this process are dropped.
+    /// lets it go. Returns its transport, still open, for the caller to
+    /// close or to wait on. Frames still in flight from this process are
+    /// dropped. Its network gate closes once the process has exited: until
+    /// then the gate holds its port, so no other block's gate can get the
+    /// port the old process's sandbox still allows.
     private func endProcess() -> (any Transport)? {
+        watch?.stop()
+        watch = nil
+        usage = nil
+        notice = nil
+        let oldGate = gate
+        gate = nil
+        gatePort = nil
+        if let oldGate {
+            if let process = transport as? BlockProcess {
+                process.whenExited { oldGate.stop() }
+            } else {
+                oldGate.stop()
+            }
+        }
         reader?.cancel()
         reader = nil
         heartbeat?.cancel()
@@ -483,13 +743,18 @@ public final class RemoteBlock: NotchBlock {
             log.info("\(self.id.rawValue, privacy: .public) restart \(self.restarts)")
             launch()
         case .turnOff:
-            supervisor.reset()
-            let sentence = "It stopped \(Supervisor.limit) times in a minute. Last reason: \(Self.sentenceEnd(reason))"
-            defaults.set(sentence, forKey: Self.failureKey(id))
-            health = .turnedOff(reason: sentence)
-            log.error("\(self.id.rawValue, privacy: .public) turned off: \(sentence, privacy: .public)")
-            turnOff(id)
+            turnOffForGood("It stopped \(Supervisor.limit) times in a minute. Last reason: \(Self.sentenceEnd(reason))")
         }
+    }
+
+    /// Turns the block off with `sentence` as the reason, stored until the
+    /// user turns it on again.
+    private func turnOffForGood(_ sentence: String) {
+        supervisor.reset()
+        defaults.set(sentence, forKey: Self.failureKey(id))
+        health = .turnedOff(reason: sentence)
+        log.error("\(self.id.rawValue, privacy: .public) turned off: \(sentence, privacy: .public)")
+        turnOff(id)
     }
 
     /// `reason` as the end of a sentence: one full stop.
@@ -576,7 +841,8 @@ public final class RemoteBlock: NotchBlock {
         }
         settings = readSettings()
         self.contract = contract
-        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path))
+        send(.welcome(contract: Contract.current, settings: settings, dataFolder: dataFolder.path,
+                      gatePort: gatePort.map(Int.init)))
         isWelcomed = true
         // The hang limit runs from here, no longer from the launch.
         lastAnswer = clock.now()
@@ -613,7 +879,7 @@ public final class RemoteBlock: NotchBlock {
             wing: content(wing, .wing),
             expanded: content(expanded, .expanded),
             opensAt: opensAt == .expanded ? .expanded : .peek,
-            duration: seconds.flatMap(Self.duration(seconds:)),
+            duration: Self.duration(seconds: seconds, priority: priority),
             accepts: Set(accepts.map(Self.dropKind))
         ))
         // Exactly what an in-app block does to answer a change just made:
@@ -623,12 +889,21 @@ public final class RemoteBlock: NotchBlock {
 
     /// The longest presentation a block may ask for, in seconds.
     static let maxSeconds = 3600.0
+    /// The longest a `standard` presentation stays, in seconds (D13). It is
+    /// also the time of a `standard` presentation sent with no end.
+    static let standardMaxSeconds = 60.0
 
-    /// A presentation's time from the block's `seconds`: nil (until dismissed)
-    /// when it is not finite or not positive, and at most `maxSeconds`.
-    static func duration(seconds: Double) -> Duration? {
-        guard seconds.isFinite, seconds > 0 else { return nil }
-        return .seconds(min(seconds, maxSeconds))
+    /// A presentation's time from the block's `seconds`. A `standard` one
+    /// ends within `standardMaxSeconds`, and at that time when the block sent
+    /// no usable `seconds`. An `ambient` or `interactive` one stays until
+    /// dismissed (nil) when `seconds` is missing, not finite or not positive,
+    /// and ends within `maxSeconds` otherwise.
+    static func duration(seconds: Double?, priority: Priority) -> Duration? {
+        let limit = priority == .standard ? standardMaxSeconds : maxSeconds
+        guard let seconds, seconds.isFinite, seconds > 0 else {
+            return priority == .standard ? .seconds(standardMaxSeconds) : nil
+        }
+        return .seconds(min(seconds, limit))
     }
 
     /// False, after reporting a failure, when a tree is over the node limit.
@@ -725,28 +1000,12 @@ public final class RemoteBlock: NotchBlock {
     // MARK: Paths the block may show
 
     /// The paths of `paths` the block's sandbox could read, for `preview`
-    /// and for the files of an item drag-out, as `SandboxProfile` sets it:
-    /// inside its data folder, its own temporary folder, its package, or,
-    /// with `files.screenshots`, the screenshot folder its process started
-    /// with; never elsewhere in the app's `TopNotch` temporary subtree (other
-    /// blocks' files, dropped files); otherwise inside the app's temporary
-    /// folder, or any absolute path with `files.read`. Compared with symbolic
-    /// links followed. Dropped paths are logged.
+    /// and for the files of an item drag-out: `SandboxProfile.allowsRead`
+    /// of the profile its process runs under. Dropped paths are logged.
     func readablePaths(_ paths: [String]) -> [String] {
-        let readsAll = manifest.access.contains(.filesRead)
-        let own = ([dataFolder, temporaryFolder, packageURL]
-            + [launchedScreenshotFolder].compactMap { $0 }).map(Self.resolvedPath)
-        let closed = Self.resolvedPath(SandboxProfile.appTemporaryFolder(in: sharedTemporaryFolder))
-        let shared = Self.resolvedPath(sharedTemporaryFolder)
-        func isInside(_ target: String, _ root: String) -> Bool { target == root || target.hasPrefix(root + "/") }
+        let profile = sandboxProfile
         return paths.filter { path in
-            guard path.hasPrefix("/") else {
-                log.error("\(self.id.rawValue, privacy: .public): relative path dropped: \(path, privacy: .private)")
-                return false
-            }
-            let target = Self.resolvedPath(URL(fileURLWithPath: path))
-            let allowed = own.contains { isInside(target, $0) }
-                || (!isInside(target, closed) && (readsAll || isInside(target, shared)))
+            let allowed = profile.allowsRead(path)
             if !allowed {
                 log.error("\(self.id.rawValue, privacy: .public): path outside what its sandbox reads dropped: \(path, privacy: .private)")
             }
@@ -754,8 +1013,9 @@ public final class RemoteBlock: NotchBlock {
         }
     }
 
-    private static func resolvedPath(_ url: URL) -> String {
-        url.standardizedFileURL.resolvingSymlinksInPath().path
+    /// `~/Library/Preferences/<preferenceDomain>.plist`, closed to the block.
+    private var preferencesFile: URL {
+        homeFolder.appending(path: "Library/Preferences/\(preferenceDomain).plist")
     }
 
     // MARK: Replay

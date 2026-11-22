@@ -8,7 +8,9 @@
 /// `interactive` presentation counts as `interactive` only while its block is
 /// in an interaction: a drag is in progress, the pointer is on the notch and
 /// that block owns it, or less than `interactionWindow` has passed since
-/// either ended. Outside that it counts as `standard`.
+/// either ended. Outside that it counts as `standard` when it has a
+/// duration, and as `ambient` when it has none: an endless view nobody acts
+/// on gives way to any timed view of another block.
 @MainActor
 struct Arbiter {
     typealias Instant = Duration
@@ -129,7 +131,9 @@ struct Arbiter {
     /// (effective priority, rank, recency); a higher key wins.
     private func key(of entry: Entry) -> (Int, Int, Int) {
         var priority = entry.presentation.priority
-        if priority == .interactive, !isInteracting(entry.block) { priority = .standard }
+        if priority == .interactive, !isInteracting(entry.block) {
+            priority = entry.presentation.duration == nil ? .ambient : .standard
+        }
         let rankKey = rank[entry.block].map { -$0 } ?? Int.min
         return (priority.rawValue, rankKey, entry.order)
     }

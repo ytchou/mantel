@@ -1,29 +1,8 @@
 import AppKit
 import Foundation
+import NotchCore
+import Observation
 import SwiftUI
-
-// MARK: - Screenshot folder
-
-enum ScreenshotFolder {
-    /// The folder macOS saves screenshots to.
-    static func current() -> URL {
-        resolve(location: UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"),
-                home: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    /// `location` as stored by macOS, with a leading `~` expanded against
-    /// `home`. Missing or empty means `~/Desktop`.
-    static func resolve(location: String?, home: URL) -> URL {
-        guard let location, !location.isEmpty else {
-            return home.appending(path: "Desktop", directoryHint: .isDirectory)
-        }
-        if location == "~" { return home }
-        if location.hasPrefix("~/") {
-            return home.appending(path: String(location.dropFirst(2)), directoryHint: .isDirectory)
-        }
-        return URL(filePath: location, directoryHint: .isDirectory)
-    }
-}
 
 // MARK: - Folder access
 
@@ -58,6 +37,52 @@ enum FolderAccess: Equatable, Sendable {
     }
 }
 
+/// The answer to "may TopNotch read the screenshot folder", asked through
+/// `FolderAccess.check` before the screenshot source first runs, and again
+/// each time the owner presses "Allow access". The app wires it as the
+/// source's consent check and sets `onChange` to the source coordinator's
+/// `evaluate`. Kept for this launch only: each launch asks again, and macOS
+/// answers at once once the user has decided.
+@MainActor
+@Observable
+public final class ScreenshotFolderConsent {
+    public private(set) var isGranted = false
+    /// True once an answer came in that is not "allowed". The Blocks page
+    /// then says why a block that needs the folder does nothing.
+    public private(set) var isRefused = false
+    /// Called after every answer; the app passes the source coordinator's `evaluate`.
+    @ObservationIgnored public var onChange: (@MainActor () -> Void)?
+    @ObservationIgnored private var isAsking = false
+
+    public init() {}
+
+    /// Ask macOS for access to the screenshot folder. An ask while one is
+    /// under way does nothing.
+    public func ask() {
+        guard !isAsking else { return }
+        isAsking = true
+        Task {
+            let access = await FolderAccess.check(ScreenshotFolder.current())
+            isAsking = false
+            record(access)
+        }
+    }
+
+    /// Checks `folder` again, as "Allow access" does, and records the answer.
+    func check(_ folder: URL) async -> FolderAccess {
+        let access = await FolderAccess.check(folder)
+        record(access)
+        return access
+    }
+
+    /// Keeps `access` as the answer and reports it through `onChange`.
+    func record(_ access: FolderAccess) {
+        isGranted = access == .granted
+        isRefused = !isGranted
+        onChange?()
+    }
+}
+
 enum SystemSettings {
     static let filesAndFolders = "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
     static let appleIntelligence = "x-apple.systempreferences:com.apple.Siri-Settings.extension"
@@ -71,9 +96,36 @@ enum SystemSettings {
 
 // MARK: - Permission rows (used by onboarding and Settings > General)
 
+/// A permission row on the General page and in onboarding.
+enum PermissionRow: Hashable {
+    case screenshotFolder
+    case appleIntelligence
+
+    /// The rows to show: the screenshot folder only while a turned-on block
+    /// listens to `ScreenshotCaptured`, since only then does its source run.
+    @MainActor
+    static func rows(in runtime: NotchRuntime) -> [PermissionRow] {
+        (runtime.hasSubscribers(for: ScreenshotCaptured.self) ? [.screenshotFolder] : []) + [.appleIntelligence]
+    }
+
+    /// - Parameter consent: updated when the owner presses "Allow access".
+    @MainActor @ViewBuilder func view(consent: ScreenshotFolderConsent?) -> some View {
+        switch self {
+        case .screenshotFolder: FolderAccessRow(consent: consent)
+        case .appleIntelligence: AppleIntelligenceRow()
+        }
+    }
+}
+
 struct FolderAccessRow: View {
     @State private var access: FolderAccess = .unknown
-    private let folder = ScreenshotFolder.current()
+    let folder = ScreenshotFolder.current()
+    /// Takes the answer, so the screenshot source starts once access is allowed.
+    let consent: ScreenshotFolderConsent?
+
+    init(consent: ScreenshotFolderConsent? = nil) {
+        self.consent = consent
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -90,7 +142,11 @@ struct FolderAccessRow: View {
                     Button("Allow access") {
                         Task {
                             access = .checking
-                            access = await FolderAccess.check(folder)
+                            if let consent {
+                                access = await consent.check(folder)
+                            } else {
+                                access = await FolderAccess.check(folder)
+                            }
                         }
                     }
                     .disabled(access == .checking)
@@ -135,9 +191,13 @@ struct AppleIntelligenceRow: View {
 /// First-run onboarding window content, also reachable from
 /// Settings > General > Permissions.
 public struct OnboardingView: View {
+    private let rows: [PermissionRow]
+    private let consent: ScreenshotFolderConsent?
     private let onDone: () -> Void
 
-    public init(onDone: @escaping () -> Void) {
+    init(rows: [PermissionRow], consent: ScreenshotFolderConsent? = nil, onDone: @escaping () -> Void) {
+        self.rows = rows
+        self.consent = consent
         self.onDone = onDone
     }
 
@@ -145,15 +205,16 @@ public struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome to TopNotch").font(.title2.bold())
-                Text("TopNotch works from the notch and the menu bar. Two things need your OK first. You can come back to them in Settings > General. To open Settings, right-click the notch.")
+                Text("TopNotch works from the notch and the menu bar. What needs your OK is below. You can come back to it in Settings > General. To open Settings, right-click the notch.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding([.horizontal, .top], 20)
 
             Form {
-                Section { FolderAccessRow() }
-                Section { AppleIntelligenceRow() }
+                ForEach(rows, id: \.self) { row in
+                    Section { row.view(consent: consent) }
+                }
             }
             .formStyle(.grouped)
 
@@ -172,10 +233,15 @@ public struct OnboardingView: View {
 public final class OnboardingController: NSObject, NSWindowDelegate {
     static let completedKey = "onboarding.completed"
 
+    private let runtime: NotchRuntime
+    private let consent: ScreenshotFolderConsent?
     private let defaults: UserDefaults
     private var window: NSWindow?
 
-    public init(defaults: UserDefaults = .standard) {
+    /// - Parameter consent: updated when the owner presses "Allow access".
+    public init(runtime: NotchRuntime, consent: ScreenshotFolderConsent? = nil, defaults: UserDefaults = .standard) {
+        self.runtime = runtime
+        self.consent = consent
         self.defaults = defaults
         super.init()
     }
@@ -201,7 +267,9 @@ public final class OnboardingController: NSObject, NSWindowDelegate {
         // Measure once, then give the window a fixed size. Letting the hosting
         // view drive the window size through constraints crashed at launch
         // (AppKit exception in the window's update-constraints pass).
-        let hosting = NSHostingView(rootView: OnboardingView { [weak self] in self?.window?.close() })
+        let hosting = NSHostingView(rootView: OnboardingView(rows: PermissionRow.rows(in: runtime), consent: consent) { [weak self] in
+            self?.window?.close()
+        })
         let size = hosting.fittingSize
         hosting.sizingOptions = []
         let window = NSWindow(

@@ -151,6 +151,88 @@ private final class ListeningBlock: NotchBlock {
     #expect(screenshots.starts == 0)
 }
 
+// MARK: Consent
+
+/// A consent check whose answer the test sets, counting the asks.
+@MainActor
+private final class FakeConsent {
+    var granted = false
+    private(set) var asks = 0
+    var consent: SourceCoordinator.Consent {
+        SourceCoordinator.Consent(isGranted: { [unowned self] in granted }, ask: { [unowned self] in asks += 1 })
+    }
+}
+
+@MainActor
+@Test func aSourceWithAConsentCheckDoesNotStartUntilItPasses() {
+    let runtime = NotchRuntime()
+    let coordinator = SourceCoordinator(runtime: runtime)
+    let source = FakeSource()
+    let consent = FakeConsent()
+    coordinator.add(source, for: [ScreenshotCaptured.self], consent: consent.consent)
+
+    runtime.register(ListeningBlock("a", listensTo: [ScreenshotCaptured.self]))
+    #expect(source.starts == 0)
+    coordinator.evaluate()
+    #expect(source.starts == 0)
+
+    consent.granted = true
+    coordinator.evaluate()
+    #expect(source.starts == 1)
+
+    runtime.setEnabled("a", false)
+    #expect(source.stops == 1)
+}
+
+@MainActor
+@Test func aSourceWithoutAConsentCheckStartsAsBefore() {
+    let runtime = NotchRuntime()
+    let coordinator = SourceCoordinator(runtime: runtime)
+    let source = FakeSource()
+    coordinator.add(source, for: [OutputVolumeChanged.self])
+
+    runtime.register(ListeningBlock("a", listensTo: [OutputVolumeChanged.self]))
+    #expect(source.starts == 1)
+    coordinator.evaluate()
+    #expect(source.starts == 1)
+    runtime.setEnabled("a", false)
+    #expect(source.stops == 1)
+}
+
+/// The places a block is turned on (registered turned on at launch or after
+/// an install, and the switch on the Blocks page, which calls `setEnabled`)
+/// all reach the coordinator through the runtime's demand change.
+@MainActor
+@Test func consentIsAskedWhenTheFirstListenerTurnsOn() {
+    let runtime = NotchRuntime()
+    let coordinator = SourceCoordinator(runtime: runtime)
+    let source = FakeSource()
+    let consent = FakeConsent()
+    coordinator.add(source, for: [ScreenshotCaptured.self], consent: consent.consent)
+    // Launch with no listener: nothing is asked.
+    runtime.register(ListeningBlock("other", listensTo: [OutputVolumeChanged.self]))
+    #expect(consent.asks == 0)
+
+    // Registered turned off, then turned on: asked once.
+    runtime.register(ListeningBlock("a", listensTo: [ScreenshotCaptured.self]), enabled: false)
+    #expect(consent.asks == 0)
+    runtime.setEnabled("a", true)
+    #expect(consent.asks == 1)
+
+    // A second listener, as after an install, asks nothing more.
+    runtime.register(ListeningBlock("b", listensTo: [ScreenshotCaptured.self]))
+    runtime.setEnabled("other", false)
+    #expect(consent.asks == 1)
+    #expect(source.starts == 0)
+
+    // Blocks registered before the coordinator, as at launch: asked when added.
+    let launched = NotchRuntime()
+    launched.register(ListeningBlock("a", listensTo: [ScreenshotCaptured.self]))
+    let atLaunch = FakeConsent()
+    SourceCoordinator(runtime: launched).add(FakeSource(), for: [ScreenshotCaptured.self], consent: atLaunch.consent)
+    #expect(atLaunch.asks == 1)
+}
+
 // MARK: Real watchers
 
 @MainActor

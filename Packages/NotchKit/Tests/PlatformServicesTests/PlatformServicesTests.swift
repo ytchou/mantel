@@ -88,26 +88,62 @@ private func cleanUp(_ defaults: UserDefaults, _ name: String) {
 
 // MARK: - Screenshot folder
 
-private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
-
-@Test func missingLocationIsDesktop() {
-    let url = ScreenshotFolder.resolve(location: nil, home: home)
-    #expect(url.path(percentEncoded: false) == "/Users/test/Desktop/")
+/// A block that listens to screenshots once turned on.
+@MainActor
+private final class ScreenshotListener: NotchBlock {
+    let id: BlockID
+    let title = "Screenshots"
+    init(_ id: BlockID) { self.id = id }
+    func activate(_ context: any BlockContext) {
+        context.subscribe(to: ScreenshotCaptured.self) { _ in }
+    }
 }
 
-@Test func emptyLocationIsDesktop() {
-    let url = ScreenshotFolder.resolve(location: "", home: home)
-    #expect(url.path(percentEncoded: false) == "/Users/test/Desktop/")
+@MainActor
+@Test func permissionRowsShowOnlyWhenABlockNeedsThem() {
+    let runtime = NotchRuntime()
+    // No block: the General page and onboarding show no screenshot-folder row.
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
+
+    // A block that does not listen to screenshots, and one registered turned off.
+    runtime.register(FakeBlock("other"))
+    runtime.register(ScreenshotListener("shots"), enabled: false)
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
+
+    runtime.setEnabled("shots", true)
+    #expect(PermissionRow.rows(in: runtime) == [.screenshotFolder, .appleIntelligence])
+
+    runtime.setEnabled("shots", false)
+    #expect(PermissionRow.rows(in: runtime) == [.appleIntelligence])
 }
 
-@Test func tildeLocationIsExpanded() {
-    let url = ScreenshotFolder.resolve(location: "~/Pictures/Shots", home: home)
+/// The Blocks page switch reaches the runtime's demand change, which is what
+/// starts the screenshot source and its consent check: no extra call is needed.
+@MainActor
+@Test func turningABlockOnInSettingsReportsTheDemandChange() {
+    let (defaults, name) = makeDefaults()
+    defer { cleanUp(defaults, name) }
+    let settings = BlockSettings(defaults: defaults)
+    let runtime = NotchRuntime()
+    var changes = 0
+    runtime.onDemandChanged = { changes += 1 }
+    runtime.register(ScreenshotListener("shots"), enabled: false)
+    #expect(changes == 0)
+
+    settings.setEnabled("shots", true, in: runtime)
+
+    #expect(changes == 1)
+    #expect(runtime.hasSubscribers(for: ScreenshotCaptured.self))
+}
+
+/// The settings rows ask for the folder NotchCore resolves, the one the
+/// screenshot watcher reads (`theWatcherReadsTheSharedScreenshotFolder`).
+@MainActor
+@Test func thereIsOneScreenshotFolderDefinition() {
+    #expect(FolderAccessRow().folder == NotchCore.ScreenshotFolder.current())
+    let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
+    let url = NotchCore.ScreenshotFolder.resolve(location: "~/Pictures/Shots", home: home) { _ in true }
     #expect(url.path(percentEncoded: false) == "/Users/test/Pictures/Shots/")
-}
-
-@Test func absoluteLocationIsKept() {
-    let url = ScreenshotFolder.resolve(location: "/Volumes/Data/Shots", home: home)
-    #expect(url.path(percentEncoded: false) == "/Volumes/Data/Shots/")
 }
 
 // MARK: - Onboarding flag
@@ -116,14 +152,14 @@ private let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
 @Test func onboardingCompletedFlagPersists() {
     let (defaults, name) = makeDefaults()
     defer { cleanUp(defaults, name) }
-    let controller = OnboardingController(defaults: defaults)
+    let controller = OnboardingController(runtime: NotchRuntime(), defaults: defaults)
     #expect(!controller.isCompleted)
 
     controller.markCompleted()
 
     #expect(controller.isCompleted)
     #expect(defaults.bool(forKey: "onboarding.completed"))
-    #expect(OnboardingController(defaults: defaults).isCompleted)
+    #expect(OnboardingController(runtime: NotchRuntime(), defaults: defaults).isCompleted)
 }
 
 @MainActor
@@ -241,13 +277,21 @@ private final class InfoBlock: NotchBlock {
     let title: String
     let info: BlockInfo
     var health: BlockHealth
-    init(_ id: BlockID, info: BlockInfo, health: BlockHealth = .ok) {
+    var usage: BlockUsage?
+    var review: BlockReview?
+    var notice: String?
+    init(_ id: BlockID, info: BlockInfo, health: BlockHealth = .ok, usage: BlockUsage? = nil,
+         review: BlockReview? = nil, notice: String? = nil) {
         self.id = id
         title = id.rawValue.capitalized
         self.info = info
         self.health = health
+        self.usage = usage
+        self.review = review
+        self.notice = notice
     }
-    func activate(_ context: any BlockContext) {}
+    /// As a stand-in does: turned on, earlier failures no longer count.
+    func activate(_ context: any BlockContext) { health = .ok }
 }
 
 /// Answers `canRemove` and `canTurnOn` from the ids it is given.
@@ -260,9 +304,10 @@ private final class FakeInstaller: BlockInstalling {
         self.cannotRun = cannotRun
     }
     func inspect(_ url: URL) throws -> BlockPackageSummary {
-        BlockPackageSummary(id: "x", name: "X", version: "1", contract: 1, sourcePath: url.path)
+        BlockPackageSummary(id: "hello", name: "Hello", version: "0.2", contract: 1, sourcePath: url.path)
     }
-    func install(_ url: URL) throws {}
+    func install(_ url: URL, expectedHash: String) throws {}
+    func approve(_ id: BlockID, expectedHash: String) throws {}
     func remove(_ id: BlockID) throws {}
     func canRemove(_ id: BlockID) -> Bool { removable.contains(id) }
     func canTurnOn(_ id: BlockID) -> Bool { !cannotRun.contains(id) }
@@ -361,31 +406,127 @@ private final class FakeInstaller: BlockInstalling {
     #expect(text.contains("\"hello\"") && text.contains("\"other\""))
 }
 
+private let hover = EventEntry(name: "Pointer over the notch", reveals: "The pointer entered or left the notch")
+private let volume = EventEntry(name: "Volume changes", reveals: "The output volume and mute state")
+
 @Test func summaryMarksNewEvents() {
     let update = BlockPackageSummary(id: "hello", name: "Hello", version: "0.3", contract: 1,
-                                     events: ["Pointer over the notch", "Volume changes"], newEvents: ["Volume changes"],
+                                     newEvents: ["Volume changes"],
+                                     eventEntries: [hover, volume],
                                      permissions: [], sourcePath: "/tmp/Hello.topblock", installedVersion: "0.2")
     let text = InstallSheetText(update)
-    #expect(text.events == ["Pointer over the notch", "Volume changes (new)"])
+    #expect(text.events.map(\.name) == ["Pointer over the notch", "Volume changes (new)"])
     #expect(text.isUpdate)
     #expect(text.title == "Update Hello?")
     #expect(text.version == "0.3 (installed: 0.2)")
     #expect(text.confirm == "Update")
     #expect(text.keeps == "Its settings and data are kept.")
-    #expect(text.permissions == "Nothing")
 
     let fresh = BlockPackageSummary(id: "hello", name: "Hello", version: "0.2", contract: 1,
-                                    events: ["Pointer over the notch"], permissions: ["Reads the clipboard"],
-                                    sourcePath: "/tmp/Hello.topblock")
+                                    eventEntries: [hover],
+                                    permissions: ["Reads the clipboard"], sourcePath: "/tmp/Hello.topblock")
     let freshText = InstallSheetText(fresh)
-    #expect(freshText.events == ["Pointer over the notch"])
+    #expect(freshText.events.map(\.name) == ["Pointer over the notch"])
     #expect(!freshText.isUpdate)
     #expect(freshText.title == "Install Hello?")
     #expect(freshText.version == "0.2")
     #expect(freshText.contract == "Block contract 1")
     #expect(freshText.confirm == "Install and Turn On")
     #expect(freshText.keeps == nil)
-    #expect(freshText.permissions == "Reads the clipboard")
+    #expect(freshText.access == "Nothing")
+}
+
+// MARK: - Install and review sheet
+
+@Test func theSheetListsEachEventWithWhatItReveals() {
+    let shots = EventEntry(name: "Screenshots", reveals: "The path and time of a new screenshot", permission: .screenshotFolder)
+    let music = EventEntry(name: "Music playing", reveals: "Player, state, title, artist, artwork",
+                           note: "Other players are read from an undocumented part of macOS")
+    let summary = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 3,
+                                      eventEntries: [hover, shots, music], sourcePath: "/tmp/Hello.topblock")
+
+    let events = InstallSheetText(summary).events
+
+    #expect(events == [
+        .init(name: "Pointer over the notch", reveals: "The pointer entered or left the notch",
+              permission: "No macOS permission", note: nil),
+        .init(name: "Screenshots", reveals: "The path and time of a new screenshot",
+              permission: "Access to the screenshot folder", note: nil),
+        .init(name: "Music playing", reveals: "Player, state, title, artist, artwork",
+              permission: "No macOS permission", note: "Other players are read from an undocumented part of macOS"),
+    ])
+}
+
+@Test func theSheetListsHostsUnderCanReach() {
+    let network = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
+                                      sourcePath: "/tmp/Weather.topblock", access: ["Use the network"],
+                                      signer: "Ana Lima", hosts: ["api.open-meteo.com", "*.example.org"])
+    let text = InstallSheetText(network)
+    #expect(text.hosts == ["api.open-meteo.com", "*.example.org"])
+    #expect(text.access == "Use the network")
+
+    let none = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 3, sourcePath: "/tmp/Hello.topblock")
+    #expect(InstallSheetText(none).hosts.isEmpty, "no Can reach row")
+}
+
+@Test func aRiskyPairNeedsTheSecondConfirmation() {
+    let files = BlockPackageSummary(id: "share", name: "Drop to Share", version: "0.4.0", contract: 3,
+                                    sourcePath: "/tmp/Share.topblock", access: ["Read your files", "Use the network"],
+                                    signer: "Ana Lima", hosts: ["api.dropbox.com", "content.dropboxapi.com"], riskyPair: .files)
+    let text = InstallSheetText(files)
+    #expect(text.warning == "This block can read your files and send data to api.dropbox.com and content.dropboxapi.com. Install it only if you trust its creator.")
+    #expect(text.acknowledgement == "I understand that this block can send my files to these hosts")
+    #expect(!text.canConfirm(acknowledged: false))
+    #expect(text.canConfirm(acknowledged: true))
+
+    var screenshots = files
+    screenshots.riskyPair = .screenshots
+    screenshots.hosts = ["a.example.com", "b.example.com", "c.example.com"]
+    let shotsText = InstallSheetText(screenshots)
+    #expect(shotsText.warning == "This block can read your screenshots and send data to a.example.com, b.example.com and c.example.com. Install it only if you trust its creator.")
+    #expect(!shotsText.canConfirm(acknowledged: false))
+}
+
+@Test func aSafeBlockNeedsNoSecondConfirmation() {
+    let network = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
+                                      sourcePath: "/tmp/Weather.topblock", access: ["Use the network"],
+                                      signer: "Ana Lima", hosts: ["api.open-meteo.com"])
+    let text = InstallSheetText(network)
+    #expect(text.warning == nil)
+    #expect(text.acknowledgement == nil)
+    #expect(text.canConfirm(acknowledged: false))
+}
+
+@Test func anUnsignedBlockSaysTheCreatorCannotBeVerified() {
+    let unsigned = BlockPackageSummary(id: "hello", name: "My Hello", version: "0.1.0", contract: 3,
+                                       sourcePath: "/tmp/My Hello.topblock")
+    let text = InstallSheetText(unsigned)
+    #expect(text.creator == "No signature: the creator cannot be verified")
+    #expect(text.creatorNote == "Your approval covers this exact build. A changed copy asks again.")
+
+    let signed = BlockPackageSummary(id: "hello", name: "My Hello", version: "0.1.0", contract: 3,
+                                     sourcePath: "/tmp/My Hello.topblock", signer: "Jane Developer")
+    let signedText = InstallSheetText(signed)
+    #expect(signedText.creator == "Jane Developer")
+    #expect(signedText.creatorNote == nil)
+}
+
+@Test func anUpdateThatAddsAHostNamesTheNewHost() {
+    let update = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.3.0", contract: 3,
+                                     sourcePath: "/tmp/Weather.topblock", installedVersion: "1.2.0",
+                                     access: ["Use the network"], signer: "Ana Lima",
+                                     hosts: ["api.open-meteo.com", "cdn.open-meteo.com"], newHosts: ["cdn.open-meteo.com"])
+    #expect(InstallSheetText(update).hosts == ["api.open-meteo.com", "cdn.open-meteo.com (new)"])
+}
+
+@Test func theSheetServesInstallUpdateAndReview() {
+    let summary = BlockPackageSummary(id: "weather", name: "Weather Peek", version: "1.2.0", contract: 3,
+                                      sourcePath: "/tmp/Weather.topblock")
+    #expect(InstallSheetText(summary).confirm == "Install and Turn On")
+    let review = InstallSheetText(summary, review: true)
+    #expect(review.confirm == "Approve and Turn On")
+    #expect(review.title == "Approve Weather Peek?")
+    #expect(review.keeps == nil)
 }
 
 // MARK: - Order, access, signer, the switch
@@ -516,32 +657,179 @@ private final class FakeInstaller: BlockInstalling {
                                      access: ["Use the network", "Read files you choose"],
                                      signer: "Jane Developer")
     let signedText = InstallSheetText(signed)
-    #expect(signedText.access == ["Use the network", "Read files you choose"])
-    #expect(signedText.signature == "Signed by Jane Developer")
-    #expect(signedText.signatureWarning == nil)
+    #expect(signedText.access == "Use the network\nRead files you choose")
+    #expect(signedText.creator == "Jane Developer")
+    #expect(signedText.creatorNote == nil)
 
     let unsigned = BlockPackageSummary(id: "hello", name: "Hello", version: "1.0", contract: 2,
                                        sourcePath: "/tmp/Hello.topblock")
     let unsignedText = InstallSheetText(unsigned)
-    #expect(unsignedText.access.isEmpty)
-    #expect(unsignedText.signature == "Not signed")
-    #expect(unsignedText.signatureWarning == "TopNotch cannot tell who made this block or whether it was changed. Install it only if you built it or trust where it came from.")
+    #expect(unsignedText.access == "Nothing")
+    #expect(unsignedText.creator == "No signature: the creator cannot be verified")
+}
+
+// MARK: - Blocks page states
+
+@MainActor
+@Test func aRunningBlockShowsItsUsage() {
+    let running = InfoBlock("shelf", info: BlockInfo(), usage: BlockUsage(memoryBytes: 38 * 1024 * 1024, processorFraction: 0.001))
+    #expect(BlockEntry(block: running, installer: nil).usageLine == "38 MB · 0.1% processor")
+
+    let busy = InfoBlock("busy", info: BlockInfo(), usage: BlockUsage(memoryBytes: 38 * 1024 * 1024, processorFraction: 1.25))
+    #expect(BlockEntry(block: busy, installer: nil).usageLine == "38 MB · 125.0% processor")
+
+    let idle = InfoBlock("idle", info: BlockInfo())
+    #expect(BlockEntry(block: idle, installer: nil).usageLine == nil)
 }
 
 @MainActor
-@Test func allowUnsignedSwitchWritesItsKey() {
+@Test func aNewBlockShowsReviewAndNoSwitch() {
+    let home = "/Users/test"
+    let path = "/Users/test/Library/Application Support/TopNotch/Blocks/Weather Peek.topblock"
+    let block = InfoBlock("weather", info: BlockInfo(version: "1.2.0", source: .installed(from: path)),
+                          health: .turnedOff(reason: "New: review this block before it runs."), review: .new)
+    let installer = FakeInstaller(removable: ["weather"], cannotRun: ["weather"])
+
+    let entry = BlockEntry(block: block, installer: installer, home: home)
+
+    #expect(entry.badge == "New")
+    #expect(entry.reviewText == "Found in the Blocks folder. Review it before it can run.")
+    #expect(entry.offersReview)
+    #expect(entry.isRemovable)
+    #expect(!entry.hasSwitch)
+    #expect(!entry.hasOrderControls)
+    #expect(entry.turnedOffReason == nil, "the review text says why, not a stopped box")
+    #expect(!entry.offersTurnOn)
+    #expect(entry.detail == "~/Library/Application Support/TopNotch/Blocks/Weather Peek.topblock · 1.2.0 · Off")
+    #expect(entry.accessibilityLabel == "Weather, New")
+
+    let running = BlockEntry(block: InfoBlock("shelf", info: BlockInfo()), installer: installer)
+    #expect(running.badge == nil)
+    #expect(!running.offersReview)
+    #expect(running.hasSwitch)
+    #expect(running.hasOrderControls)
+    #expect(running.accessibilityLabel == "Shelf")
+    #expect(!BlockEntry(block: block, installer: nil).offersReview, "nothing to review with without an installer")
+}
+
+@MainActor
+@Test func aChangedBlockShowsReviewAgain() {
+    let block = InfoBlock("share", info: BlockInfo(source: .installed(from: "/tmp/Share.topblock")),
+                          health: .turnedOff(reason: "Changed"), review: .changed)
+
+    let entry = BlockEntry(block: block, installer: FakeInstaller(removable: ["share"]))
+
+    #expect(entry.badge == "Changed")
+    #expect(entry.reviewText == "This package changed since you approved it.")
+    #expect(entry.offersReview)
+    #expect(!entry.hasSwitch)
+    #expect(entry.accessibilityLabel == "Share, Changed")
+}
+
+@MainActor
+@Test func aBlockAwaitingReviewIsNotInTheSidebar() {
+    let entries = [
+        BlockEntry(block: InfoBlock("shelf", info: BlockInfo()), installer: nil),
+        BlockEntry(block: InfoBlock("weather", info: BlockInfo(), review: .new), installer: nil),
+        BlockEntry(block: InfoBlock("share", info: BlockInfo(), review: .changed), installer: nil),
+        BlockEntry(block: InfoBlock("clock", info: BlockInfo(), health: .turnedOff(reason: "Stopped.")), installer: nil),
+    ]
+
+    #expect(BlockEntry.sidebar(entries).map(\.id) == ["shelf", "clock"])
+}
+
+@MainActor
+@Test func aStoppedBlockShowsItsReasonWithTurnOn() {
     let (defaults, name) = makeDefaults()
     defer { cleanUp(defaults, name) }
     let settings = BlockSettings(defaults: defaults, domain: name)
-    #expect(!settings.allowsUnsigned)
+    let runtime = NotchRuntime()
+    let reason = "It was stopped because it used more than 500 MB of memory."
+    let block = InfoBlock("clock", info: BlockInfo())
+    runtime.register(block)
+    // As the app's turn-off closure does.
+    settings.setEnabled("clock", false, in: runtime)
+    block.health = .turnedOff(reason: reason)
 
-    settings.setAllowsUnsigned(true)
-    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == true)
-    #expect(BlockSettings(defaults: defaults, domain: name).allowsUnsigned)
+    let entry = BlockEntry(block: block, installer: nil)
+    #expect(entry.turnedOffReason == reason)
+    #expect(entry.offersTurnOn)
 
-    settings.setAllowsUnsigned(false)
-    #expect(defaults.object(forKey: "block.allowUnsigned") as? Bool == false)
-    #expect(!settings.allowsUnsigned)
+    // What the stopped box's "Turn On" does.
+    settings.setEnabled(entry.id, true, in: runtime)
+
+    #expect(runtime.isEnabled("clock"))
+    #expect(settings.isEnabled("clock"))
+    let after = BlockEntry(block: block, installer: nil)
+    #expect(after.turnedOffReason == nil, "Turn On clears the reason")
+    #expect(!after.offersTurnOn)
+}
+
+@MainActor
+@Test func aNoticeIsShownWithoutStoppingTheBlock() {
+    let block = InfoBlock("weather", info: BlockInfo(), notice: "Weather started without network: no port")
+    let entry = BlockEntry(block: block, installer: nil)
+    #expect(entry.notice == "Weather started without network: no port")
+    #expect(entry.turnedOffReason == nil)
+    #expect(entry.hasSwitch)
+}
+
+@Test func theFooterSaysWhereBlocksLive() {
+    let folder = URL(filePath: "/Users/test/Library/Application Support/TopNotch/Blocks", directoryHint: .isDirectory)
+    #expect(BlockEntry.blocksFolderNote(folder, home: "/Users/test")
+        == "Blocks live in ~/Library/Application Support/TopNotch/Blocks")
+    let elsewhere = URL(filePath: "/Volumes/Work/Blocks", directoryHint: .isDirectory)
+    #expect(BlockEntry.blocksFolderNote(elsewhere, home: "/Users/test") == "Blocks live in /Volumes/Work/Blocks")
+}
+
+// MARK: - Screenshot folder consent
+
+/// "Allow access" records the answer and reports it, which the app wires
+/// to the source coordinator's `evaluate`: the watcher starts once allowed.
+@MainActor
+@Test func anAnswerUpdatesTheConsentAndReportsIt() {
+    let consent = ScreenshotFolderConsent()
+    var reports = 0
+    consent.onChange = { reports += 1 }
+    #expect(!consent.isGranted)
+    #expect(!consent.isRefused, "no answer yet")
+
+    consent.record(.denied)
+    #expect(!consent.isGranted)
+    #expect(consent.isRefused)
+    #expect(reports == 1)
+
+    consent.record(.granted)
+    #expect(consent.isGranted)
+    #expect(!consent.isRefused)
+    #expect(reports == 2)
+}
+
+/// Design error table: the screenshot folder refused, the source does not
+/// start, and the blocks that need it say why.
+@MainActor
+@Test func aBlockThatNeedsTheRefusedScreenshotFolderSaysWhy() {
+    let runtime = NotchRuntime()
+    let consent = ScreenshotFolderConsent()
+    let listener = ScreenshotListener("rename")
+    let off = ScreenshotListener("rename-copy")
+    let other = InfoBlock("shelf", info: BlockInfo())
+    runtime.register(listener)
+    runtime.register(off, enabled: false)
+    runtime.register(other)
+    let notice = "Screenshot folder access is off. Allow it in Settings > General."
+
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == nil,
+            "no notice before macOS answers")
+
+    consent.record(.denied)
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == notice)
+    #expect(BlockEntry(block: off, installer: nil, runtime: runtime, consent: consent).notice == nil,
+            "a block that is off needs nothing")
+    #expect(BlockEntry(block: other, installer: nil, runtime: runtime, consent: consent).notice == nil)
+
+    consent.record(.granted)
+    #expect(BlockEntry(block: listener, installer: nil, runtime: runtime, consent: consent).notice == nil)
 }
 
 @MainActor
