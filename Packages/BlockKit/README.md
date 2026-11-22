@@ -87,7 +87,9 @@ await Hello.main()
 ```
 
 In `manifest.json`, set `"id": "my-hello"`, `"name": "My Hello"` and
-`"executable": "MyHello"` (the product name).
+`"executable": "MyHello"` (the product name). Give every block its own id
+and name: `hello` is the example's id, and TopNotch shows the example as
+installed while any block with that id is present.
 
 How a block is written:
 
@@ -263,6 +265,11 @@ not work, and plain `http://` does not either.
 
 The review sheet shows the owner what each listed event reveals. The
 payloads and the rules for a new event are in PROTOCOL.md under "Events".
+
+A block that renames a screenshot sets the extended attribute
+`com.topnotch.original-name` on the file, to the old name. A file with
+this attribute is not reported as a new screenshot, so the renamed file
+does not come back as `screenshotCaptured`.
 
 ## The sandbox and its limits
 

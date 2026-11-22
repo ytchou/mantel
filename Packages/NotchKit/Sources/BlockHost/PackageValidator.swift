@@ -35,9 +35,9 @@ enum PackageValidator {
 
     /// Reads the package's `manifest.json` and checks it. Returns the manifest
     /// when the package may run. The signature is checked by `BlockStore`.
-    static func load(_ package: URL, source: BlockSource) throws(BlockInstallError) -> Manifest {
+    static func load(_ package: URL) throws(BlockInstallError) -> Manifest {
         let manifest = try read(package)
-        try validate(manifest, package: package, source: source)
+        try validate(manifest, package: package)
         return manifest
     }
 
@@ -71,11 +71,11 @@ enum PackageValidator {
     }
 
     /// Checks the meaning of a decoded manifest against its package folder.
-    static func validate(_ manifest: Manifest, package: URL, source: BlockSource) throws(BlockInstallError) {
+    static func validate(_ manifest: Manifest, package: URL) throws(BlockInstallError) {
         guard Contract.supported.contains(manifest.contract) else {
             throw .unsupportedContract(found: manifest.contract, supported: Contract.supported)
         }
-        try checkID(manifest.id, source: source)
+        try checkID(manifest.id)
         try checkExecutable(manifest.executable, package: package)
         try checkLinks(in: package)
         if let unknown = manifest.events.first(where: { WireEvent(rawValue: $0) == nil }) {
@@ -100,17 +100,11 @@ enum PackageValidator {
         }
     }
 
-    /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved and the
-    /// source is a package.
-    static func checkID(_ id: String, source: BlockSource) throws(BlockInstallError) {
+    /// Refuses an id that is not `[a-z0-9-]+`, or that is reserved.
+    static func checkID(_ id: String) throws(BlockInstallError) {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
         guard !id.isEmpty, id.allSatisfy(allowed.contains) else { throw .invalidID(id) }
-        switch source {
-        case .builtIn:
-            return
-        case .installed, .development:
-            if reservedIDs.contains(id) { throw .reservedID(id) }
-        }
+        if reservedIDs.contains(id) { throw .reservedID(id) }
     }
 
     private static func checkExecutable(_ path: String, package: URL) throws(BlockInstallError) {

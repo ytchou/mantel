@@ -12,12 +12,12 @@ Run from the repository root.
 | Command | What it does |
 |---|---|
 | `make build` | Build the app (Debug) into `build/` |
-| `make test` | Run the unit tests of both packages, one after another |
+| `make test` | Run the unit tests of both packages, one after another, then build the root `Package.swift` |
 | `make test FILTER=NotchCoreTests` | Run one module's tests in `Packages/NotchKit` |
 | `make test PKG=Packages/BlockKit [FILTER=BlockKitTests]` | Run one package's tests, optionally one target |
 | `make run` | Build, quit any running copy, launch |
 | `make quit` | Quit the running app |
-| `make clean` | Delete build output, the app's and each package's `.build` |
+| `make clean` | Delete build output, the root `.build` and each package's `.build` |
 
 Use these, not bare `xcodebuild` or `swift test`.
 
@@ -47,8 +47,8 @@ is, without installing it (sandboxed, no signature check): `make build`, then
 Rules:
 
 - The app ships with no blocks. The owner's blocks (Now Playing, Screenshot
-  Names, Shelf) live in `~/project/topnotch-blocks`
-  (github.com/ytchou/topnotch-blocks once published), with the collision
+  Names, Shelf) live in github.com/ytchou/topnotch-blocks, cloned beside
+  this repository (for example `~/project/topnotch-blocks`), with the collision
   tests that run the real blocks behind their stand-ins. Run those with
   `TOPNOTCH=<path to this checkout> make test` there.
 - Every block runs as its own process, sandboxed, and talks to the app over the

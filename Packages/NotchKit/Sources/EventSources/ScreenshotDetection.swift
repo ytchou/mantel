@@ -8,7 +8,8 @@ enum ScreenshotCandidate {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "tif", "gif", "bmp", "pdf"]
     /// Set by macOS on every screenshot file. A binary plist holding a boolean.
     static let screenCaptureAttribute = "com.apple.metadata:kMDItemIsScreenCapture"
-    /// Set by a block on screenshot files it gave a new name. Such files are not new screenshots.
+    /// Set by a block on a screenshot file it gave a new name, to the old
+    /// name. Such files are not new screenshots. Documented in `PROTOCOL.md`.
     static let originalNameAttribute = "com.topnotch.original-name"
 
     /// A visible image file. macOS writes a hidden `.Screenshot …` file first
@@ -26,7 +27,8 @@ enum ScreenshotCandidate {
         var createdAt: Date?
         /// `nil` while the attribute is absent (it can land just after the file).
         var isScreenCapture: Bool?
-        var isRenamedByApp: Bool
+        /// True when the file carries `originalNameAttribute`.
+        var isRenamedByBlock: Bool
     }
 
     enum Decision: Sendable, Equatable {
@@ -38,7 +40,7 @@ enum ScreenshotCandidate {
 
     static func decide(_ facts: Facts, startedAt: Date) -> Decision {
         guard facts.exists else { return .ignore }
-        if facts.isRenamedByApp { return .ignore }
+        if facts.isRenamedByBlock { return .ignore }
         if let created = facts.createdAt, created < startedAt { return .ignore }
         if facts.isScreenCapture == false { return .ignore }
         guard facts.isScreenCapture == true, facts.size > 0 else { return .retry }
@@ -61,7 +63,7 @@ enum ScreenshotCandidate {
     static func facts(at url: URL) -> Facts {
         let path = url.path
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
-            return Facts(exists: false, size: 0, createdAt: nil, isScreenCapture: nil, isRenamedByApp: false)
+            return Facts(exists: false, size: 0, createdAt: nil, isScreenCapture: nil, isRenamedByBlock: false)
         }
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         let flag = readAttribute(path, screenCaptureAttribute).flatMap(parseScreenCaptureFlag)
@@ -70,7 +72,7 @@ enum ScreenshotCandidate {
             size: size,
             createdAt: attributes[.creationDate] as? Date,
             isScreenCapture: flag,
-            isRenamedByApp: readAttribute(path, originalNameAttribute) != nil
+            isRenamedByBlock: readAttribute(path, originalNameAttribute) != nil
         )
     }
 

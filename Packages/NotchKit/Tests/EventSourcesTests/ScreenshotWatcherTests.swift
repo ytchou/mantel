@@ -29,7 +29,7 @@ private func facts(
     screenCapture: Bool? = true,
     renamed: Bool = false
 ) -> ScreenshotCandidate.Facts {
-    .init(exists: exists, size: size, createdAt: created, isScreenCapture: screenCapture, isRenamedByApp: renamed)
+    .init(exists: exists, size: size, createdAt: created, isScreenCapture: screenCapture, isRenamedByBlock: renamed)
 }
 
 @Test func aFinishedScreenshotIsPublished() {

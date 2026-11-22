@@ -178,19 +178,31 @@ final class ExampleOffer {
     enum Status: Equatable {
         case notInstalled
         case installed
+        /// `inspect` refused the example; the refusal in words. No install
+        /// is offered: it would fail the same way.
+        case unavailable(String)
 
         /// The status in words, not color alone.
         var text: String {
             switch self {
             case .notInstalled: "Not installed"
             case .installed: "Installed"
+            case let .unavailable(reason): reason
             }
         }
     }
 
+    /// What the first `inspect` of the example said.
+    private enum Probe {
+        /// The example's id, from its package or from an `idInUse` refusal.
+        case id(BlockID)
+        /// Any other refusal, in words.
+        case refused(String)
+    }
+
     let url: URL
-    private let installer: any BlockInstalling
-    private var knownID: BlockID?
+    let installer: any BlockInstalling
+    private var probe: Probe?
 
     /// Nil, so nothing is offered, without an example in the app or without an installer.
     init?(url: URL?, installer: (any BlockInstalling)?) {
@@ -199,36 +211,39 @@ final class ExampleOffer {
         self.installer = installer
     }
 
-    /// The example's id, read from its package by `inspect`, once. Nil while
-    /// the package cannot be read.
-    // Read again on each call while `inspect` throws, such as while a
-    // development block holds the id; fine for one small package. Cache the
-    // failure too if that ever shows in a redraw.
-    private var id: BlockID? {
-        if knownID == nil { knownID = try? installer.inspect(url).id }
-        return knownID
+    /// The example's id, read from its package by `inspect`. The first
+    /// outcome, refusal included, is kept, so redraws do not hash and check
+    /// the package again.
+    // Kept for the object's life: a refusal that later goes away, such as
+    // a conflicting block removed, shows again only in a new window. Probe
+    // again on `runtime.blocks` changes if that ever confuses an owner.
+    private var outcome: Probe {
+        if let probe { return probe }
+        let read: Probe
+        do {
+            read = .id(try installer.inspect(url).id)
+        } catch BlockInstallError.idInUse(let id) {
+            // A block with the example's id runs, such as the development block.
+            read = .id(BlockID(rawValue: id))
+        } catch {
+            read = .refused(error.localizedDescription)
+        }
+        probe = read
+        return read
     }
 
     /// Installed once a block with the example's id is registered, waiting
     /// for review included.
     func status(in runtime: NotchRuntime) -> Status {
-        guard let id else { return .notInstalled }
-        return runtime.blocks.contains { $0.id == id } ? .installed : .notInstalled
-    }
-
-    /// True while "Install the Example Block" is offered.
-    func offersInstall(in runtime: NotchRuntime) -> Bool {
-        status(in: runtime) == .notInstalled
+        switch outcome {
+        case let .refused(reason): .unavailable(reason)
+        case let .id(id): runtime.blocks.contains { $0.id == id } ? .installed : .notInstalled
+        }
     }
 
     /// Reads the example for the review sheet, as "Install Block…" reads a chosen package.
     func choose() throws -> PendingInstall {
         try PendingInstall.install(url, with: installer)
-    }
-
-    /// Installs the build the sheet showed.
-    func confirm(_ pending: PendingInstall) throws {
-        try pending.confirm(with: installer)
     }
 }
 
@@ -239,7 +254,7 @@ struct ExampleRow: View {
     /// The example read for the review sheet, waiting for confirmation.
     @State private var pending: PendingInstall?
     /// Why the example could not be read or installed, shown in an alert.
-    @State private var failure: String?
+    @State private var failure: Failure?
     @FocusState private var installFocused: Bool
 
     var body: some View {
@@ -250,42 +265,25 @@ struct ExampleRow: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Text(status.text).foregroundStyle(.secondary)
+                Text(status.text)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if status == .notInstalled {
-                    Button("Install the Example Block", action: choose)
+                    Button(EmptyBlocksAction.installExample.title, action: choose)
                         .focused($installFocused)
                 }
             }
         }
         .defaultFocus($installFocused, true)
-        .sheet(item: $pending) { pending in
-            BlockInstallSheet(summary: pending.summary) {
-                self.pending = nil
-                do {
-                    try offer.confirm(pending)
-                } catch {
-                    failure = error.localizedDescription
-                }
-            } cancel: {
-                self.pending = nil
-            }
-        }
-        .alert("The example block was not installed", isPresented: Binding(
-            get: { failure != nil },
-            set: { if !$0 { failure = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(failure ?? "")
-        }
+        .installReview($pending, failure: $failure, installer: offer.installer)
     }
 
     private func choose() {
         do {
             pending = try offer.choose()
         } catch {
-            failure = error.localizedDescription
+            failure = Failure(title: "The block cannot be installed", message: error.localizedDescription)
         }
     }
 }

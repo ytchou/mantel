@@ -882,8 +882,8 @@ public final class RemoteBlock: NotchBlock {
             duration: Self.duration(seconds: seconds, priority: priority),
             accepts: Set(accepts.map(Self.dropKind))
         ))
-        // Exactly what an in-app block does to answer a change just made:
-        // shown later it would answer nothing, so it does not wait.
+        // An answer to a change just made: shown later it would answer
+        // nothing, so it does not wait.
         if dismissIfNotShown, !context.ownsNotch { context.dismiss() }
     }
 

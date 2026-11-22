@@ -316,10 +316,10 @@ private final class FakeInstaller: BlockInstalling {
 @MainActor
 @Test func detailShowsSourceAndVersion() {
     let home = "/Users/test"
-    let shelf = BlockEntry(block: InfoBlock("shelf", info: BlockInfo(trigger: "Dragging files")), installer: nil, home: home)
-    #expect(shelf.detail == "Built in · Dragging files")
+    let builtIn = BlockEntry(block: InfoBlock("alpha", info: BlockInfo(trigger: "Dragging files")), installer: nil, home: home)
+    #expect(builtIn.detail == "Built in · Dragging files")
 
-    let versioned = BlockEntry(block: InfoBlock("nowplaying", info: BlockInfo(trigger: "Music", version: "1.0", source: .builtIn)),
+    let versioned = BlockEntry(block: InfoBlock("beta", info: BlockInfo(trigger: "Music", version: "1.0", source: .builtIn)),
                                installer: nil, home: home)
     #expect(versioned.detail == "Built in · 1.0 · Music")
 
@@ -374,7 +374,7 @@ private final class FakeInstaller: BlockInstalling {
     let installer = FakeInstaller(removable: ["hello"])
     let installed = InfoBlock("hello", info: BlockInfo(source: .installed(from: "/tmp/Hello.topblock")))
     let other = InfoBlock("other", info: BlockInfo(source: .installed(from: "/tmp/Other.topblock")))
-    let builtIn = InfoBlock("shelf", info: BlockInfo())
+    let builtIn = InfoBlock("alpha", info: BlockInfo())
     #expect(BlockEntry(block: installed, installer: installer).isRemovable)
     #expect(!BlockEntry(block: other, installer: installer).isRemovable, "the installer says no")
     #expect(!BlockEntry(block: builtIn, installer: installer).isRemovable)
@@ -384,7 +384,7 @@ private final class FakeInstaller: BlockInstalling {
 @MainActor
 @Test func selectionFallsBackAfterRemove() {
     let runtime = NotchRuntime()
-    runtime.register(FakeBlock("shelf"))
+    runtime.register(FakeBlock("alpha"))
     runtime.register(FakeBlock("hello"))
     let ids = { runtime.blocks.map(\.id) }
     #expect(SettingsPane.block("hello").remaining(in: ids()) == .block("hello"))
@@ -392,7 +392,7 @@ private final class FakeInstaller: BlockInstalling {
     runtime.unregister("hello")
 
     #expect(SettingsPane.block("hello").remaining(in: ids()) == .blocks)
-    #expect(SettingsPane.block("shelf").remaining(in: ids()) == .block("shelf"))
+    #expect(SettingsPane.block("alpha").remaining(in: ids()) == .block("alpha"))
     #expect(SettingsPane.general.remaining(in: ids()) == .general)
 }
 
@@ -672,7 +672,7 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 
 @MainActor
 @Test func aRunningBlockShowsItsUsage() {
-    let running = InfoBlock("shelf", info: BlockInfo(), usage: BlockUsage(memoryBytes: 38 * 1024 * 1024, processorFraction: 0.001))
+    let running = InfoBlock("alpha", info: BlockInfo(), usage: BlockUsage(memoryBytes: 38 * 1024 * 1024, processorFraction: 0.001))
     #expect(BlockEntry(block: running, installer: nil).usageLine == "38 MB · 0.1% processor")
 
     let busy = InfoBlock("busy", info: BlockInfo(), usage: BlockUsage(memoryBytes: 38 * 1024 * 1024, processorFraction: 1.25))
@@ -703,12 +703,12 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
     #expect(entry.detail == "~/Library/Application Support/TopNotch/Blocks/Weather Peek.topblock · 1.2.0 · Off")
     #expect(entry.accessibilityLabel == "Weather, New")
 
-    let running = BlockEntry(block: InfoBlock("shelf", info: BlockInfo()), installer: installer)
+    let running = BlockEntry(block: InfoBlock("alpha", info: BlockInfo()), installer: installer)
     #expect(running.badge == nil)
     #expect(!running.offersReview)
     #expect(running.hasSwitch)
     #expect(running.hasOrderControls)
-    #expect(running.accessibilityLabel == "Shelf")
+    #expect(running.accessibilityLabel == "Alpha")
     #expect(!BlockEntry(block: block, installer: nil).offersReview, "nothing to review with without an installer")
 }
 
@@ -729,13 +729,13 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 @MainActor
 @Test func aBlockAwaitingReviewIsNotInTheSidebar() {
     let entries = [
-        BlockEntry(block: InfoBlock("shelf", info: BlockInfo()), installer: nil),
+        BlockEntry(block: InfoBlock("alpha", info: BlockInfo()), installer: nil),
         BlockEntry(block: InfoBlock("weather", info: BlockInfo(), review: .new), installer: nil),
         BlockEntry(block: InfoBlock("share", info: BlockInfo(), review: .changed), installer: nil),
         BlockEntry(block: InfoBlock("clock", info: BlockInfo(), health: .turnedOff(reason: "Stopped.")), installer: nil),
     ]
 
-    #expect(BlockEntry.sidebar(entries).map(\.id) == ["shelf", "clock"])
+    #expect(BlockEntry.sidebar(entries).map(\.id) == ["alpha", "clock"])
 }
 
 @MainActor
@@ -811,9 +811,9 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 @Test func aBlockThatNeedsTheRefusedScreenshotFolderSaysWhy() {
     let runtime = NotchRuntime()
     let consent = ScreenshotFolderConsent()
-    let listener = ScreenshotListener("rename")
-    let off = ScreenshotListener("rename-copy")
-    let other = InfoBlock("shelf", info: BlockInfo())
+    let listener = ScreenshotListener("alpha")
+    let off = ScreenshotListener("alpha-off")
+    let other = InfoBlock("beta", info: BlockInfo())
     runtime.register(listener)
     runtime.register(off, enabled: false)
     runtime.register(other)
@@ -852,10 +852,13 @@ private let volume = EventEntry(name: "Volume changes", reveals: "The output vol
 @MainActor
 private final class RecordingInstaller: BlockInstalling {
     var exampleID: BlockID = "hello"
+    /// Thrown by `inspect` when set.
+    var refusal: BlockInstallError?
     private(set) var inspected: [URL] = []
     private(set) var installed: [(url: URL, hash: String)] = []
     func inspect(_ url: URL) throws -> BlockPackageSummary {
         inspected.append(url)
+        if let refusal { throw refusal }
         return BlockPackageSummary(id: exampleID, name: "Hello", version: "1.0.0", contract: 1,
                                    packageHash: "hash-of-\(url.lastPathComponent)", sourcePath: url.path)
     }
@@ -877,7 +880,6 @@ private let exampleURL = URL(filePath: "/Applications/TopNotch.app/Contents/Reso
 
     #expect(offer.status(in: runtime) == .notInstalled)
     #expect(offer.status(in: runtime).text == "Not installed")
-    #expect(offer.offersInstall(in: runtime))
 
     runtime.register(FakeBlock("hello"))
     #expect(offer.status(in: runtime) == .notInstalled, "another block with the kit's usual id does not count")
@@ -885,10 +887,44 @@ private let exampleURL = URL(filePath: "/Applications/TopNotch.app/Contents/Reso
     runtime.register(FakeBlock("greeting"))
     #expect(offer.status(in: runtime) == .installed)
     #expect(offer.status(in: runtime).text == "Installed")
-    #expect(!offer.offersInstall(in: runtime))
+    #expect(installer.inspected == [exampleURL], "the package is read once, not on every redraw")
 
     #expect(ExampleOffer(url: nil, installer: installer) == nil, "no example in the app: no row")
     #expect(ExampleOffer(url: exampleURL, installer: nil) == nil, "no installer: no row")
+}
+
+/// A development block holding the example's id makes `inspect` refuse with
+/// `idInUse`: the example counts as installed, with no install button.
+@MainActor
+@Test func exampleOfferTakesTheIDFromIdInUse() throws {
+    let runtime = NotchRuntime()
+    let installer = RecordingInstaller()
+    installer.refusal = .idInUse("greeting")
+    let offer = try #require(ExampleOffer(url: exampleURL, installer: installer))
+    runtime.register(FakeBlock("greeting"))
+
+    #expect(offer.status(in: runtime) == .installed)
+    #expect(offer.status(in: runtime) == .installed)
+    #expect(installer.inspected == [exampleURL], "the refusal is remembered, not read again")
+}
+
+/// Any other refusal, such as an installed block with the example's id
+/// from another signer: the row says why in words and offers no button
+/// that would always fail.
+@MainActor
+@Test func exampleOfferRefusedOffersNoInstall() throws {
+    let runtime = NotchRuntime()
+    let installer = RecordingInstaller()
+    let refusal = BlockInstallError.differentSigner(installed: "Someone", found: "Someone Else")
+    installer.refusal = refusal
+    let offer = try #require(ExampleOffer(url: exampleURL, installer: installer))
+
+    let status = offer.status(in: runtime)
+    #expect(status == .unavailable(refusal.localizedDescription))
+    #expect(status != .notInstalled, "no install button")
+    #expect(status.text == refusal.localizedDescription)
+    _ = offer.status(in: runtime)
+    #expect(installer.inspected == [exampleURL], "the refusal is remembered, not read again")
 }
 
 @MainActor

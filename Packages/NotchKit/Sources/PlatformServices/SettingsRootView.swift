@@ -307,22 +307,7 @@ private struct BlocksPane: View {
             }
         }
         .navigationTitle("Blocks")
-        .sheet(item: $pending) { pending in
-            BlockInstallSheet(summary: pending.summary, review: pending.isReview) {
-                self.pending = nil
-                confirm(pending)
-            } cancel: {
-                self.pending = nil
-            }
-        }
-        .alert(failure?.title ?? "", isPresented: Binding(
-            get: { failure != nil },
-            set: { if !$0 { failure = nil } }
-        ), presenting: failure) { _ in
-            Button("OK", role: .cancel) {}
-        } message: { failure in
-            Text(failure.message)
-        }
+        .installReview($pending, failure: $failure, installer: installer)
         .alert(removing.map { "Remove \($0.title)?" } ?? "", isPresented: Binding(
             get: { removing != nil },
             set: { if !$0 { removing = nil } }
@@ -406,7 +391,7 @@ private struct BlocksPane: View {
                     HStack {
                         Text("Add a block you built or trust, from a .topblock folder.")
                         Spacer()
-                        Button("Install Block\u{2026}") { choosePackage() }
+                        Button(EmptyBlocksAction.installBlock.title) { choosePackage() }
                     }
                 } footer: {
                     if let folder = installer?.blocksFolder {
@@ -496,17 +481,6 @@ private struct BlocksPane: View {
         }
     }
 
-    /// Installs or approves only the build the sheet showed.
-    private func confirm(_ pending: PendingInstall) {
-        guard let installer else { return }
-        do {
-            try pending.confirm(with: installer)
-        } catch {
-            failure = Failure(title: pending.isReview ? "The block was not approved" : "The block was not installed",
-                              message: error.localizedDescription)
-        }
-    }
-
     /// Reads the example block for the sheet, as `choosePackage` reads a chosen one.
     private func chooseExample() {
         guard let example else { return }
@@ -554,9 +528,42 @@ extension BlockPackageSummary {
     }
 }
 
-private struct Failure {
+/// A refusal or failure, shown in an alert.
+struct Failure {
     let title: String
     let message: String
+}
+
+extension View {
+    /// The review sheet for `pending`, which installs or approves only the
+    /// build it showed, and the alert for `failure`. One wiring for the
+    /// Blocks page and the onboarding example row.
+    func installReview(_ pending: Binding<PendingInstall?>, failure: Binding<Failure?>,
+                       installer: (any BlockInstalling)?) -> some View {
+        sheet(item: pending) { shown in
+            BlockInstallSheet(summary: shown.summary, review: shown.isReview) {
+                pending.wrappedValue = nil
+                guard let installer else { return }
+                do {
+                    try shown.confirm(with: installer)
+                } catch {
+                    failure.wrappedValue = Failure(
+                        title: shown.isReview ? "The block was not approved" : "The block was not installed",
+                        message: error.localizedDescription)
+                }
+            } cancel: {
+                pending.wrappedValue = nil
+            }
+        }
+        .alert(failure.wrappedValue?.title ?? "", isPresented: Binding(
+            get: { failure.wrappedValue != nil },
+            set: { if !$0 { failure.wrappedValue = nil } }
+        ), presenting: failure.wrappedValue) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { shown in
+            Text(shown.message)
+        }
+    }
 }
 
 /// A package the user chose, or one waiting for review, with what it says

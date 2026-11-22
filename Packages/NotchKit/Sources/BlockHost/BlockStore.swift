@@ -180,7 +180,7 @@ public final class BlockStore: BlockInstalling {
     public func inspect(_ url: URL) throws -> BlockPackageSummary {
         // Hashed first: confirming the sheet installs or approves only this build.
         let hash = PackageHash.of(url)
-        let manifest = try PackageValidator.load(url, source: .installed(from: url.path))
+        let manifest = try PackageValidator.load(url)
         try checkAvailable(manifest.id)
         let approval = approvals.approval(for: BlockID(rawValue: manifest.id))
         let signer = try checkSignature(url, pinned: approval?.signer)
@@ -233,7 +233,7 @@ public final class BlockStore: BlockInstalling {
     /// is turned on, as the sheet says; an update keeps its on/off state.
     public func install(_ url: URL, expectedHash: String) throws {
         let source = BlockSource.installed(from: url.path)
-        let manifest = try PackageValidator.load(url, source: source)
+        let manifest = try PackageValidator.load(url)
         let id = BlockID(rawValue: manifest.id)
         try checkAvailable(manifest.id)
         let previous = approvals.approval(for: id)
@@ -336,7 +336,7 @@ public final class BlockStore: BlockInstalling {
         // Hashed before the checks and again after: the build recorded is the one checked.
         let hash = PackageHash.of(package)
         guard hash == expectedHash else { throw BlockInstallError.changedDuringReview }
-        let manifest = try PackageValidator.load(package, source: source)
+        let manifest = try PackageValidator.load(package)
         guard manifest.id == id.rawValue else {
             throw BlockInstallError.differentBlock(expected: id.rawValue, found: manifest.id)
         }
@@ -492,8 +492,8 @@ public final class BlockStore: BlockInstalling {
     /// launch: a valid signature by `pinned`, the signer approved before,
     /// if there is one. An unsigned or ad hoc package passes, as the owner
     /// approves its exact build, but never as an update of a signed block.
-    /// A broken seal never passes. Bundled blocks are covered by the app's
-    /// own seal and development blocks have no rule; neither comes through here.
+    /// A broken seal never passes. Development blocks have no rule and do
+    /// not come through here.
     /// - Returns: the signer to record, or nil for an unsigned or ad hoc package.
     private func checkSignature(_ package: URL, pinned: String?) throws(BlockInstallError) -> String? {
         switch signatures.check(package) {
@@ -571,11 +571,11 @@ public final class BlockStore: BlockInstalling {
     /// other one is a `RefusedBlock` with the reason. A package whose id is
     /// not a valid one is logged and left out: Remove could clear other keys.
     private func installedBlocks() -> [any NotchBlock] {
-        let found = packages(in: blocksRoot, kind: "installed").compactMap { package -> Found? in
+        let found = packages(in: blocksRoot).compactMap { package -> Found? in
             let read = Result { () throws(BlockInstallError) in try PackageValidator.read(package) }
             let id = (try? read.get())?.id ?? package.deletingPathExtension().lastPathComponent
             do {
-                try PackageValidator.checkID(id, source: .installed(from: package.path))
+                try PackageValidator.checkID(id)
             } catch {
                 log.error("installed block at \(package.path, privacy: .public) skipped: \(id, privacy: .public) is not a block id")
                 return nil
@@ -611,7 +611,7 @@ public final class BlockStore: BlockInstalling {
         let source = BlockSource.installed(from: from)
         do throws(BlockInstallError) {
             let manifest = try found.read.get()
-            try PackageValidator.validate(manifest, package: package, source: source)
+            try PackageValidator.validate(manifest, package: package)
             // Checked again at every launch: a package changed on disk does not run.
             // Synchronous on the main actor: milliseconds for a few blocks. Move
             // the checks off the main actor, in parallel, once installed blocks
@@ -654,34 +654,30 @@ public final class BlockStore: BlockInstalling {
     /// Each package as `folder/<name>`, in `folder`'s form, as install forms
     /// its destination: `contentsOfDirectory(at:)` returns paths with
     /// symbolic links resolved (`/private/var/...` for `/var/...`).
-    private func packages(in folder: URL, kind: String) -> [URL] {
+    private func packages(in folder: URL) -> [URL] {
         guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
         do {
             return try FileManager.default.contentsOfDirectory(atPath: folder.path)
                 .filter { ($0 as NSString).pathExtension == "topblock" }
                 .map { folder.appending(path: $0, directoryHint: .isDirectory) }
         } catch {
-            log.error("no \(kind, privacy: .public) blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            log.error("no installed blocks at \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
 
+    /// A stand-in for the development package, or nil, logged, when it does not validate.
     private func developmentBlock(at path: String) -> RemoteBlock? {
         let package = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
-        return block(at: package, source: .development(path: package.path), kind: "development")
-    }
-
-    /// A stand-in for the package, or nil, logged, when it does not validate.
-    private func block(at package: URL, source: BlockSource, kind: String) -> RemoteBlock? {
         let manifest: Manifest
         do {
-            manifest = try PackageValidator.load(package, source: source)
+            manifest = try PackageValidator.load(package)
         } catch {
-            log.error("\(kind, privacy: .public) block at \(package.path, privacy: .public) not loaded: \(error.errorDescription ?? String(describing: error), privacy: .public)")
+            log.error("development block at \(package.path, privacy: .public) not loaded: \(error.errorDescription ?? String(describing: error), privacy: .public)")
             return nil
         }
-        log.info("\(kind, privacy: .public) block \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
-        return standIn(manifest: manifest, package: package, source: source)
+        log.info("development block \(manifest.id, privacy: .public) \(manifest.version, privacy: .public) from \(package.path, privacy: .public)")
+        return standIn(manifest: manifest, package: package, source: .development(path: package.path))
     }
 
     /// Why an installed block does not start when its store is gone.

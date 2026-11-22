@@ -200,6 +200,10 @@ An event payload is `{"name": <event name>, "value": <object>}`.
   `replay: true`, in the order they arrived; for `nowPlaying`, the latest of
   each player. The block updates its state and does not present. Events that
   happen while the block starts are sent after the replay with `replay: false`.
+- `screenshotCaptured` is not sent for a file with the extended attribute
+  `com.topnotch.original-name`. A block that renames a screenshot sets this
+  attribute on the file, to the old name, so the renamed file is not
+  reported as a new screenshot.
 
 ### Catalog
 

@@ -66,11 +66,12 @@ macOS 26. If Apple removes it, the sandbox needs another mechanism.
 ## Licenses
 
 - The app and everything else in this repository, except
-  `Packages/BlockKit`: the Sustainable Use License, in
+  `Packages/BlockKit` and the root `Package.swift`: the Sustainable Use License, in
   [LICENSE.md](LICENSE.md). You may use, change and share TopNotch for
   your own internal business purposes or for non-commercial or personal
   use. You may not sell it.
-- `Packages/BlockKit` (the kit, the wire protocol and the Hello example):
+- `Packages/BlockKit` (the kit, the wire protocol and the Hello example)
+  and the root `Package.swift` (the kit's manifest, for adding it by URL):
   MIT, in [Packages/BlockKit/LICENSE](Packages/BlockKit/LICENSE). A block
   compiled with the kit belongs to its author, who may share or sell it.
 
